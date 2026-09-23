@@ -83,7 +83,8 @@ PROFILE_DEFAULTS: dict[str, Any] = {
 PROFILE_KEYS = frozenset({"about", "field", "instruction", "fields", *PROFILE_DEFAULTS})
 
 _lock = threading.Lock()
-_cache: Optional[dict[str, Any]] = None
+#: Keyed by data root; see `describe/library.py` for why.
+_cache: dict[str, dict[str, Any]] = {}
 
 
 class DefinitionError(FalconvarError, ValueError):
@@ -122,10 +123,10 @@ def load(refresh: bool = False) -> dict[str, Any]:
     listed under `problems` rather than raised: the file is hand-editable, and
     one typo taking down `/capabilities` takes every generated form with it.
     """
-    global _cache
+    key = str(paths.AGGREGATE_DEFINITIONS)
     with _lock:
-        if _cache is not None and not refresh:
-            return _cache
+        if key in _cache and not refresh:
+            return _cache[key]
         builtin = _read(BUILTIN_PATH)
         if not builtin:
             raise DefinitionError(f"{BUILTIN_PATH} is missing; the package is incomplete")
@@ -153,7 +154,7 @@ def load(refresh: bool = False) -> dict[str, Any]:
                     merged["problems"][where] = found
                     continue
                 merged[section][name] = {**entry, "builtin": False}
-        _cache = merged
+        _cache[key] = merged
         return merged
 
 

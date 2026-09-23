@@ -21,6 +21,9 @@
     "timeline_fingerprint": {
       "type": "string"
     },
+    "embedder": {
+      "type": "string"
+    },
     "units": {
       "type": "array",
       "items": {

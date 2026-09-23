@@ -134,7 +134,7 @@ async function upload() {
     const form = new FormData();
     form.append("file", file);
     form.append("run", "false");
-    form.append("sink", $("#video").dataset.sink || "file,supabase");
+    form.append("database", $("#video").dataset.database || "");
     openPage("rag");
     show($("#output"), `uploading ${file.name} ...`);
     try {
@@ -223,8 +223,7 @@ function choicesFor(param) {
     policy: c.policies,
     tier: c.tiers, transcriber: c.transcribers, diarizer: c.diarizers,
     store_scope: ["sampled", "decimated"],
-    sink: ["file", "supabase", "file,supabase"],
-    index_name: [...c.indexes, c.indexes.join(",")],
+    database: ["", ...(c.databases || [])],
   };
   return map[param.name] || null;
 }
@@ -549,13 +548,7 @@ function renderAggregatePage() {
     el("tr", {}, [el("td", {}, el("code", {}, x.syntax)), el("td", {}, x.reads)]))));
   $("#a-grammar-body").replaceChildren(g);
 
-  const sink = $("#a-sink");
-  if (!sink.children.length) {
-    sink.append(...["file", "supabase", "file,supabase"].map(s =>
-      el("option", { value: s, textContent: s })));
-    $("#a-index").append(el("option", { value: "", textContent: "— no video vector" }),
-      ...CAPS.indexes.map(i => el("option", { value: i, textContent: i })));
-  }
+
   $("#a-llm").placeholder = (CAPS.defaults || {}).llm || "";
   $("#a-embedder").placeholder = (CAPS.defaults || {}).embedder || "";
   $("#a-providers").textContent = `${providerNote("llm")}\n${providerNote("embedder")}`;
@@ -576,7 +569,7 @@ function applyAggregateConditions() {
     .map(p => [p.name, p.when]));
   const tier = pickedTier();
   const hidden = [];
-  for (const [id, key] of [["#a-llm", "llm"], ["#a-embedder", "embedder"], ["#a-index", "index"]]) {
+  for (const [id, key] of [["#a-llm", "llm"], ["#a-embedder", "embedder"]]) {
     const c = when[key];
     const off = !!c && c.param === "tier" && !c.in.includes(tier);
     $(id).closest(".field").hidden = off;
@@ -592,14 +585,14 @@ $("#a-run").onclick = async () => {
   if (!only.length) { state.replaceChildren(chip("tick at least one", "bad")); return; }
 
   const tier = pickedTier();
-  const params = { tier, only, sink: $("#a-sink").value };
+  const params = { tier, only };
   const inputs = {};
   for (const name of only) {
     const text = (PICKS.inputs[name] || "").trim();
     if (text) inputs[name] = text;
   }
   if (Object.keys(inputs).length) params.inputs = inputs;
-  for (const [id, key] of [["#a-llm", "llm"], ["#a-embedder", "embedder"], ["#a-index", "index"]]) {
+  for (const [id, key] of [["#a-llm", "llm"], ["#a-embedder", "embedder"]]) {
     if ($(id).closest(".field").hidden) continue;       // does not apply to this tier
     const v = $(id).value.trim();
     if (v) params[key] = v;
@@ -1066,7 +1059,6 @@ function searchPayload() {
     level: $("#s-level").value,
     moments: parseInt($("#s-moments").value, 10) || 5,
     candidates: parseInt($("#s-candidates").value, 10) || 20,
-    index: $("#s-index").value,
   };
   /* Omitted, not sent empty: no `video_ids` means every video, and an empty
    * array would read as "no videos" to anything strict about it. */
@@ -1369,8 +1361,6 @@ $("#d-go").onclick = async () => {
 
 async function refreshCaps() {
   CAPS = await api("/capabilities");
-  $("#s-index").replaceChildren(...CAPS.indexes.map(i =>
-    el("option", { value: i, textContent: i })));
   $("#s-embedder").placeholder = (CAPS.defaults || {}).embedder || "";
   $("#s-embedders").replaceChildren(...CAPS.embedders.map(e => el("option", { value: e })));
   $("#s-question").replaceChildren(

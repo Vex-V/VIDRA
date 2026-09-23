@@ -9,14 +9,18 @@ reported 42 segments and 205 words, and wrote a transcript of
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional
 
 from ..media import load as load_media
-from ...shared import env, paths
-from ...shared.storage import sinks
-from ...shared.contracts.documents import Produced, RawTranscript
+from ...shared import env, logs, paths
+from ...shared.storage import files
+from ...shared.contracts.documents import Media, Produced, RawTranscript
 from . import models
-from .reader import listen
+#: Aliased, not renamed. The reader's takes *built* models and this
+#: module's takes setting names, so they are two functions -- and two
+#: public functions of one name in one package is the infinite recursion
+#: `describe` had to be rescued from. See CLAUDE.md.
+from .reader import listen as _pass
 from .source import NoAudio
 
 #: Named, not positional. See the module docstring.
@@ -43,21 +47,24 @@ def _for(mapping: dict[str, str], takes: set[str],
             if setting in named and argument in takes}
 
 
-def audio(video_id: str,
-          transcriber: str = DEFAULT_TRANSCRIBER,
-          diarizer: str = DEFAULT_DIARIZER,
-          model: Optional[str] = None,
-          language: Optional[str] = None,
-          vad_filter: Optional[bool] = None,
-          compute_type: Optional[str] = None,
-          device: Optional[str] = None,
-          diarizer_model: Optional[str] = None,
-          exclusive: Optional[bool] = None,
-          sink: str | Sequence[str] = "file") -> Produced:
-    """Transcribe and diarize the whole file. Writes no chunk ids.
+def listen(media: Media,
+           transcriber: str = DEFAULT_TRANSCRIBER,
+           diarizer: str = DEFAULT_DIARIZER,
+           model: Optional[str] = None,
+           language: Optional[str] = None,
+           vad_filter: Optional[bool] = None,
+           compute_type: Optional[str] = None,
+           device: Optional[str] = None,
+           diarizer_model: Optional[str] = None,
+           exclusive: Optional[bool] = None) -> RawTranscript:
+    """Transcribe and diarize a file described by a `Media` in hand.
+
+    Reads and writes no artifact -- but it does open the file `media.path`
+    names, because a soundtrack is not a document and there is nothing else to
+    transcribe. That is the one thing this component cannot be handed.
 
     Every setting defaults to None, meaning *leave the backend's own default*,
-    so a run that names none of them constructs exactly what it always did.
+    so a call that names none of them constructs exactly what it always did.
 
     `exclusive` is the one worth knowing about. pyannote answers with
     overlapping speech either resolved or not, and the whole grid rests on the
@@ -71,14 +78,14 @@ def audio(video_id: str,
     has no `language` and `none` has no `exclusive`, and quietly ignoring one
     would mean a run that reports success having transcribed under settings
     nobody asked for -- the same silence the named defaults at the top of this
-    file exist to prevent.
+    file exist to prevent. The check is here rather than in `run` so that both
+    ways into this component get it.
     """
     # Before a model is constructed, not after: pyannote is gated and reads a
     # token from the environment at load time.
     env.load()
-    media = load_media(video_id)
     if not media.has_audio:
-        raise NoAudio(f"{video_id} has no audio stream")
+        raise NoAudio(f"{media.video_id} has no audio stream")
 
     named: dict[str, object] = {
         setting: value for setting, value in
@@ -98,14 +105,35 @@ def audio(video_id: str,
             f"transcriber {transcriber!r} and diarizer {diarizer!r} take no "
             f"{', '.join(repr(u) for u in unreachable)}")
 
-    raw = listen(media.path,
+    return _pass(media.path,
                  models.transcriber(transcriber, **speech),
                  models.diarizer(diarizer, **voices),
-                 video_id=video_id)
-    written = sinks.write(video_id, "raw_transcript", raw.as_dict(), sink)
+                 video_id=media.video_id)
+
+
+def audio(video_id: str,
+          transcriber: str = DEFAULT_TRANSCRIBER,
+          diarizer: str = DEFAULT_DIARIZER,
+          model: Optional[str] = None,
+          language: Optional[str] = None,
+          vad_filter: Optional[bool] = None,
+          compute_type: Optional[str] = None,
+          device: Optional[str] = None,
+          diarizer_model: Optional[str] = None,
+          exclusive: Optional[bool] = None) -> Produced:
+    """Transcribe and diarize the whole file, by id. Writes no chunk ids.
+
+    `listen` plus a read at each end; every check lives down there.
+    """
+    with logs.timed("audio", video_id) as done:
+        raw = listen(load_media(video_id), transcriber, diarizer, model,
+                     language, vad_filter, compute_type, device,
+                     diarizer_model, exclusive)
+        where = files.write(video_id, "raw_transcript", raw.as_dict())
+        done(segments=raw.stats.get("segments"), words=raw.stats.get("words"),
+             speakers=raw.stats.get("speakers"), silent=raw.silent)
     return Produced(
-        video_id=video_id, component="audio", backend=",".join(written),
-        artifacts={"raw_transcript": written.get("file", "")},
+        video_id=video_id, component="audio",        artifacts={"raw_transcript": where},
         stats={**raw.stats, "silent": raw.silent},
         skipped=["transcribe", "diarize"] if raw.silent else [],
     )
@@ -119,7 +147,7 @@ run = audio
 
 def load(video_id: str) -> RawTranscript:
     return RawTranscript.from_dict(
-        sinks.read_json(paths.artifact(video_id, "raw_transcript")))
+        files.read_json(paths.require(video_id, "raw_transcript")))
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -152,7 +180,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                     default=None,
                     help="pyannote: keep overlapping speech rather than "
                          "resolving it. A word then belongs to two speakers")
-    ap.add_argument("--sink", default="file")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -160,9 +187,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         produced = run(args.video_id, args.transcriber, args.diarizer,
                        args.model, args.language, args.vad_filter,
                        args.compute_type, args.device, args.diarizer_model,
-                       args.exclusive, args.sink)
+                       args.exclusive)
     except (NoAudio, KeyError, ValueError, FileNotFoundError,
-            models.ModelUnavailable, sinks.UnknownBackend) as exc:
+            models.ModelUnavailable) as exc:
         print(f"error: {exc}")
         return 1
 

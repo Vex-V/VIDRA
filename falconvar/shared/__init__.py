@@ -7,9 +7,9 @@
       documents.py  what every artifact is
       schemas.py    JSON Schema generated from the dataclasses
     storage/        where a document goes
-      sinks.py      writing a document to file and/or Postgres
+      files.py      writing a document to its path, atomically
       db.py         the Supabase client, and the one list of its key names
-      rows.py       documents -> rows; the only module that knows table names
+      supabase.py   documents -> rows; the only module that knows table names
     models/         who answers a model call
       providers.py  which provider serves a role, and how to reach it
       llm.py        asking a model for text or a JSON shape

@@ -17,13 +17,13 @@ from ...shared.contracts.documents import Manifest, Media, Timeline
 from .decimate import Decimator
 from .reader import read_frames
 from .samplers import Sampler
-from .store import FrameStore
+from ..frames import Frames
 
 
 def ingest(media: Media, timeline: Timeline,
            samplers: Sequence[Sampler],
            per_second: float = 1.0,
-           store: Optional[FrameStore] = None,
+           store: Optional[Frames] = None,
            store_scope: str = "sampled",
            on_chunk: Optional[Callable[[int, dict[str, Any]], None]] = None
            ) -> Manifest:
@@ -42,8 +42,12 @@ def ingest(media: Media, timeline: Timeline,
     config = {
         "decimator": decimator.config(),
         "samplers": [s.config() for s in samplers],
+        # `is not None`, not truthiness: `MemoryFrames` is sized, so an
+        # empty one is falsy -- and it is always empty here, before the first
+        # frame is decoded. Truthiness wrote `frame_store: null` into every
+        # in-memory manifest.
         "frame_store": ({**store.config(), "scope": store_scope}
-                        if store else None),
+                        if store is not None else None),
     }
 
     chunks: list[dict[str, Any]] = [
@@ -120,7 +124,7 @@ def ingest(media: Media, timeline: Timeline,
         "elapsed_s": round(elapsed, 3),
         **({"stored_frames": store.written,
             "stored_mb": round(store.bytes_written / 1024 / 1024, 2)}
-           if store else {}),
+           if store is not None else {}),
     }
 
     return Manifest(

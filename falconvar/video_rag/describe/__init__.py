@@ -15,17 +15,18 @@ success having done nothing.
 
 from __future__ import annotations
 
-from .base import Describer, DescriberUnavailable, Description, available, build
-#: `run` is the only public spelling. The function in `driver.py` is named for
-#: its component so a traceback frame says which one failed -- eight frames
-#: called `run` carry no information -- but exporting both names would give the
-#: library two ways to say the same thing, and `load`, `build` and `available`
-#: collide across components anyway, so a bare-name style needs aliases the
-#: moment a caller wants a second thing from the same module.
-from .driver import load, main, run
-from .frames import FrameSource, LoadedFrame, StoreUnavailable
-from .reader import answer
+#: **The public surface is the entry points, the errors and the return types.**
+#: `run` does the work and `load` reads the result back; anything beyond those
+#: is here because a caller cannot do without it -- a second way *in* that no
+#: naming collapses into `run`, an exception they have to catch by name, or a
+#: type they would annotate. Everything else is machinery, and stays reachable
+#: through its own module rather than advertised here. See CLAUDE.md.
+#:
+#: `main` is deliberately absent: it is argparse, and `__main__.py` reaches it
+#: as `from .driver import main`. Nothing ever imported it from the package.
+from .base import DescriberUnavailable, available
+from .driver import answer, load, run
+from .frames import StoreUnavailable
 
-__all__ = ["answer", "Describer", "DescriberUnavailable", "Description", "FrameSource",
-           "LoadedFrame", "StoreUnavailable", "available", "build",
-           "load", "main", "run"]
+__all__ = ["DescriberUnavailable", "StoreUnavailable", "answer",
+           "available", "load", "run"]

@@ -17,12 +17,14 @@ file carrying neither raises.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
 import av
 
-from ...shared.contracts.documents import AudioStream, Media, VideoStream
+from ...shared.contracts.documents import (AudioStream, Media, VideoStream,
+                                           fingerprint_of)
 from ...shared.errors import FalconvarError
 
 
@@ -39,6 +41,30 @@ def _seconds(value: Optional[int], time_base) -> Optional[float]:
     if value is None or time_base is None:
         return None
     return float(value * time_base)
+
+
+def fingerprint(path: Path, described: Media) -> str:
+    """What file this is, independently of its name or where it sits.
+
+    **Free.** Every part of it was already read to describe the streams, so
+    this costs one `stat()` on top of a `split` that has happened anyway --
+    measured at 11-36 ms for the whole `split`, against 177 ms to sha256 a
+    95 MB file (~1.9 ms/MB, so ~7 s on a three-hour original).
+
+    The same bytes at a different path fingerprint the same, which is what is
+    wanted: a file that moved is still that video. Two *different* videos
+    agreeing on size, duration, frame count, dimensions, rate and both codecs
+    would read as one -- possible in principle, and the reason `media` says
+    what it matched on when it reuses a directory. Hash the bytes instead if
+    that is not good enough for a deployment; nothing else here would change.
+    """
+    return fingerprint_of({
+        "bytes": path.stat().st_size,
+        "duration_s": described.duration_s,
+        "container": described.container_format,
+        "video": described.video.as_dict() if described.video else None,
+        "audio": described.audio.as_dict() if described.audio else None,
+    })
 
 
 def split(path: str | Path, video_id: Optional[str] = None) -> Media:
@@ -98,7 +124,7 @@ def split(path: str | Path, video_id: Optional[str] = None) -> Media:
     if video is None and audio is None:
         raise UnusableMedia(f"{path} carries neither a video nor an audio stream")
 
-    return Media(
+    described = Media(
         video_id=video_id or path.stem,
         path=str(path),
         container_format=container_format,
@@ -106,6 +132,7 @@ def split(path: str | Path, video_id: Optional[str] = None) -> Media:
         video=video,
         audio=audio,
     )
+    return replace(described, source=fingerprint(path, described))
 
 
-__all__ = ["UnusableMedia", "split"]
+__all__ = ["UnusableMedia", "fingerprint", "split"]

@@ -57,13 +57,27 @@ class VideoStream:
     so the exact form has to survive as text.
     """
 
+    #: Its stream index in the container, which is what a decoder is told to
+    #: open.
     index: int
+    #: The codec name as the container reports it, e.g. `h264`.
     codec: str
+    #: Frames per second, averaged. None when the container will not say -- a
+    #: variable-rate file, or a stream with no frame count.
     rate: Optional[float]
+    #: The stream's own clock, as `num/den`. A `pts` means nothing without it,
+    #: and at 1/1200000 a rounded float lands on a different frame.
     time_base: Optional[str]
+    #: Coded width in pixels, before any rotation metadata.
     width: int
+    #: Coded height in pixels, before any rotation metadata.
     height: int
+    #: How many frames the container claims. None when it does not say, and
+    #: advisory even when it does.
     frames: Optional[int]
+    #: This stream's own duration. The two streams routinely disagree --
+    #: 205.280 s of video against 205.264 s of audio on the reference file --
+    #: which is why the grid uses `Media.duration_s` instead.
     duration_s: Optional[float]
 
     def as_dict(self) -> dict[str, Any]:
@@ -84,10 +98,15 @@ class VideoStream:
 class AudioStream:
     """How to open the soundtrack. Deliberately not the waveform."""
 
+    #: Its stream index in the container.
     index: int
+    #: The codec name as the container reports it, e.g. `aac`.
     codec: str
+    #: Samples per second. None when the container will not say.
     rate: Optional[int]
+    #: How many channels. None when the container will not say.
     channels: Optional[int]
+    #: This stream's own duration; see `VideoStream.duration_s`.
     duration_s: Optional[float]
 
     def as_dict(self) -> dict[str, Any]:
@@ -110,12 +129,34 @@ class Media:
     shorter one leaves the tail of the longer outside every chunk.
     """
 
+    #: The id every later component is addressed by, and the name of the
+    #: directory they write into. The filename stem by default -- but read it
+    #: off `Produced.video_id` rather than assuming, because a *different* file
+    #: wanting a taken id is given a new one.
     video_id: str
+    #: Where the file was when it was described. `audio` and `video` open this,
+    #: so a file that has moved must be re-described.
     path: str
+    #: The container as the demuxer names it, e.g. `mov,mp4,m4a,3gp,3g2,mj2`.
     container_format: str
+    #: The *container's* duration, and the one both halves must agree to use.
+    #: None when the container reports none, which makes a grid underivable.
     duration_s: Optional[float]
+    #: The picture stream, or None if the file carries none.
     video: Optional[VideoStream]
+    #: The soundtrack stream, or None if the file carries none.
     audio: Optional[AudioStream]
+    #: What file this is, independently of where it sits or what it is called.
+    #: A video id is the filename stem by default, so two different videos
+    #: named `clip.mp4` claim one output directory -- and the corruption that
+    #: follows is silent, because each document stays well-formed on its own.
+    #: This is what lets `media` tell "the same file again", which must reuse
+    #: the directory or resume is defeated, from "a different file with that
+    #: name", which must not. See `split.fingerprint`.
+    #:
+    #: Optional because a `media.json` written before this existed has none,
+    #: and there is no way to compute one for a file that may have moved.
+    source: Optional[str] = None
 
     @property
     def has_video(self) -> bool:
@@ -134,6 +175,7 @@ class Media:
             "duration_s": _round(self.duration_s),
             "video": self.video.as_dict() if self.video else None,
             "audio": self.audio.as_dict() if self.audio else None,
+            "source": self.source,
         }
 
     @classmethod
@@ -144,6 +186,7 @@ class Media:
             duration_s=d.get("duration_s"),
             video=VideoStream.from_dict(d["video"]) if d.get("video") else None,
             audio=AudioStream.from_dict(d["audio"]) if d.get("audio") else None,
+            source=d.get("source"),
         )
 
 
@@ -167,12 +210,28 @@ class RawTranscript:
     one where everything is `SPEAKER_00` is not.
     """
 
+    #: Which video this is the soundtrack of.
     video_id: str
+    #: Which transcriber and diarizer produced this, and under what settings.
+    #: Half of what makes a stored result comparable to a new one.
     model: dict[str, Any] = field(default_factory=dict)
+    #: What the decoded audio was: sample rate, channels, duration, and the RMS
+    #: and peak that decide silence.
     track: dict[str, Any] = field(default_factory=dict)
+    #: Whisper's own utterances, each with `start`, `end`, `text` and a
+    #: `speaker` attributed by duration. **No chunk ids** -- applying a grid is
+    #: `cut`'s job, and keeping them out is what makes re-cutting free.
     segments: list[dict[str, Any]] = field(default_factory=list)
+    #: One entry per word with its own `start`/`end`, and the `speaker` whose
+    #: turn its *midpoint* falls in. The midpoint, because the two models
+    #: estimate edges independently and a word span routinely straddles a turn
+    #: boundary.
     words: list[dict[str, Any]] = field(default_factory=list)
+    #: Diarization's spans: who spoke from when to when, before any text is
+    #: attached.
     turns: list[dict[str, Any]] = field(default_factory=list)
+    #: Headline numbers -- segments, words, speakers, turns, speech seconds,
+    #: attributed words, and the three timings.
     stats: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -227,12 +286,27 @@ class Cuts:
     new threshold free.
     """
 
+    #: Which video these boundaries were found in.
     video_id: str
+    #: Which modality they came out of: `video` for a scene pass, `audio` for a
+    #: speech one. What `retune` reads to know which module can re-threshold
+    #: them.
     source: str                      # "video" | "audio"
+    #: What found them -- `content` for the scene detector, or the policy name
+    #: for a speech pass. A grid refuses cuts whose detector does not match its
+    #: policy.
     detector: str                    # "content" | "vad" | "speaker"
+    #: The settings that pass ran under, so a stored result says what produced
+    #: it.
     params: dict[str, Any] = field(default_factory=dict)
+    #: The boundary timestamps themselves, in media seconds.
     cuts: list[float] = field(default_factory=list)
+    #: The per-frame score series, kept so a different threshold is arithmetic
+    #: over a cached array rather than a second decode -- verified identical to
+    #: a full re-run at 0.12 ms against 5.9 s. None for a detector with no
+    #: continuous score.
     scores: Optional[dict[str, Any]] = None
+    #: How many cuts, over how many scored frames, and at what rate.
     stats: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -271,9 +345,15 @@ class Timeline:
     way to say which is the answer.
     """
 
+    #: Which video this grid divides.
     video_id: str
+    #: `(start_s, end_s)` per chunk, in order and contiguous. The chunk id is
+    #: the index into this list, which is why nothing may renumber it.
     spans: list[tuple[float, float]]
+    #: How the boundaries were decided: `uniform`, `scene`, `vad` or `speaker`.
     policy: str = "uniform"                       # uniform|scene|vad|speaker
+    #: The settings this grid was built under -- the chunk length, the floor
+    #: and ceiling, and whatever the evidence pass recorded.
     params: dict[str, Any] = field(default_factory=dict)
     #: "video", "audio", or "grid" when the policy is arithmetic and neither
     #: modality had to run. Recorded because a reader otherwise cannot tell a
@@ -377,10 +457,24 @@ class Manifest:
     re-ingesting costs seconds where describing costs inference.
     """
 
+    #: Which video was ingested.
     video_id: str
+    #: The grid this was cut on. Everything cut on a grid records this, so two
+    #: documents that disagree were cut on different ones and `chunk_id` means
+    #: two different things.
     timeline_fingerprint: str
+    #: What was decoded: the path, the container, the duration and the video
+    #: stream's own facts. This is what `recovery/` rebuilds a store from,
+    #: which is why it is copied here rather than referenced.
     source: dict[str, Any] = field(default_factory=dict)
+    #: The decimator, every sampler's own configuration, and where frames went.
+    #: Authoritative: `recovery/` reads this and imports nothing from the
+    #: pipeline, so a default living in code rather than here would go
+    #: untested.
     config: dict[str, Any] = field(default_factory=dict)
+    #: Frames decimated, frames sampled, chunks, and -- when frames were kept
+    #: -- how many files and how many megabytes. `frames_sampled` is picks and
+    #: `stored_frames` is files, and they are different numbers.
     stats: dict[str, Any] = field(default_factory=dict)
     #: [{chunk_id, decimated_frames, samplers: {id: {frame_count, frames[]}}}]
     chunks: list[dict[str, Any]] = field(default_factory=list)
@@ -442,10 +536,20 @@ class Transcript:
     numbers. The turns are the record and stay on the chunk.
     """
 
+    #: Which video this is the soundtrack of.
     video_id: str
+    #: The grid it was cut on; see `Manifest.timeline_fingerprint`.
     timeline_fingerprint: str = ""
+    #: Carried through from the `RawTranscript`, so a cut transcript still says
+    #: which models produced the words.
     model: dict[str, Any] = field(default_factory=dict)
+    #: One entry per chunk of the grid, with its text, words, turns and
+    #: speakers. **Chunks with no speech are kept, with empty text**: the grid
+    #: is shared, so dropping the quiet ones would renumber everything after
+    #: them.
     chunks: list[dict[str, Any]] = field(default_factory=list)
+    #: Chunks, how many carry speech, words placed against words in the
+    #: transcript, words that fell outside the grid, and speakers.
     stats: dict[str, Any] = field(default_factory=dict)
 
     def text_of(self, chunk_id: int) -> str:
@@ -484,11 +588,24 @@ class Descriptions:
     resume that ignored it would report "10 skipped" having done nothing.
     """
 
+    #: Which video was described.
     video_id: str
+    #: The grid it was described against; see `Manifest.timeline_fingerprint`.
     timeline_fingerprint: str = ""
+    #: Which ingest produced the frames. Part of the resume key: a re-ingest
+    #: that chose different frames invalidates the answers about them.
     manifest_fingerprint: str = ""
+    #: Which describer, under what settings, and `{question: hash}` for every
+    #: prompt asked. Per question rather than one hash over the vocabulary, so
+    #: *adding* a question -- which cannot change an existing answer -- does
+    #: not invalidate every description of every video.
     model: dict[str, Any] = field(default_factory=dict)
+    #: One entry per chunk, holding a block per sampler id with that call's
+    #: summary and structured answer. There is deliberately no chunk-level
+    #: rollup: flattening every sampler's answer into one record forced a
+    #: winner for a shared key, and nothing read it.
     chunks: list[dict[str, Any]] = field(default_factory=list)
+    #: Described, skipped, failed, and the elapsed time.
     stats: dict[str, Any] = field(default_factory=dict)
 
     def done(self) -> set[tuple[int, str]]:
@@ -519,25 +636,38 @@ class Descriptions:
 
 @dataclass
 class Embedded:
-    """Every unit's text, beside the hash that keys it.
+    """What `embed` produced: every unit's text, hash and vector.
 
-    **No vectors.** This exists to be opened and read -- to see exactly what
-    text a chunk contributed to the index -- and 1536 floats per unit is the
-    part of that answer nobody can read. The vectors live in whichever real
-    index the run wrote to.
+    **This is the output of embedding, not a readable copy of it.** It held no
+    vectors while a `VectorIndex` did -- Qdrant or Postgres -- and this file
+    was the human-readable half beside them. With the index gone, the vectors
+    have nowhere else to live, and having them here is what lets a re-run
+    resume: a unit whose `text_hash` is unchanged under the same embedder does
+    not need paying for twice.
 
-    **One file per video, not per embedder.** `units.render()` produces the
-    same text whichever model will embed it; only the vectors differ. A file
-    per embedder would be several identical copies of the readable half.
+    It still answers the question it always did -- *what text did this chunk
+    actually contribute* -- which is the one asked when a ranking looks wrong,
+    and the measurement that established embedding the summary *and* the
+    structured fields (0.705 against 0.528 MRR).
 
-    Written alongside the real index because the question it answers -- "what
-    did this chunk actually contribute" -- is the one asked when a ranking
-    looks wrong, and it is the measurement that established embedding the
-    summary *and* the structured fields (0.705 against 0.528 MRR).
+    **One file per video, and now one embedder at a time.** `units.render()`
+    produces the same text whichever model embeds it, so the readable half was
+    shared; the vectors are not, so the document names the embedder that made
+    them and is rewritten whole when that changes. Postgres still holds several
+    at once -- every row carries the embedder and every query filters on it --
+    because a table is not rewritten whole.
     """
 
+    #: Which video these units belong to.
     video_id: str
+    #: The grid they were built on; see `Manifest.timeline_fingerprint`.
     timeline_fingerprint: str = ""
+    #: Who made the vectors, as `embedders.build().key` -- model and width.
+    #: A vector is only comparable inside the space that produced it, so this
+    #: is what a reader checks before trusting one, and what resume compares.
+    embedder: str = ""
+    #: One entry per embeddable unit: the text, its hash, and `vector`, the
+    #: floats themselves. `vector` is absent on a unit that was never embedded.
     units: list[dict[str, Any]] = field(default_factory=list)
 
     def text_of(self, chunk_id: int, sampler_id: str) -> str:
@@ -547,9 +677,10 @@ class Embedded:
         return ""
 
     def as_dict(self) -> dict[str, Any]:
-        return {"document": "embedded", "version": 1,
+        return {"document": "embedded", "version": 2,
                 "video_id": self.video_id,
                 "timeline_fingerprint": self.timeline_fingerprint,
+                "embedder": self.embedder,
                 "count": len(self.units),
                 "samplers": sorted({u["sampler_id"] for u in self.units}),
                 "units": self.units}
@@ -558,7 +689,19 @@ class Embedded:
     def from_dict(cls, d: dict[str, Any]) -> "Embedded":
         return cls(video_id=d["video_id"],
                    timeline_fingerprint=d.get("timeline_fingerprint", ""),
+                   embedder=d.get("embedder", ""),
                    units=d.get("units", []))
+
+    def stored(self) -> dict[str, str]:
+        """`{unit key: text_hash}` for every unit that has a vector.
+
+        What resume reads. A unit with no vector is one that was collected but
+        never embedded, so it must not count as stored -- that is the same
+        mistake as an index reporting a row it wrote with an empty embedding.
+        """
+        return {f"{self.video_id}:{u['chunk_id']}:{u['sampler_id']}":
+                u.get("text_hash", "")
+                for u in self.units if u.get("vector")}
 
 
 # --------------------------------------------------------------------------
@@ -574,11 +717,22 @@ class Aggregate:
     precisely why staleness cannot be left to a reader to notice.
     """
 
+    #: Which video was answered about.
     video_id: str
+    #: Which aggregate this is, e.g. `summary` or `entities:actors`. A colon
+    #: cannot be in a Windows filename, so it is stored as
+    #: `entities.actors.json` and no name contains a dot.
     aggregate_id: str
+    #: The cost ceiling it ran under: `free`, `local` or `llm`.
     tier: str
+    #: The answer itself, shaped by the definition that produced it.
     payload: dict[str, Any] = field(default_factory=dict)
+    #: A hash of the chunk text actually read. A summary of descriptions since
+    #: rewritten reads perfectly, which is why staleness cannot be left to a
+    #: reader to notice.
     inputs_fingerprint: str = ""
+    #: Headline numbers, and `model` for an llm aggregate -- without which
+    #: switching `--llm` reused the stored answer and reported success.
     stats: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -615,11 +769,25 @@ class Produced:
     what happened rather than assuming from what it asked for.
     """
 
+    #: Which video, and **the answer rather than the argument**: `media` may
+    #: mint a new id when a different file wants a taken one, so later calls
+    #: read it from here.
     video_id: str
+    #: Which component produced this. `boundaries.evidence` answers as
+    #: `boundaries.video` or `boundaries.audio`, naming which modality supplied
+    #: the cuts -- which is not knowable before it runs.
     component: str
-    backend: str                                  # "file" | "supabase" | both
+    #: `{artifact name: where it went}`. Lists what *was* written rather than
+    #: what could be: a run with no frame store has a manifest and no store,
+    #: and a caller should learn that from here rather than by looking.
     artifacts: dict[str, str] = field(default_factory=dict)
+    #: The component's headline numbers. What is in here is the component's
+    #: business; `component` says whose vocabulary to read it in.
     stats: dict[str, Any] = field(default_factory=dict)
+    #: What did not happen, and it is an answer rather than an absence --
+    #: `boundaries.evidence` under `uniform` returns `skipped: [evidence]`
+    #: rather than nothing, so one call answers the same way over HTTP and from
+    #: an import.
     skipped: list[str] = field(default_factory=list)
 
     def path(self, name: str) -> str:
@@ -627,7 +795,7 @@ class Produced:
 
     def as_dict(self) -> dict[str, Any]:
         return {"video_id": self.video_id, "component": self.component,
-                "backend": self.backend, "artifacts": self.artifacts,
+                "artifacts": self.artifacts,
                 "stats": self.stats, "skipped": self.skipped}
 
 

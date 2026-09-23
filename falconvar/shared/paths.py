@@ -34,6 +34,7 @@ which module was imported first.
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Optional
 from .errors import FalconvarError
@@ -61,8 +62,16 @@ def _checkout_root() -> Optional[Path]:
 #: The checkout, or None when installed. Resolved once: it cannot change.
 CHECKOUT = _checkout_root()
 
-#: What `configure()` set, if anything.
+#: What `configure()` set, if anything. One process, one default.
 _configured: dict[str, Path] = {}
+
+#: The `Workspace` active on this thread or task, if any. A `ContextVar`
+#: rather than a plain global because it is already per-thread and
+#: per-asyncio-task, so two workspaces cannot bleed into each other under the
+#: concurrency `describe` already runs -- and `reset` on a token is the only
+#: honest way to nest them.
+_active: ContextVar[Optional[dict[str, Path]]] = ContextVar("falconvar_roots",
+                                                            default=None)
 
 
 def configure(data_root: Optional[Path | str] = None,
@@ -79,6 +88,12 @@ def configure(data_root: Optional[Path | str] = None,
 
 
 def _resolve(key: str, variable: str, in_checkout: str) -> Path:
+    # A workspace outranks `configure()`, which outranks the environment: it
+    # is the most explicit statement there is, made by the code making the
+    # call rather than by the process it happens to be running in.
+    active = _active.get()
+    if active and key in active:
+        return active[key]
     if key in _configured:
         return _configured[key]
     value = os.environ.get(variable)
@@ -164,9 +179,101 @@ DIRECTORIES: dict[str, str] = {
     "aggregates": "aggregates",
 }
 
+#: artifact name -> the component that writes it, spelled as a caller would
+#: run it. Beside the filename because it answers the other half of the same
+#: question: a reader that has just failed to find `timeline.json` wants to
+#: know who makes one, and only this module knew the filename in the first
+#: place.
+#:
+#: Every component that reads another's output arrives here, so this is what
+#: turns `[Errno 2] No such file or directory: 'C:\...\timeline.json'` -- which
+#: asks a user to already know which component writes that file -- into the
+#: name of the step they skipped. `boundaries` was the only component saying
+#: this for itself, and it had to hand-write the sentence twice.
+PRODUCED_BY: dict[str, str] = {
+    "media": "media",
+    "raw_transcript": "audio",
+    "cuts": "boundaries.evidence",
+    "timeline": "boundaries",
+    "manifest": "video",
+    "transcript": "cut",
+    "descriptions": "describe",
+    "embedded": "embed",
+    "store": "video",
+    "aggregates": "aggregates",
+}
+
 
 class UnknownArtifact(FalconvarError, KeyError):
     """An artifact name nothing in ARTIFACTS or DIRECTORIES answers to."""
+
+
+class MissingArtifact(FalconvarError, FileNotFoundError):
+    """An artifact that has not been produced yet.
+
+    A `FileNotFoundError` still, so every `except FileNotFoundError` already
+    written keeps working -- including the ones in each driver's `main`, which
+    is what turns this into `error: ...` on a CLI rather than a traceback.
+    """
+
+
+class UnusableVideoId(FalconvarError, ValueError):
+    """A video id that cannot name a directory under OUT_ROOT."""
+
+
+#: A leading underscore marks a directory under OUT_ROOT that is not a video.
+#: Written for the embedded Qdrant store, which lived at `_qdrant` beside the
+#: videos rather than inside one and was listed as a video with no artifacts --
+#: by `paths.videos()`, and so by `GET /videos`. That store is gone; the rule
+#: is not, because the next directory that is not a video would repeat it.
+#: Read by `videos()`, which skips such a directory, and by `check_id`, which
+#: refuses to make one.
+RESERVED_PREFIX = "_"
+
+#: What an id may be made of. Deliberately `api/main.safe_id`'s alphabet, so
+#: whatever that cleaning produces is guaranteed to be accepted here -- one
+#: rule, stated once, rather than a cleaner and a checker that can disagree.
+_ALLOWED = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+
+
+def check_id(video_id: str) -> str:
+    """The id, or raise. Every path this module hands out goes through it.
+
+    **An id becomes a directory name, so it is checked rather than trusted.**
+    A library takes its id from whoever calls it -- an HTTP path segment, a
+    filename, a job record -- and `out_root() / video_id` is a join, not a
+    containment. `../../escaped` wrote two levels *above* the data root while
+    `Produced.video_id` still read it back unchanged, so nothing anywhere
+    reported that a run had left its own tree.
+
+    A leading underscore is refused for a different reason, and it is the
+    quieter failure: `RESERVED_PREFIX` marks a directory that is not a video,
+    and it was enforced on read only. `_hidden` wrote a complete, correct
+    output directory that `videos()` -- and so `GET /videos`, and so the whole
+    client -- would never list again.
+
+    Cleaning instead of refusing would be worse: two ids differing only in a
+    refused character would silently land in one directory and overwrite each
+    other's artifacts.
+    """
+    if not video_id:
+        raise UnusableVideoId("a video id cannot be empty")
+    bad = sorted({c for c in video_id if c not in _ALLOWED})
+    if bad:
+        raise UnusableVideoId(
+            f"video id {video_id!r} cannot contain {', '.join(repr(c) for c in bad)} "
+            f"-- an id names a directory under {out_root()}, and travels on into "
+            f"URLs, database rows and index payloads; ASCII letters, digits, "
+            f"'.', '_' and '-' only. An id defaults to the filename stem, so "
+            f"name one explicitly when the file's does not qualify.")
+    if video_id.startswith(RESERVED_PREFIX):
+        raise UnusableVideoId(
+            f"video id {video_id!r} cannot start with {RESERVED_PREFIX!r}: that "
+            f"marks a directory under OUT_ROOT that is not a video, so `videos()` "
+            f"would never list it again")
+    if set(video_id) == {"."}:                  # '.' and '..', which pass the alphabet
+        raise UnusableVideoId(f"video id {video_id!r} is not a directory name")
+    return video_id
 
 
 def home(video_id: str) -> Path:
@@ -175,8 +282,12 @@ def home(video_id: str) -> Path:
     Grouped by video rather than by artifact type, so a video's whole output is
     one thing to inspect, copy or delete, and a later component adds to it
     without a new top-level directory.
+
+    The id is checked here because this is the one place both tiers join it to
+    a root -- `artifact`, `exists`, `present` and every component's `load` all
+    arrive through this line.
     """
-    return out_root() / video_id
+    return out_root() / check_id(video_id)
 
 
 def artifact(video_id: str, name: str) -> Path:
@@ -193,6 +304,34 @@ def exists(video_id: str, name: str) -> bool:
     return artifact(video_id, name).exists()
 
 
+def require(video_id: str, name: str) -> Path:
+    """The artifact's path, or raise saying which component would make it.
+
+    **"That video does not exist" and "you skipped a step" are different
+    answers**, and they used to be the same `[Errno 2]`. A caller driving the
+    components itself -- which is half of what the library is for -- gets the
+    order wrong regularly, and the raw path tells them nothing unless they
+    already know which component writes `timeline.json`.
+    """
+    path = artifact(video_id, name)
+    if path.exists():
+        # The one line every artifact read passes through, which is why the
+        # DEBUG record lives here rather than in eleven callers. `PRODUCED_BY`
+        # names the component, so a record says who wrote what is being read.
+        from . import logs
+        logs.read(PRODUCED_BY.get(name, "shared"), video_id, name)
+        return path
+    if not home(video_id).exists():
+        raise MissingArtifact(
+            f"no video {video_id!r} under {out_root()} -- "
+            f"`media(path)` is what creates one")
+    producer = PRODUCED_BY.get(name)
+    made_by = f"; `{producer}` writes it" if producer else ""
+    raise MissingArtifact(
+        f"{video_id} has no {name}{made_by}. Present: "
+        f"{', '.join(present(video_id)) or 'nothing yet'}")
+
+
 def present(video_id: str) -> list[str]:
     """Which artifacts this video actually has, in pipeline order.
 
@@ -202,13 +341,6 @@ def present(video_id: str) -> list[str]:
     """
     order = [*ARTIFACTS, *DIRECTORIES]
     return [name for name in order if exists(video_id, name)]
-
-
-#: A leading underscore marks a directory under OUT_ROOT that is not a video.
-#: The embedded Qdrant store lives at `_qdrant`, beside the videos rather than
-#: inside one, and without this it was listed as a video with no artifacts --
-#: by `paths.videos()`, and so by `GET /videos`.
-RESERVED_PREFIX = "_"
 
 
 def videos() -> list[str]:
@@ -221,6 +353,8 @@ def videos() -> list[str]:
 
 
 __all__ = ["ARTIFACTS", "CHECKOUT", "DIRECTORIES", "FALLBACK_HOME",
-           "RESERVED_PREFIX", "UnknownArtifact",
-           "artifact", "checkout_root", "configure", "data_root", "exists",
-           "home", "out_root", "present", "videos", "weights_root"]
+           "PRODUCED_BY", "RESERVED_PREFIX", "MissingArtifact",
+           "UnknownArtifact", "UnusableVideoId",
+           "artifact", "check_id", "checkout_root", "configure", "data_root",
+           "exists", "home", "out_root", "present", "require", "videos",
+           "weights_root"]

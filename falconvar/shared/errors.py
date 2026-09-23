@@ -45,4 +45,16 @@ class ModelUnavailable(Unavailable):
     """
 
 
-__all__ = ["FalconvarError", "ModelUnavailable", "Unavailable"]
+class UnknownOption(FalconvarError, ValueError):
+    """A value outside a fixed vocabulary -- a sink, a policy, a conflict rule.
+
+    `sinks.UnknownBackend` covered exactly this while documents fanned out to
+    several destinations, and removing it left the two remaining vocabularies
+    -- `media.on_conflict` and the pipeline's `database` -- raising a bare
+    `ValueError`, which "anything the library refused" could not catch. Not
+    exported: nobody catches a bad literal by name, and `except ValueError`
+    already fires. It is here so the hierarchy has no hole in it.
+    """
+
+
+__all__ = ["FalconvarError", "ModelUnavailable", "Unavailable", "UnknownOption"]

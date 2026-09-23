@@ -36,6 +36,12 @@
       ]
     },
     "video": {},
-    "audio": {}
+    "audio": {},
+    "source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   }
 }

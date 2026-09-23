@@ -83,6 +83,25 @@ def upsert_vectors(table: str, rows: list[dict[str, Any]], api: Any = None) -> i
             "any embedder's") from None
 
 
+
+def as_vector(value: Any) -> list[float]:
+    """A pgvector column as floats, whatever PostgREST handed back.
+
+    **It hands back a string.** `vector(1536)` arrives as the text
+    `"[-0.0342,0.0450,...]"`, not a list -- so a cosine written against a list
+    silently compared nothing, returned its "these are not comparable"
+    sentinel for every row, and left `sorted` to preserve the order the rows
+    happened to arrive in -- a ranking nobody had computed. Measured: every
+    similarity -1.0 across a 4-row table.
+    """
+    if isinstance(value, str):
+        try:
+            return [float(x) for x in value.strip("[]").split(",") if x]
+        except ValueError:
+            return []
+    return [float(x) for x in (value or [])]
+
+
 def upsert(table: str, rows: list[dict[str, Any]], api: Any = None,
            chunk: int = 200) -> int:
     """Upsert rows in batches. Returns how many were sent.
@@ -137,6 +156,6 @@ def delete_except(table: str, match: dict[str, Any], column: str,
     query.execute()
 
 
-__all__ = ["upsert_vectors", "DatabaseUnavailable", "PUBLISHABLE_VARS", "SECRET_VARS",
+__all__ = ["as_vector", "upsert_vectors", "DatabaseUnavailable", "PUBLISHABLE_VARS", "SECRET_VARS",
            "URL_VARS", "client", "configured", "delete_except",
            "delete_stale_chunks", "delete_where", "upsert"]

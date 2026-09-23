@@ -19,23 +19,24 @@ to import an argparse module to reach the work behind it.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Optional
 
 from ..media import load as load_media
-from ...shared import paths
-from ...shared.storage import sinks
-from ...shared.contracts.documents import Cuts, Produced, RawTranscript, Timeline
+from ...shared import logs, paths
+from ...shared.storage import files
+from ...shared.contracts.documents import (Cuts, Media, Produced,
+                                           RawTranscript, Timeline)
 from . import scenes, speech
 from .grid import POLICIES, build
 
 
 def load_cuts(video_id: str) -> Cuts:
-    return Cuts.from_dict(sinks.read_json(paths.artifact(video_id, "cuts")))
+    return Cuts.from_dict(files.read_json(paths.require(video_id, "cuts")))
 
 
 def load(video_id: str) -> Timeline:
     """Read back the grid. Every consumer starts here."""
-    return Timeline.from_dict(sinks.read_json(paths.artifact(video_id, "timeline")))
+    return Timeline.from_dict(files.read_json(paths.require(video_id, "timeline")))
 
 
 #: Policies whose evidence is a scene pass, read off POLICIES so a picture
@@ -56,30 +57,20 @@ EVIDENCE_SETTINGS: dict[str, tuple[tuple[str, ...], object]] = {
 }
 
 
-def evidence(video_id: str, policy: str,
-             stride: int = scenes.DEFAULT_STRIDE,
-             threshold: float = scenes.DEFAULT_THRESHOLD,
-             detect_width: int = scenes.DETECT_WIDTH,
-             silence_s: float = speech.DEFAULT_SILENCE_S,
-             sink: str | Sequence[str] = "file") -> Optional[Produced]:
-    """Run whichever precursor this policy needs. None for `uniform`.
+def _check_settings(policy: str, given: dict[str, object]) -> None:
+    """A setting this policy's precursor cannot read is refused, not dropped.
 
-    `uniform` needs nothing -- it is arithmetic over a duration `media.json`
-    already recorded -- so this returns None rather than doing work to produce
-    an empty cut list.
+    `stride` belongs to the scene pass and `silence_s` to the speech one, and
+    a signature cannot say so -- it was published beside `policy: scene`,
+    where it is silently ignored, which is what `EVIDENCE_SETTINGS` replaces.
+    Compared against the default rather than a sentinel, so the published
+    defaults stay discoverable; passing one unchanged is a no-op either way.
+
+    Here rather than in `evidence`, so both ways into this component get it.
+    A check that lives on only one of two public paths is a check half the
+    callers walk past -- which is exactly how `sampler="uniform:nope"` reached
+    a whole video decode.
     """
-    if policy not in POLICIES:
-        raise KeyError(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
-    needs = POLICIES[policy]
-
-    # A setting this policy's precursor cannot read is refused, not dropped.
-    # `stride` belongs to the scene pass and `silence_s` to the speech one, and
-    # a signature cannot say so -- it was published beside `policy: scene`,
-    # where it is silently ignored, which is what `EVIDENCE_SETTINGS` replaces.
-    # Compared against the default rather than a sentinel, so the published
-    # defaults stay discoverable; passing one unchanged is a no-op either way.
-    given = {"stride": stride, "threshold": threshold,
-             "detect_width": detect_width, "silence_s": silence_s}
     unreachable = sorted(
         name for name, (reads, default) in EVIDENCE_SETTINGS.items()
         if given[name] != default and policy not in reads)
@@ -91,27 +82,113 @@ def evidence(video_id: str, policy: str,
             f"policy {policy!r} does not read {', '.join(unreachable)} -- "
             f"{detail}")
 
+
+def detect(policy: str,
+           media: Optional[Media] = None,
+           transcript: Optional[RawTranscript] = None,
+           stride: int = scenes.DEFAULT_STRIDE,
+           threshold: float = scenes.DEFAULT_THRESHOLD,
+           detect_width: int = scenes.DETECT_WIDTH,
+           silence_s: float = speech.DEFAULT_SILENCE_S) -> Optional[Cuts]:
+    """Run this policy's precursor over documents in hand. Writes nothing.
+
+    Which input is needed is the policy's business, and `POLICIES` is that
+    table: a picture policy wants the `Media` (it decodes the file it names),
+    a speech policy wants the `RawTranscript`, and `uniform` wants neither.
+
+        detect("scene", media=media, stride=5)      -> Cuts
+        detect("vad", transcript=raw)               -> Cuts
+        detect("uniform")                           -> None
+
+    **`None` is the answer for `uniform`, not an absence.** There are no cuts,
+    and no cuts is what the document would say. `evidence()` still returns a
+    `Produced` carrying `skipped: ["evidence"]`, because that is a receipt for
+    a step and a step that did nothing is still a step -- the two levels
+    answer different questions and each answers its own honestly.
+    """
+    if policy not in POLICIES:
+        raise KeyError(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
+    _check_settings(policy, {"stride": stride, "threshold": threshold,
+                             "detect_width": detect_width,
+                             "silence_s": silence_s})
+    needs = POLICIES[policy]
     if needs is None:
         return None
 
     if needs == "video":
-        cuts = scenes.detect(load_media(video_id), stride, threshold, detect_width)
-    else:
-        raw = RawTranscript.from_dict(
-            sinks.read_json(paths.artifact(video_id, "raw_transcript")))
-        cuts = speech.detect(raw, policy, silence_s)
+        if media is None:
+            raise ValueError(
+                f"policy {policy!r} is found in the picture, so `detect` needs "
+                f"the media=... it should decode")
+        return scenes.detect(media, stride, threshold, detect_width)
 
-    written = sinks.write(video_id, "cuts", cuts.as_dict(), sink)
+    if transcript is None:
+        raise ValueError(
+            f"policy {policy!r} is derived from the soundtrack, so `detect` "
+            f"needs the transcript=... to read it from")
+    return speech.detect(transcript, policy, silence_s)
+
+
+def evidence(video_id: str, policy: str,
+             stride: int = scenes.DEFAULT_STRIDE,
+             threshold: float = scenes.DEFAULT_THRESHOLD,
+             detect_width: int = scenes.DETECT_WIDTH,
+             silence_s: float = speech.DEFAULT_SILENCE_S) -> Produced:
+    """Run whichever precursor this policy needs, by id, and write the cuts.
+
+    `uniform` needs nothing -- it is arithmetic over a duration `media.json`
+    already recorded -- so nothing runs and the answer says so, as
+    `skipped: ["evidence"]`. **A policy needing no precursor is an answer, not
+    an absence.**
+
+    It used to return None, and the `Produced` was assembled by a wrapper in
+    `api/service.py` -- so the same call answered differently depending on
+    whether it arrived over HTTP or from a `import`, and the library's half was
+    the one a caller had to special-case. Every component returns `Produced`
+    now, at both levels, which is the claim the uniform signature rests on.
+
+    This is `detect` plus a read at each end; the checks are all down there,
+    so the two ways in cannot drift apart.
+    """
+    if policy not in POLICIES:
+        raise KeyError(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
+    _check_settings(policy, {"stride": stride, "threshold": threshold,
+                             "detect_width": detect_width,
+                             "silence_s": silence_s})
+    needs = POLICIES[policy]
+
+    if needs is None:
+        logs.skipped("boundaries.evidence", video_id, "evidence",
+                     f"policy {policy!r} is arithmetic over the duration")
+        return Produced(
+            video_id=video_id, component="boundaries.evidence",
+            artifacts={},
+            stats={"policy": policy},
+            skipped=["evidence"],
+        )
+
+    with logs.timed(f"boundaries.{needs}", video_id) as done:
+        # Read only what this policy needs: a scene pass never opens the
+        # transcript, and a speech pass never opens the container.
+        cuts = detect(
+            policy,
+            media=load_media(video_id) if needs == "video" else None,
+            transcript=(None if needs == "video" else RawTranscript.from_dict(
+                files.read_json(paths.require(video_id, "raw_transcript")))),
+            stride=stride, threshold=threshold, detect_width=detect_width,
+            silence_s=silence_s)
+        assert cuts is not None               # `needs is None` returned above
+
+        where = files.write(video_id, "cuts", cuts.as_dict())
+        done(policy=policy, detector=cuts.detector, cuts=len(cuts.cuts))
     return Produced(
         video_id=video_id, component=f"boundaries.{needs}",
-        backend=",".join(written),
-        artifacts={"cuts": written.get("file", "")},
+        artifacts={"cuts": where},
         stats={**cuts.stats, **cuts.params},
     )
 
 
-def retune(video_id: str, threshold: float,
-           sink: str | Sequence[str] = "file") -> Produced:
+def retune(video_id: str, threshold: float) -> Produced:
     """A different threshold over the cached scores. Runs no model.
 
     This is what caching the score series buys, and it is exact rather than an
@@ -121,18 +198,16 @@ def retune(video_id: str, threshold: float,
     cuts = load_cuts(video_id)
     module = scenes if cuts.source == "video" else speech
     retuned = module.rethreshold(cuts, threshold)
-    written = sinks.write(video_id, "cuts", retuned.as_dict(), sink)
+    where = files.write(video_id, "cuts", retuned.as_dict())
     return Produced(
         video_id=video_id, component="boundaries.retune",
-        backend=",".join(written),
-        artifacts={"cuts": written.get("file", "")},
+        artifacts={"cuts": where},
         stats={**retuned.stats, "threshold": threshold,
                "was": cuts.params.get("threshold", cuts.params.get("silence_s"))},
     )
 
 
-def _cuts_for(video_id: str, policy: str) -> tuple[Optional[list[float]], str,
-                                                   dict[str, Any]]:
+def _cuts_for(video_id: str, policy: str) -> Optional[Cuts]:
     """The cuts this policy needs, read as a file.
 
     Reading rather than importing is what keeps `boundaries` free of an edge to
@@ -141,27 +216,36 @@ def _cuts_for(video_id: str, policy: str) -> tuple[Optional[list[float]], str,
     """
     needs = POLICIES[policy]
     if needs is None:
-        return None, "grid", {}
+        return None
     path = paths.artifact(video_id, "cuts")
     if not path.exists():
+        # Kept rather than left to `paths.require`, because it can say more:
+        # which *policy* wants the cuts, and which half of `evidence` would
+        # produce them. A `MissingArtifact` so it lands in the same clause as
+        # every other skipped step.
         producer = "scenes" if needs == "video" else "speech"
-        raise FileNotFoundError(
+        raise paths.MissingArtifact(
             f"policy {policy!r} needs cuts from boundaries.{producer}; "
             f"{path} does not exist -- run `evidence` first")
-    cuts = load_cuts(video_id)
-    expected = "content" if policy == "scene" else policy
-    if cuts.detector != expected:
-        raise ValueError(
-            f"{path} holds {cuts.detector!r} cuts, but the policy is "
-            f"{policy!r}. Re-run the evidence pass for this policy.")
-    return list(cuts.cuts), needs, cuts.params
+    return load_cuts(video_id)
 
 
-def boundaries(video_id: str, policy: str = "uniform",
-               chunk_s: float = 20.0, min_s: float = 5.0,
-               max_s: Optional[float] = None,
-               sink: str | Sequence[str] = "file") -> Produced:
-    """Decide the grid and write it. The one place boundaries are chosen."""
+def timeline(media: Media, policy: str = "uniform",
+             cuts: Optional[Cuts] = None,
+             chunk_s: float = 20.0, min_s: float = 5.0,
+             max_s: Optional[float] = None) -> Timeline:
+    """Decide the grid from documents in hand. The one place boundaries are
+    chosen, and it reads and writes nothing.
+
+        timeline(media)                              # uniform
+        timeline(media, "scene", cuts=detect("scene", media=media))
+        timeline(media, "vad", cuts=detect("vad", transcript=raw))
+
+    `cuts` is the `Cuts` document `detect` returned, not a bare list of
+    timestamps: it carries which detector produced it, and a grid built from
+    the wrong one is a silent disagreement rather than an error. `uniform`
+    takes none.
+    """
     if policy not in POLICIES:
         raise KeyError(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
 
@@ -179,33 +263,61 @@ def boundaries(video_id: str, policy: str = "uniform",
                'which --max-chunk defaults to'}). Raise the ceiling or lower "
             "the floor.")
 
-    media = load_media(video_id)
     if media.duration_s is None:
-        raise ValueError(f"{video_id}: the container reports no duration, so no "
-                         "grid can be derived from it")
-    if POLICIES[policy] == "video" and not media.has_video:
+        raise ValueError(f"{media.video_id}: the container reports no duration, "
+                         "so no grid can be derived from it")
+    needs = POLICIES[policy]
+    if needs == "video" and not media.has_video:
         raise ValueError(f"policy {policy!r} is found in the picture, and "
-                         f"{video_id} has no video stream")
-    if POLICIES[policy] == "audio" and not media.has_audio:
+                         f"{media.video_id} has no video stream")
+    if needs == "audio" and not media.has_audio:
         raise ValueError(f"policy {policy!r} is derived from the soundtrack, and "
-                         f"{video_id} has no audio stream")
+                         f"{media.video_id} has no audio stream")
 
-    cuts, derived_from, params = _cuts_for(video_id, policy)
-    timeline = build(video_id, policy, media.duration_s, cuts=cuts,
-                     derived_from=derived_from, chunk_s=chunk_s,
-                     min_s=min_s, max_s=max_s, params=params)
+    if needs is None:
+        offered, derived_from, params = None, "grid", {}
+    else:
+        if cuts is None:
+            producer = "scenes" if needs == "video" else "speech"
+            raise ValueError(
+                f"policy {policy!r} needs cuts from boundaries.{producer}; "
+                f"pass cuts=detect({policy!r}, ...)")
+        expected = "content" if policy == "scene" else policy
+        if cuts.detector != expected:
+            raise ValueError(
+                f"those are {cuts.detector!r} cuts, but the policy is "
+                f"{policy!r}. Re-run the evidence pass for this policy.")
+        offered, derived_from, params = list(cuts.cuts), needs, cuts.params
 
-    written = sinks.write(video_id, "timeline", timeline.as_dict(), sink)
-    spans = [e - s for s, e in timeline.spans]
+    return build(media.video_id, policy, media.duration_s, cuts=offered,
+                 derived_from=derived_from, chunk_s=chunk_s,
+                 min_s=min_s, max_s=max_s, params=params)
+
+
+def boundaries(video_id: str, policy: str = "uniform",
+               chunk_s: float = 20.0, min_s: float = 5.0,
+               max_s: Optional[float] = None) -> Produced:
+    """Decide the grid and write it. `timeline` plus a read at each end."""
+    if policy not in POLICIES:
+        raise KeyError(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
+
+    with logs.timed("boundaries", video_id) as done:
+        media = load_media(video_id)
+        cuts = _cuts_for(video_id, policy)
+        grid = timeline(media, policy, cuts=cuts, chunk_s=chunk_s,
+                        min_s=min_s, max_s=max_s)
+
+        where = files.write(video_id, "timeline", grid.as_dict())
+        done(policy=policy, chunks=len(grid), fingerprint=grid.fingerprint())
+    spans = [e - s for s, e in grid.spans]
     return Produced(
-        video_id=video_id, component="boundaries", backend=",".join(written),
-        artifacts={"timeline": written.get("file", "")},
-        stats={"policy": policy, "derived_from": derived_from,
-               "chunks": len(timeline), "fingerprint": timeline.fingerprint(),
-               "duration_s": round(timeline.duration_s, 3),
+        video_id=video_id, component="boundaries",        artifacts={"timeline": where},
+        stats={"policy": policy, "derived_from": grid.derived_from,
+               "chunks": len(grid), "fingerprint": grid.fingerprint(),
+               "duration_s": round(grid.duration_s, 3),
                "shortest_s": round(min(spans), 3) if spans else 0.0,
                "longest_s": round(max(spans), 3) if spans else 0.0,
-               "cuts_offered": 0 if cuts is None else len(cuts)},
+               "cuts_offered": 0 if cuts is None else len(cuts.cuts)},
     )
 
 
@@ -247,7 +359,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--calibrate", action="store_true",
                     help="what every threshold would cost here. Reads the "
                          "cached scores; runs nothing")
-    ap.add_argument("--sink", default="file")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -271,20 +382,20 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
 
         if args.retune is not None:
-            produced = retune(args.video_id, args.retune, args.sink)
+            produced = retune(args.video_id, args.retune)
         elif args.evidence:
             produced = evidence(args.video_id, args.policy, args.stride,
                                 args.threshold, args.detect_width,
-                                args.silence, args.sink)
-            if produced is None:
-                print(f"{args.video_id}: policy 'uniform' needs no evidence "
-                      "-- it is arithmetic over the container duration")
+                                args.silence)
+            if "evidence" in produced.skipped and not args.json:
+                print(f"{args.video_id}: policy {args.policy!r} needs no "
+                      "evidence -- it is arithmetic over the container "
+                      "duration")
                 return 0
         else:
             produced = run(args.video_id, args.policy, args.chunk_s, args.min_s,
-                           args.max_s, args.sink)
-    except (KeyError, ValueError, FileNotFoundError, scenes.NoPicture,
-            sinks.UnknownBackend) as exc:
+                           args.max_s)
+    except (KeyError, ValueError, FileNotFoundError, scenes.NoPicture) as exc:
         print(f"error: {exc}")
         return 1
 

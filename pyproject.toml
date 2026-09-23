@@ -28,7 +28,6 @@ dependencies = [
     "jsonschema",              # schemas.validate(deep=True)
     "scenedetect>=0.7",        # the scene detector algorithm
     "openai",                  # every OpenAI-compatible provider; httpx for Anthropic
-    "qdrant-client",
     "supabase",
 ]
 

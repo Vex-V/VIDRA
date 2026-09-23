@@ -347,6 +347,24 @@ def problems(role: str, spec: Optional[str] = None) -> list[str]:
     return []
 
 
+def require(role: str, spec: Optional[str] = None) -> None:
+    """The same check, raising -- for a component called on its own.
+
+    `validate` returns a list because a request is checked all at once and a
+    caller wants every problem, not the first. A component has one role to
+    check and nowhere to put a list, so it raises.
+
+    It has to be on the components and not only on `workflow.validate`: a
+    caller driving them itself never passes through `validate`, and neither
+    does `POST /videos/{id}/run/{component}`. `describe` finding no key *after*
+    the frames are read is the late failure the check exists to prevent, and it
+    was reachable from both of the library's public levels but guarded on one.
+    """
+    found = problems(role, spec)
+    if found:
+        raise ProviderUnavailable(found[0])
+
+
 # -------------------------------------------------------------- publishing
 
 def defaults() -> dict[str, str]:
@@ -392,4 +410,5 @@ def catalog() -> dict[str, Any]:
 __all__ = ["ENV", "FALLBACK", "OFFLINE", "PROTOCOLS", "Provider", "ProviderError",
            "ProviderUnavailable", "ROLES", "api_key", "base_url", "catalog",
            "choose", "defaults", "get", "load", "names", "problems", "providers",
+           "require",
            "split"]

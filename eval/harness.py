@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import re
 import sys
 import time
 from pathlib import Path
@@ -43,8 +44,36 @@ from typing import Any, Iterable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from falconvar.video_rag.embed.indexes import tokenize          # noqa: E402
 from falconvar.video_rag.retrieve import search                 # noqa: E402
+
+#: Word splitting for the overlap bands below, and only for those -- ranking
+#: is Postgres' now, through `to_tsvector('english')`. It lived beside the
+#: Qdrant sparse vector, which needed a tokenizer in Python; this file wants
+#: one to measure how literal a query is, which is a different job that
+#: happens to want the same rule.
+_WORD = re.compile(r"[a-z0-9£$€%.:'-]+")
+
+#: Dropped before matching. Not an optimisation: without it the query
+#: "youngsters fleeing a poisoned town" overlaps the corpus on the word "a",
+#: so every query bands as literal and the bands distinguish nothing.
+STOPWORDS = frozenset("""
+a an the and or but if then than that this these those of in on at to from by
+for with without into onto over under again further is are was were be been
+being am do does did doing have has had having i you he she it we they them
+his her its our their as so such no nor not only own same too very can will
+just should now there here when where why how all any both each few more most
+other some what which who whom
+""".split())
+
+
+def tokenize(text: str) -> list[str]:
+    """Words, lowercased, stopwords removed.
+
+    Keeps `£1.85`, `9p` and `1:23` whole -- those are exactly the literal
+    strings the lexical half is best at, and splitting them would throw away
+    the advantage it exists for.
+    """
+    return [t for t in _WORD.findall(text.lower()) if t not in STOPWORDS]
 
 
 # ----------------------------------------------------------------- metrics
@@ -182,15 +211,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         description="Grade a retrieval configuration against a query set.")
     ap.add_argument("cases", type=Path, nargs="?",
                     default=Path(__file__).with_name("cases.json"))
-    ap.add_argument("--index", default="qdrant")
     ap.add_argument("--embedder", default=None,
                     help="a provider or provider/model; default as embed resolves it")
     ap.add_argument("--moments", type=int, default=5)
     ap.add_argument("--candidates", type=int, default=20)
     ap.add_argument("--question", default=None, help="run every case filtered")
     ap.add_argument("--strategy", default=None)
-    ap.add_argument("--compare", default=None, metavar="INDEX",
-                    help="run a second configuration and show the difference")
     ap.add_argument("--check", action="store_true",
                     help="verify each case's `kind` against corpus overlap, "
                          "and run nothing")
@@ -220,9 +246,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("Bands are what the summary groups on; the label is only intent.")
         return 0
 
-    def configured(index: str) -> dict[str, Any]:
-        config = {"index_name": index, "embedder": args.embedder,
-                  "candidates": args.candidates}
+    def configured() -> dict[str, Any]:
+        config = {"embedder": args.embedder, "candidates": args.candidates}
         if args.question:
             config["question"] = args.question
         if args.strategy:
@@ -230,13 +255,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return config
 
     terms = corpus_terms({c["video_id"] for c in cases})
-    rows = [run_case(c, configured(args.index), args.moments, terms)
-            for c in cases]
-    report = {args.index: summarise(rows)}
-    if args.compare:
-        other = [run_case(c, configured(args.compare), args.moments, terms)
-                 for c in cases]
-        report[args.compare] = summarise(other)
+    rows = [run_case(c, configured(), args.moments, terms) for c in cases]
+    report = {"postgres": summarise(rows)}
 
     if args.json:
         print(json.dumps({"summary": report, "rows": rows}, indent=2))
@@ -254,13 +274,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"    {band:<13} n={part['n']:<3} mrr {part['mrr']:.4f}  "
                   f"top1 {part['top1']:.4f}  "
                   f"lexical {part['lexical_fired_on']}/{part['n']}")
-
-    if args.compare:
-        a, b = report[args.index], report[args.compare]
-        print(f"\n  {args.compare} - {args.index}:  "
-              f"MRR {b['mrr'] - a['mrr']:+.4f}   top-1 {b['top1'] - a['top1']:+.4f}")
-        print("  One corpus, few cases. A difference this small is a "
-              "direction, not a result.")
 
     print("\nFailures worth reading:")
     for row in sorted(rows, key=lambda r: r["mrr"])[:5]:

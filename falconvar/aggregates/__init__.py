@@ -128,8 +128,10 @@ def build(name: str, llm: Optional[str] = None, embedder: Optional[str] = None) 
     return runner(name, llm, embedder) if kind == "link" else runner(name, llm)
 
 
-from .driver import context_for, load, main, run, validate  # noqa: E402
+from .driver import (context_for, definition_rows, index_summary,  # noqa: E402
+                     load, main, run, validate)
 
 __all__ = ["REGISTRY", "RUNNERS", "TIERS", "Context", "about", "available",
-           "build", "context_for", "expand", "kind_of", "load", "main", "missing",
-           "run", "takes_inputs", "tier_of", "validate"]
+           "build", "context_for", "definition_rows", "expand", "index_summary",
+           "kind_of", "load", "main", "missing", "run", "takes_inputs",
+           "tier_of", "validate"]

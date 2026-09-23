@@ -16,8 +16,17 @@ files rather than objects, and every one is `run(video_id, ...) -> Produced`.
 
 from __future__ import annotations
 
+import logging
+
 from .shared.errors import FalconvarError, ModelUnavailable, Unavailable
 from .shared.paths import configure
+from .workspace import Workspace
+
+#: A library configures no logging. Without this, a record emitted before the
+#: application has set anything up prints `No handlers could be found`, or --
+#: worse on modern Python -- goes to a `lastResort` handler at WARNING that
+#: the application never asked for. See `shared/logs.py`.
+logging.getLogger("falconvar").addHandler(logging.NullHandler())
 
 #: Read from the installed metadata rather than restated, so it cannot drift
 #: from `pyproject.toml` -- but resolved on first access, not at import.
@@ -37,5 +46,5 @@ def __getattr__(name: str) -> str:
 
 
 __all__ = ["FalconvarError", "ModelUnavailable", "Unavailable",
-           "__version__", "configure"]
+           "Workspace", "__version__", "configure"]
 

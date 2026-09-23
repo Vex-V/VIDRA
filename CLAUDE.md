@@ -12,13 +12,17 @@ measurements and the traps live here.
 
 ```
 falconvar/
-  __init__.py      configure() · __version__ · the error base. Imports almost nothing
+  __init__.py      configure() · Workspace · __version__ · the error base ·
+                   the NullHandler. Imports almost nothing
   py.typed         PEP 561: without it a consumer's checker sees no annotations
   workflow.py      the whole run: video_rag's driver, then aggregates'
-  shared/          paths · env · errors   both tiers import these
+  workspace.py     two data roots in one process, as a ContextVar
+  shared/          paths · env · errors · logs · progress   both tiers import these
     contracts/     documents · schemas   what components hand each other
                    units (one embeddable thing + render) · fields (the builder)
-    storage/       sinks · db · rows     where a document goes
+                   reference: TYPES.txt, generated from the dataclasses
+    storage/       files · db · supabase   where a document goes, and
+                   separately whether a copy also goes to a database
     models/        providers · llm · embedders/   who answers a model call
                    errors imports nothing; paths imports only errors
   video_rag/       TIER 1: the video in, a searchable index out, and the search
@@ -28,7 +32,7 @@ falconvar/
     audio/         2 source · reader · models
       backends/      whisper · pyannote · cuda
     boundaries/   3+4 scenes (picture) · speech (soundtrack) · grid
-    video/         5 reader · decimate · store · pipeline
+    video/         5 reader · decimate · pipeline (store -> ../frames)
       samplers/      base · uniform · scene · people · objects · ocr
         perception/  detectors · descriptors · embedders. Every model weight
                      lives below this line and none above it.
@@ -37,8 +41,9 @@ falconvar/
       prompts.json   BUILT-IN questions and shapes; shipped, read-only
       backends/      stub · model (every provider, through shared/models/llm)
     embed/         8 units · embedders · remote · local · readable
-      indexes/       qdrant · supabase
+                     writes embedded.json -- text AND vectors. No index
     retrieve/        search: a query to ranked moments
+                     postgres: the search_embeddings RPC, the one reader
   aggregates/      TIER 2: answers over what video_rag extracted; never the video
     driver.py        answers up to a tier · the video's summary vector
     base             the protocols · Context · DefinitionRunner
@@ -63,7 +68,6 @@ db/
 data/              everything a run writes; gitignored
   out/<id>/        media, transcript.raw, cuts, timeline, manifest, store,
                    transcript, descriptions, embedded, aggregates/
-  out/_qdrant/     the embedded vector store, beside the videos not inside one
   uploads/         what the API parked until a run read it
   prompts.json     custom questions, added through the API
   providers.json   model endpoints added or overridden; names key variables, never keys
@@ -71,22 +75,22 @@ weights/           detector and embedder checkpoints; a cache, not output
 docs/ROUTES.md     the HTTP surface
 ```
 
-116 Python files, ~15.6k lines.
+126 Python files, ~17.0k lines.
 
 ## Commands
 
 ```bash
 python -m falconvar.workflow samples/x.mp4 --policy vad --sampler clip,yolo:overview
 python -m falconvar.workflow samples/x.mp4 --no-audio --sampler uniform:text
-python -m falconvar.workflow samples/x.mp4 --tier llm --sink file,supabase \
-       --index qdrant,supabase
+python -m falconvar.workflow samples/x.mp4 --tier llm --database supabase
 
 # one tier at a time
 python -m falconvar.video_rag samples/x.mp4 --sampler clip   # extract: media -> embed
-python -m falconvar.aggregates <id> --tier llm --index supabase   # answers, + the video vector
+python -m falconvar.aggregates <id> --tier llm     # answers; files only
 
 # one component at a time; per-stage tuning lives on these, not on workflow
 python -m falconvar.video_rag.media samples/x.mp4
+python -m falconvar.video_rag.media samples/x.mp4 --on-conflict replace   # not clip-2
 python -m falconvar.video_rag.audio <id> --transcriber whisper --diarizer pyannote
 python -m falconvar.video_rag.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
 python -m falconvar.video_rag.boundaries <id> --evidence --detect-width 160   # cheaper pass
@@ -107,9 +111,8 @@ python -m falconvar.video_rag.cut <id>
 python -m falconvar.video_rag.describe <id> --describer openai --limit 5   # costs money
 python -m falconvar.video_rag.describe <id> --describer ollama/gemma3:4b   # any provider, provider/model
 python -m falconvar.aggregates <id> --tier llm --llm anthropic
-python -m falconvar.video_rag.embed <id> --embedder local --index qdrant   # in-process, no key
+python -m falconvar.video_rag.embed <id> --embedder local   # no key needed
 python -m falconvar.video_rag.video <id> --sampler uniform:safety   # a custom question
-python -m falconvar.video_rag.embed <id> --index qdrant,supabase
 python -m falconvar.video_rag.retrieve "..." <id> --sampler clip:text   # one pairing
 python -m falconvar.video_rag.retrieve "..." <id> --question text       # across samplers
 python -m falconvar.aggregates <id> --tier llm
@@ -125,10 +128,13 @@ pip install "falconvar[audio]"   # whisper + pyannote
 pip install "falconvar[all]"
 python -m pip wheel --no-deps -w dist .      # build it
 
-python example.py                # both levels, same video, side by side
+python example.py                # the components, one at a time. So far: media
 python example.py samples/x.mp4
 
 python -m falconvar.shared.contracts.schemas --check     # CI: are the schemas stale
+python -m falconvar.shared.contracts.reference           # regenerate TYPES.txt
+python -m falconvar.shared.contracts.reference --check   # CI: is TYPES.txt stale
+python -m falconvar.shared.contracts.reference --undocumented   # fields with no `#:`
 python -m recovery.recreate data/out/<id>/manifest.json --verify data/out/<id>/store
 #      ^ from the checkout root: recovery/ is not an installed package, on purpose
 python -m uvicorn api.main:app --port 8000     # the app at /, /docs for the schema
@@ -278,18 +284,39 @@ indistinguishable from a run whose samplers kept nothing, which happens. Written
 the other way round, the same failure leaves rows nobody points at and no
 manifest claiming them, so a reader is told the truth: not ingested here yet.
 
-**`embed` has no sink, and had one that did nothing.** Every other component
-writes a document and `sinks.write` fans it out; this one writes vectors, and
-where they go is `index`. `embedded.json` has no row mapping at all, so the
-`supabase` backend would be refused for it. The parameter was accepted, never
-read, and published by `/capabilities` -- a destination control on a generated
-form that changed nothing.
+**A component writes one file and stops; the pipeline decides the rest.**
+Every component took a `sink` fanning its document out to a file and to
+Postgres, and `embed` took an `index_name` naming a vector store. Both are
+gone. `shared/storage/files.py` writes the document; `shared/storage/supabase.py`
+is one public `write_<artifact>` per document; and `video_rag.driver.export`
+reads each artifact back and calls it when a run names a `database`.
+
+That one seam had produced the same class of bug over and over. `embed`
+accepted a `sink` it never read, and `/capabilities` published it as a working
+control. `sinks.support()` had to answer `any` rather than `all`, because
+`video` writes a manifest *and* a directory of JPEGs that never reaches
+`write`. The best-effort-versus-raise question was documented one way and
+coded the other, and no component passed the `on_problem` that would have made
+the docs true. `describe` and `aggregate` each wrote their own provenance rows
+from inside the component, gated on a string nobody else read.
+
+The layering is what makes a second database cheap: a `sql.py` offering the
+same `write_<artifact>` names is a sibling file, where a new sink was a branch
+in the fan-out, a row in `BACKENDS`, and a matching case in the `support()`
+derivation. It also makes best-effort an *informed* choice -- the pipeline's,
+recorded in `Run.problems` -- rather than a default nobody picked.
+
+The re-read is the price, and it is small: the document is on disk because the
+next component is about to read it anyway.
 
 **Recompute and write are different questions.** The fingerprint governs
-whether to recompute; every requested backend is written regardless. Conflating
-them means a run that adds a backend has nothing to recompute, writes nothing,
-and reports success — found twice, in `embed` across two indexes and in
-`aggregate` across two sinks.
+whether to recompute; the write happens regardless. Conflating them means a
+run that adds a destination has nothing to recompute, writes nothing, and
+reports success — found twice, in `embed` across two indexes and in
+`aggregate` across two sinks. Both of those destinations are gone, and the
+rule is what survives them: `embed` still rewrites `embedded.json` whole on a
+run that embeds nothing, and a pipeline that adds `database=supabase` still
+pushes every artifact even though none was recomputed.
 
 **`recovery/` imports nothing from the pipeline.** Hand someone those files, a
 manifest and the video, and they rebuild the store byte for byte with only
@@ -350,9 +377,101 @@ checkout and the working directory's from an install — the only file a
 consumer would expect to be read.
 
 **A leading underscore under `data/out/` marks a directory that is not a
-video.** The embedded Qdrant store lives at `_qdrant`, beside the videos rather
-than inside one; without the rule it was listed as a video with no artifacts,
-by `paths.videos()` and so by `GET /videos`.
+video.** Written for the embedded Qdrant store, which lived at `_qdrant`
+beside the videos rather than inside one; without the rule it was listed as a
+video with no artifacts, by `paths.videos()` and so by `GET /videos`. That
+store is gone and the rule is not, because the next directory that is not a
+video would repeat it exactly.
+
+**A video id becomes a directory name, so it is checked and not cleaned.**
+`out_root() / video_id` is a join, not a containment, and a library takes its
+id from whoever calls it -- an HTTP path segment, a filename stem, a job
+record. `media.run(f, video_id="../../escaped")` wrote `media.json` **two
+levels above the data root** while `Produced.video_id` read back unchanged, so
+nothing anywhere reported that a run had left its own tree. The quieter one was
+the underscore: the rule above was enforced on *read* only, so `_hidden` wrote
+a complete, correct output directory that `videos()` -- and so `GET /videos`,
+and so the whole client -- would never list again.
+
+`paths.check_id` is on `home()`, the one line where both tiers join an id to a
+root, so `artifact`, `exists`, `present` and every component's `load` arrive
+through it. Cleaning instead of refusing would be worse: two ids differing only
+in a refused character would land in one directory and silently overwrite each
+other's artifacts. The alphabet is deliberately `api/main.safe_id`'s, so
+whatever that cleaning produces is guaranteed to be accepted here -- verified
+across `../../escaped.mp4`, `_hidden.mp4`, `café vidéo.mp4`, `...` and
+`C:/x/y/My Video!.MP4`. One `@app.exception_handler` turns it into a 422 on all
+six routes that take an id as a path segment, rather than a guard on each.
+
+Still not refused: Windows device names (`con`, `nul`, `com1`), which cannot
+name a directory there. That failure is a loud `OSError` at write time rather
+than a silent one, so it is a gap rather than a trap.
+
+**An id defaults to the filename stem, so two videos can want one directory --
+and only a *different* file is a conflict.** `monday/clip.mp4` and
+`tuesday/clip.mp4` both asked for `clip`, and the second silently won. Worse
+than losing a document: only `media.json` was replaced, so the grid, the frame
+store and the descriptions of the *first* video survived, each still
+well-formed. Measured -- a directory whose `timeline.json` covered 205.28 s in
+11 chunks beside a `media.json` reading 60.333 s. Nothing downstream compares a
+grid against the media it was cut from, and `Timeline.fingerprint` does not
+catch it: that guards documents cut on different *grids*. Over the API the
+upload itself was overwritten too, so the first video's bytes were gone.
+
+`media.on_conflict` is `new` (mint `clip-2`), `replace` or `refuse`, and `new`
+is the default because nothing is lost by it. **`replace` deletes the whole
+directory, not `media.json`** -- taking the id while leaving the old artifacts
+is precisely the corruption above, with a flag on it.
+
+The rule cannot be "the id is taken", because the ordinary case is the same
+file again: `video_rag()` opens with `media.run` on every pass, and minting
+there would orphan the manifest, the descriptions and the vectors, so a re-run
+would re-pay for everything already done. `Media.source` is what tells them
+apart -- `fingerprint_of(size, duration, container, both streams)`, which is
+**free**, since every part of it was read to describe the streams anyway. The
+same bytes at a different path fingerprint the same, which is wanted: a file
+that moved is still that video. Two genuinely different videos agreeing on all
+of it would read as one; hashing the bytes instead costs ~1.9 ms/MB (177 ms for
+95 MB, so ~7 s on a three-hour original) and nothing else would change.
+
+A `media.json` written before `source` existed carries None and reads as the
+same video, so an existing checkout keeps resuming instead of minting a
+duplicate of everything it has; the fingerprint is written on the way past. One
+that exists but will not parse is a conflict, because the directory is occupied
+either way.
+
+Nothing below `media` changed, and that is the test of the design:
+`video_rag()` already did `run.video_id = first.video_id`, reading the id out of
+the receipt rather than trusting what it passed in. Verified end to end -- a
+second `clip.mp4` ran the whole pipeline under `clip-2` while `clip` kept its
+own artifacts.
+
+Not done, deliberately: the API still writes uploads to `uploads/{id}{suffix}`
+before `media` can say what the id is, so the *file* is still overwritten on a
+collision, and `jobs.submit` records the pre-run id. And `videos` in Postgres
+has no `source` column -- that needs a section 10 migration, and a replaced id
+leaves its old rows behind, which `db/wipe.py` is the tool for.
+
+**A missing input names the component that makes it.** Components hand off
+through files, so getting the order wrong is the ordinary mistake on the
+component path -- and seven of the eight answered it with the interpreter's
+`[Errno 2] No such file or directory: 'C:\...\timeline.json'`, which asks the
+caller to already know who writes that file. Worse, "that video does not exist"
+and "you skipped a step" were the same sentence.
+
+`paths.PRODUCED_BY` is artifact -> producing component, beside `ARTIFACTS`
+because it answers the other half of the same question, and `paths.require`
+is the one line all eleven reads pass through:
+
+    V has no timeline; `boundaries` writes it. Present: media
+    V has no raw_transcript; `audio` writes it. Present: media
+    no video 'ghost' under <root>\out -- `media(path)` is what creates one
+
+`MissingArtifact` keeps `FileNotFoundError` as a base, so every `except
+FileNotFoundError` already written still fires -- including the one in each
+driver's `main`, which is what makes a CLI print `error: ...` rather than a
+traceback. `boundaries` keeps its own hand-written version, because it can say
+more: which *policy* wants the cuts and which half of `evidence` produces them.
 
 **A requirement is required.** Nothing falls back when a package in
 `requirements.txt` is missing or older, or when `install.sql` was never run:
@@ -388,6 +507,16 @@ scales, so they are separate parameters landing on separate samplers --
 `confidence` on `objects`, `languages` on `text` -- rather than more readings of
 one number. `languages` is the one with no workaround: without it EasyOCR is
 asked for English and there is nothing to say otherwise.
+
+**A value with two readings is refused, and so is one the interpreter would
+explain.** `describe.run(limit=0)` described nothing and reported success:
+`limit` reads as a ceiling to a caller, and no ceiling is what `None` means, so
+zero is the one value meaning two things -- and the run that does nothing looks
+exactly like the run with nothing to do. `embed.run(batch=0)` reached
+`range()`, which answered *"arg 3 must not be zero"*: the interpreter talking
+about a loop the caller cannot see, where every sibling parameter already had
+`per_second must be positive`. Both are named refusals now, and both are
+checked before an embedder is built or an index opened.
 
 **And a setting no chosen sampler reads is refused.** `--sampler uniform
 --confidence 0.55` used to return `Produced` with the sampler built from *no
@@ -478,9 +607,24 @@ is the vocabulary, and `workflow.validate` checks **both halves** of every
 It has to be there rather than only in `describe`, which is where it used to
 be: that check reads the finished manifest, so `yolo:overvew` was a 202 that
 ran media, audio, boundaries and a whole video decode before failing on a
-typo -- the late failure `validate` exists to prevent. `validate` imports both
-vocabularies function-locally, as a composition root; `video` still never
-imports `describe`.
+typo -- the late failure `validate` exists to prevent.
+
+**And it has to be on `video.run` as well, because `validate` guards only one
+of the two public levels.** `build_samplers` has taken a `questions`
+vocabulary since it was written and *nothing ever passed one*, so a caller
+driving the components itself -- half of what the library is for, and every
+`POST /videos/{id}/run/{component}` besides -- walked straight past the check.
+Measured: `video.run(sampler="uniform:nope")` completed in **1.09 s** having
+decoded the video and stored 61 frames (26.68 MB), and then every later
+`describe` refused the manifest it wrote, *including one naming only good
+samplers*. The only way out was re-running `video`, and nothing said so. Now
+0 ms, nothing decoded.
+
+The vocabulary is resolved in `video/driver.py`, which is a composition root
+like `workflow.validate` and the tier driver. **Ingest still does not depend on
+describe**: a sampler records the question as an opaque string and
+`samplers/base.py` never reads it. The samplers are also built before any
+artifact is read, so an argument error never costs an artifact load.
 
 **Ingest does not depend on describe.** A sampler records the question as an
 opaque string and `base.py` never reads it. Only the drivers import `prompts`,
@@ -717,8 +861,8 @@ querying one is a *filter* — which gives up the agreement signal: a chunk
 contributes fewer terms, so scores fall.
 
 **A unit carries both halves of its id as fields, not just the id.** `sampler`
-and `question` are separate columns in `embeddings` and separate keys in the
-Qdrant payload, so three filters are each one equality: this **pairing**
+and `question` are separate columns in `embeddings`, so three filters are
+each one equality: this **pairing**
 (`sampler_id = clip:text`), this **question** wherever asked
 (`question = text`), and this sampler's whole output (`sampler = clip`).
 
@@ -732,9 +876,10 @@ units at 0.1294. The three answers are different, which is the point.
 
 Neither column cost a re-embedding: `text_hash` is over the content, so
 existing rows were backfilled from `sampler_id` with an `update` (since removed
-from `install.sql`: 0 of 49 rows still needed it). Qdrant is the exception --
-payload is written only on upsert, so points predating the fields need a forced
-re-index rather than a backfill.
+from `install.sql`: 0 of 49 rows still needed it). Qdrant was the exception,
+and the reason is worth keeping for any store that behaves like it: payload is
+written only on upsert, so points predating a field need a forced re-index
+where a table can be backfilled in place.
 
 **What gets embedded must not depend on which copy it was read from.** `jsonb`
 preserves array order but not object key order, so a description read back from
@@ -761,11 +906,12 @@ building" and the audio pass "At 1.23 a.m., reactor 4 exploded" — two
 independent accounts of the same 16 seconds, neither pass having seen the
 other's output.
 
-### The two lexical halves are not equivalent
+### The two lexical halves were not equivalent, and this is why one is left
 
 Measured on 41 identical units with identical OpenAI vectors. **Dense halves
 identical on 6/6 queries**; both silent on a query sharing no content word with
-the corpus. The lexical halves differ, and `supabase` is the better one:
+the corpus. The lexical halves differed, and `supabase` was the better one --
+which is what settled the removal when the sink work made it a choice:
 
 - **No stemming in `indexes.tokenize`.** Postgres stems via
   `to_tsvector('english')`, so "lived" matches "live". On one query Postgres
@@ -776,9 +922,11 @@ the corpus. The lexical halves differ, and `supabase` is the better one:
   cover density, so the shortest unit in the corpus tops Qdrant's half where
   Postgres ranks it third.
 
-Neither is fixed: stemming is a dependency, proper BM25 weighting needs an
-average document length the client does not have, and 41 units of one video
-cannot show either change helps.
+Neither was fixed and neither needs to be now: both are faults of the
+client-side sparse vector, and Postgres computes its half in the database.
+What went with Qdrant is the only configuration that searched without a
+server -- `--embedder local --index qdrant` needed no key and no Postgres --
+and nothing replaces that.
 
 **`websearch_to_tsquery` ANDs its terms**, so one word absent from the corpus
 silences the whole lexical half — `"reactor exploded"` ranked 2 rows and
@@ -802,12 +950,13 @@ alone left the winner to the planner. The dense half has an opinion on every
 query where the lexical one may not, and the two backends now agree rather
 than flipping a coin opposite ways.
 
-**Qdrant does sparse and hybrid.** Sparse vectors since 1.7, native
-`Fusion.RRF` since 1.10. An earlier note calling it dense-only was a claim
-about the implementation dressed as one about the database. Prefetch depth must
-match the RPC's `greatest(limit*4, 40)`: prefetching only `limit` truncates
-each ranking before fusion, measured as the lexical half firing on 12/20 rows
-where Postgres, ranking 80, fired on 20/20.
+**Qdrant did sparse and hybrid, and the note that said otherwise was
+wrong.** Sparse vectors since 1.7, native `Fusion.RRF` since 1.10; calling it
+dense-only was a claim about the implementation dressed as one about the
+database. The measurement that outlives it is about **depth**: prefetching
+only `limit` truncates each ranking before fusion, and the lexical half fired
+on 12/20 rows where Postgres, ranking `greatest(limit*4, 40)`, fired on 20/20.
+`candidates` is that knob on the one backend left.
 
 ---
 
@@ -1030,15 +1179,20 @@ chunk and the whole file, so it is kept. Indexing them would return the same
 moment two or three times over under different wordings — the count-bias
 failure the moment aggregation guards against, one level up.
 
-The final summary goes somewhere else: once `aggregates` has it, and the run's
-`index` names `supabase`, it hands the payload to
-`video_rag.driver.index_video_summary`, where `units.from_summary` makes one unit
-per video for `video_embeddings` rather than `embeddings`. `embeddings` answers
-*which twenty seconds*, a summary answers *which video*, and a video is not a
-moment you can play -- so the two never share a ranking, and `/search` reaches
-the second only as `level=video`. Postgres only, and best-effort: a vector that
-fails to write does not fail the aggregates. Verified after the tier split:
-Chernobyl, `--tier llm --index supabase`, `video_units: 1`.
+The final summary goes somewhere else: `workflow` asks
+`aggregates.index_summary` for it when a run names a `database`, and one unit
+per video lands in `video_embeddings` rather than `embeddings`. `embeddings`
+answers *which twenty seconds*, a summary answers *which video*, and a video
+is not a moment you can play -- so the two never share a ranking, and
+`/search` reaches the second only as `level=video`. Postgres only, and
+best-effort: a vector that fails to write does not fail the aggregates.
+Verified after the tier split: Chernobyl, `--tier llm`, `video_units: 1`.
+
+It used to be gated on an `index` parameter of `aggregates.run`, which meant
+the tier could not be run at all without naming a destination -- the same
+component-owns-the-database shape the sink removal undid everywhere else.
+Making the *vector* still the tier's work and the *write* the pipeline's is
+the split: `index_summary` embeds and upserts, and only `workflow` calls it.
 
 **Spans are resolved through the timeline, never trusted from the model.** It
 is asked for chunk ids, which it can copy; times it would invent.
@@ -1195,6 +1349,15 @@ role the run will use -- describe only when reading the picture, llm only at
 the whole video has been decoded. It does not ping local servers: validation
 stays synchronous and offline.
 
+**The same check is on the components, for the reason the question check is.**
+`validate` returns a list, because a request is checked all at once and a
+caller wants every problem; `providers.require` raises the first, because a
+component has one role to check and nowhere to put a list. Without it
+`describe.run(describer="anthropic")` read every frame before discovering there
+was no key -- the exact late failure, reachable from the library's other public
+level and from the per-component route. It runs before the manifest, the grid
+or a single frame: measured at 2 ms against a whole decode.
+
 **Keys never enter `providers.json`.** A field with `key` in its name is
 refused; the file names variables in `key_vars`. A bad entry is dropped and
 listed under `/capabilities.models.problems` rather than raised, because one
@@ -1233,8 +1396,8 @@ Verified before removing it: on bge-small the two gave **identical** vectors
 runs in the server and a reload is seconds.
 
 **Measured: a 33M-parameter local embedder is level with OpenAI here.**
-`BAAI/bge-small-en-v1.5` (384-d, CUDA) against `text-embedding-3-small`, same
-Qdrant hybrid, `eval/harness.py`:
+`BAAI/bge-small-en-v1.5` (384-d, CUDA) against `text-embedding-3-small`, the
+same hybrid, `eval/harness.py`:
 
 | embedder | MRR | top-1 | recall@5 | median query |
 |---|---|---|---|---|
@@ -1301,7 +1464,7 @@ levels are public, and a third exists because the first two need it.
 
 ```python
 from falconvar.video_rag import boundaries, describe, embed   # one component
-embed.run(video_id, embedder="local", index_name="qdrant")
+embed.run(video_id, embedder="local")               # writes embedded.json
 boundaries.evidence(video_id, "scene", stride=5)     # not everything is `run`
 descriptions = describe.load(video_id)               # read a result back
 
@@ -1311,6 +1474,53 @@ video_rag("x.mp4", policy="scene", sampler="clip:[text,scene]")
 import falconvar
 falconvar.configure(data_root="/var/lib/falconvar")  # before anything runs
 ```
+
+**A component publishes its entry points, its errors and its return types, and
+nothing else.** It published 72 names across eight components, where
+`run`/`load` plus the four genuine extra ways in account for 22. The rest was
+machinery -- `enforce`, `merge_tail`, `from_cuts`, `ingest`, `build_samplers`,
+`collect`, `from_descriptions`, `query_vector`, `to_chunks`, `to_moments`,
+`Frame`, `FrameStore`, `Describer`, `Description`, `Unit` -- reached by nothing
+outside its own package, and every one of them a line in a user's
+autocomplete asking to be understood. 72 became 29, and then 41 when each
+component published the verb that does its work on objects:
+
+    media       run load split       UnusableMedia VideoIdTaken
+    audio       run load listen
+    boundaries  run load detect timeline evidence retune
+                                     POLICIES EVIDENCE_SETTINGS
+    video       run load ingest      SAMPLER_SETTINGS UnreadableSource
+                                     Frames FrameStore MemoryFrames
+    cut         run load apply
+    describe    run load answer      available DescriberUnavailable
+                                     StoreUnavailable
+    embed       run      encode      available EmbedderUnavailable  Unit
+    retrieve    search videos        Moment
+
+Three tests for staying: a second way *in* that no naming collapses into `run`
+(`evidence`, `retune`, `search`, and now each component's verb), an exception a
+caller has to catch by name, or a type they would annotate (`Moment` is what
+`search` returns, `Unit` what `encode` does, `Frames` what `ingest` takes). The
+registries stay because `/capabilities` is built on them and "what policies
+are there" is a fair question to ask the library. Nothing else does.
+
+**`main` was in all eight and nothing ever imported it from the package** --
+every `__main__.py` reaches it as `from .driver import main`. Eight exports
+advertising an argparse entry point as a library function.
+
+Machinery is not hidden, only unadvertised: it stays reachable through the
+module it lives in, so `media.split` is `from ...media.split import split` and
+`DEFAULT_INDEX` is `embed.driver.DEFAULT_INDEX`. `falconvar.workflow` had no
+`__all__` at all and so published its own imports -- `Callable`, `Optional`,
+`Path`, `dataclass`, `annotations` -- as though they were surface.
+
+**A missing key raises `ProviderUnavailable`, not the role's own class.** The
+check lives in `providers.require`, which knows the role and not the component,
+so `except embed.EmbedderUnavailable` does not catch it. That is why
+`Unavailable` is the branch to catch: every "not fixed by retrying" failure
+across both tiers is one, verified across all four of the exported
+`*Unavailable` classes plus `ProviderUnavailable`. The specific classes stay
+for their own causes -- no package, no weights, no server.
 
 **The module is the unit: `embed.run`, never a bare `embed`.** The function in
 `embed/driver.py` *is* named `embed`, with `run = embed` beneath it, and that
@@ -1351,10 +1561,13 @@ is simultaneously a component's input mechanism and a user's way to read
 results.
 
 Two components honestly break the pair, and both are worth knowing. `embed`
-has `run` and no `load`: it writes *vectors*, into an index rather than a
-document, and `embedded.json` beside them is for reading rather than searching
-(`readable`). `retrieve` has neither -- it is `search(query, ...)`, because a
-query is not a video id and what comes back is a ranking, not an artifact.
+has `run` and no `load`, which is now a smaller break than it was: it wrote
+*vectors* into an index and `embedded.json` beside them was the readable half,
+so there was no document to load. The index is gone and `embedded.json` is the
+whole output, vectors included -- but the reader stayed `readable.load`, so the
+name is the only thing still odd about it. `retrieve` has neither `run` nor
+`load` -- it is `search(query, ...)`, because a query is not a video id and
+what comes back is a ranking, not an artifact.
 
 **Exports are lazy where eagerness would cost an import.**
 `from falconvar.video_rag import video_rag` binds `process`, which imports
@@ -1365,7 +1578,17 @@ at 1.3 ms. The same trick holds `__version__`, because
 **~120 ms**, a tenth of a second on every `import falconvar` to compute a
 string almost nobody reads.
 
-**Every deliberate failure is a `FalconvarError`, and keeps its builtin base.**
+**Every deliberate failure is a `FalconvarError`, and keeps its builtin
+base.** Removing `sinks` proved that rule needs enforcing rather than
+asserting: `UnknownBackend` had been the `FalconvarError, ValueError` covering
+"a value outside a fixed vocabulary", and deleting it left `media.on_conflict`
+and the pipeline's `database` raising a *bare* `ValueError` that "anything the
+library refused" could not catch. `shared.errors.UnknownOption` is that hole
+filled, and deliberately unexported -- nobody catches a bad literal by name,
+and `except ValueError` already fires. Found by `example.py`, which prints the
+base of every refusal it demonstrates and so showed a `(!)` where every other
+line says `(FalconvarError)`.
+
 Twenty classes across ten modules had no common ancestor, so an embedding
 application could not say "anything the library refused" without listing them,
 and a list drifts. `class UnknownBackend(FalconvarError, ValueError)` mixes the
@@ -1376,6 +1599,187 @@ Two names collided: `ModelUnavailable` existed twice with *different* bases,
 so `except ModelUnavailable` silently covered half of what it looked like it
 covered (now one class in `shared/errors.py`), and `Protected` is now
 `ProtectedDefinition` and `ProtectedPrompt`.
+
+**A component has two ways in, and one of them needs no filesystem.** Every
+component was addressable only by video id, so "use one component" and "adopt
+this pipeline's directory layout" were the same decision -- and the second is
+not something a library gets to require. Each now also publishes the verb that
+does its work on objects handed in:
+
+    media       split(path)                              -> Media
+    audio       listen(media, ...)                       -> RawTranscript
+    boundaries  detect(policy, media=, transcript=, ...) -> Cuts | None
+                timeline(media, policy, cuts=, ...)      -> Timeline
+    video       ingest(media, timeline, sampler, frames=)-> Manifest
+    cut         apply(timeline, raw)                     -> Transcript
+    describe    answer(manifest, timeline, frames, ...)  -> Descriptions
+    embed       encode(descriptions=, transcript=, ...)  -> list[Unit]
+
+They pass the same test the surface trim already applied to `split`, `evidence`
+and `retune`: a second way *in* that no naming collapses into `run`. `media`
+needed nothing -- `split` was already this, and is the model the rest follow.
+
+**Almost none of this was a refactor.** The work was already factored out of
+every driver: `scenes.detect`, `speech.detect`, `grid.build`, `pipeline.ingest`,
+`cutter.to_chunks`, `reader.answer` and `units.from_descriptions` all took
+objects and returned objects before any of this. A driver was already
+load -> compute -> write. What changed is that the middle is published, and
+`run` is *defined as* the verb with a read at each end, so there is one
+implementation of the work and one set of checks.
+
+**The checks moved down, and that is the point rather than a tidy-up.** The
+refuse-don't-drop tables (`SAMPLER_SETTINGS`, `EVIDENCE_SETTINGS`, audio's
+settings routing), the question vocabulary, `limit < 1`, `batch < 1`,
+`providers.require`, `min_s` above the ceiling -- every one now lives in the
+verb, so both ways in get it. This is the level-asymmetric-validation trap
+generalised: `workflow.validate` guarded the pipeline level and
+`sampler="uniform:nope"` walked past it into a whole video decode. A check on
+one of two public paths is a check half the callers never reach.
+
+**Three names collided, and none was renamed away.** `audio.listen`,
+`video.ingest` and `describe.answer` each already name a function one module
+down -- but those take *built models* and *a store*, where the driver's take
+setting names and a spec string. Two public functions of one name in one
+package is the infinite recursion `describe` had to be rescued from, so the
+lower one is imported under a private alias (`from .reader import listen as
+_pass`) rather than renamed: the rest of the tree calls it `listen`, and it
+should go on doing so.
+
+**`boundaries.grid` is refused, which is why the verb is `timeline`.**
+`boundaries/grid.py` is a submodule, and a package attribute of the same name
+shadows it -- `import falconvar.video_rag.boundaries.grid` would stop
+resolving. `timeline` also pairs with `load() -> Timeline`, so the return type
+is legible from the call.
+
+**`detect` returns None for `uniform`; `evidence` still returns a `Produced`.**
+Those look contradictory and are not. `evidence` answers "what happened in this
+step", and a step that did nothing is still a step -- which is the claim the
+uniform signature and one HTTP route rest on. `detect` answers "what are the
+cuts", and for `uniform` the honest answer is that there are none. Two
+questions, two types, each answered on its own terms.
+
+**`encode` does not resume, and says so.** Resume needs `stored_hashes()` from
+an index, and the verb has none -- so it embeds everything handed to it while
+`run` keeps the per-index diff. Collapsing them would mean either the verb
+opening an index or `run` losing its resume, and the second is the expensive
+silent no-op this tree has been bitten by twice.
+
+**Pixels are the one thing that is not a document, so they got a protocol.**
+`FrameStore` was built from `paths.artifact(id, "store")` inside `video`'s
+driver and the path resolved a second time inside `describe`'s -- so describe
+could only ever read frames this layout had put there. `video_rag/frames.py`
+holds `Frames`, `FrameStore` (moved up from `video/store.py`, which is now a
+shim) and `MemoryFrames`, and `FrameSource` takes whichever it is handed.
+`describe.store_of` is the one line that still derives a store path from a
+video id.
+
+`MemoryFrames` is a separate class and not a flag, because the cost is the
+caller's to accept: measured, a 5-minute video at 1 fps held 299 frames and
+**170 MB**. Frames are byte-identical between the two, verified 299/299.
+
+It also found a real bug on the way in: `pipeline.ingest` tested `if store`,
+and `MemoryFrames` is sized, so an empty one is falsy -- and it is always empty
+at the line that records `frame_store` in the manifest config. Truthiness wrote
+`frame_store: null` into every in-memory manifest. `is not None` throughout.
+
+**Two data roots in one process is a `ContextVar`, not a global.** `configure()`
+is process-wide, which is right for an application that owns its deployment and
+wrong for anything serving more than one. `Workspace` sets a `ContextVar` that
+`paths._resolve` reads first, so precedence becomes workspace, then
+`configure()`, then the variables, then the checkout, then `~/.falconvar`. A
+`ContextVar` because it is already per-thread and per-task -- a plain global
+would be a data race the moment `describe` gathers -- and because `reset(token)`
+unwinds nesting exactly rather than restoring whatever was seen on the way in.
+None of the 72 `paths.*` call sites changed.
+
+The part that was easy to get wrong is the caches. `describe/library.py` and
+`aggregates/definitions/` both cache a merged vocabulary whose custom half lives
+*under the data root*, in one slot each -- so a second workspace was served the
+first one's questions. Both are keyed by that root now, which is what the
+two-workspace test actually catches.
+
+Not solved, and documented rather than papered over: **API keys are
+process-global.** `env_file=` reads a file, but keys land in `os.environ`, and
+one process has one of those.
+
+**Progress is a callback, not a generator.** `describe` gathers under the
+provider's concurrency -- 5.9x on the measured case -- so a synchronous
+generator would have to serialise that or buffer through a queue, and buffering
+loses the stop-part-way that was the only reason to want one. A callback that
+raises stops at the next await, and `limit=` already expresses "this many, and
+resume later". `pipeline.ingest` had taken an `on_chunk` since it was written
+and nothing ever passed one.
+
+Two things stated in the docstring rather than left to be discovered: the events
+arrive **out of manifest order**, because completion order is the network's; and
+the callback runs on the event loop, so a slow one serialises the gather it is
+reporting on. `skipped` is counted apart from `completed` because "nothing to
+do" and "everything done" look identical otherwise -- the same failure `limit=0`
+had.
+
+At level 2, `on_step` gains a third argument *if the callback takes one*, read
+off its signature. Announcing it instead would break every two-argument callback
+already written, the API's job runner included.
+
+**Logging warns about nothing that works.** plan.txt proposed WARNING when a
+setting resolves by fallback -- "the embedder defaulted to openai". That is not
+a fallback here: `providers.choose` resolving to openai is the documented answer
+and `/capabilities.defaults` publishes it, and warning on a working default
+teaches people to filter warnings out. Those are DEBUG. WARNING is the
+reported-but-continued case, which is the best-effort Supabase write.
+
+The records go through two choke points rather than into every caller:
+`paths.require` is the one line every artifact read passes through, and
+`files.write` the one every document write does -- and `PRODUCED_BY` names the
+component, so a record says who wrote what is being read. A database write is
+a third, in `video_rag.driver.export`, and it is the only one that logs at
+WARNING. Each `run` adds one
+INFO in and one INFO out with its headline numbers, which is the timing
+breakdown that previously existed only in CLI printing.
+
+`logs._extra` takes a dict and not `**kwargs`, and renames any key a
+`LogRecord` already owns. A component's stats are its own vocabulary:
+`done(video_id=...)` is a reasonable thing to write, and as `**kwargs` it
+collided with the function's own parameter and took the run down from inside a
+logging call. A logging call must never be the thing that fails a stage that has
+already done its work.
+
+**TYPES.txt is generated, and `--check` fails on a stale copy.** The argument is
+`schemas.py`'s, for the same reason: a restated field list drifts, and plan.txt
+proved it by naming `Media.fingerprint` (it is `source`), `Cuts.cut_points` (it
+is `cuts`) and a `Manifest.frames` that does not exist. Python keeps no
+per-attribute docstring at runtime, so `reference.py` parses the module with
+`ast` and reads both spellings already used here -- `#:` above a field and a
+bare string below one. `--undocumented` listed 78 fields; it lists none now.
+
+**The sink table was derived, and then there was no table.** `sinks.support()`
+read `BACKENDS`, `rows.WRITERS` and each component's signature, because written
+by hand it would drift from `write`. Deriving it was right and the thing it
+derived should not have existed: every component is file-only now, and
+`supabase.WRITERS` answers the only remaining question, which is whether a
+document has a row representation at all.
+
+Two findings came out of writing it down, and both are why the removal
+happened. It had to be `any` and not `all` over a component's artifacts --
+`video` produces a manifest *and* a `store`, and a directory of JPEGs never
+reaches `write`, so `all` reported `video` as file-only. And `sinks.write` was
+documented as best-effort for Postgres unconditionally when it only was if
+given an `on_problem`, which no component passed. A destination concern inside
+a component could be wrong in both directions at once.
+
+**The two oracles for all of this.** Recreate is still the end-to-end one for
+encoding and addressing; these two are for the factoring:
+
+    EQUIVALENCE   one video through `run` and through the verbs, comparing
+                  every document byte for byte with wall-clock stats lifted
+                  out. If the two disagree, the factoring is wrong.
+    NO FILESYSTEM the whole chain into a `MemoryFrames` with `paths.out_root`
+                  replaced by something that raises, against an empty data
+                  root that must still be empty afterwards.
+
+Both pass, along with 299/299 frames identical between disk and memory, the
+two-workspace isolation test across threads, `9/9 schemas current`,
+`recovery.recreate 299/299`, all 110 modules importing and every CLI running.
 
 **Heavy dependencies are extras, and that does not weaken "a requirement is
 required".** That rule forbids a second code path when a package is absent.
@@ -1426,6 +1830,11 @@ or for a sampler spec the sampler names that read it -- with the values read off
 `POLICIES`, the sampler registry and `TRANSCRIBERS`. The client hides what does
 not apply and never sends a hidden value, so a `stride` typed before switching
 to `vad` does not ride along.
+
+**An annotation is the published type, so `Any` publishes nothing.**
+`retrieve.search` took `video_id: Any` -- true, since it accepts a string or a
+sequence -- and a generated form had nothing to build a widget from. It is
+`Optional[str | Sequence[str]]` now, which is what it always meant.
 
 **A published type is the annotation as written, and the client reads its
 shape.** `/capabilities` restates nothing, so a parameter's type arrives as
@@ -1504,7 +1913,7 @@ form is generated from it rather than kept in step with it.
 **Two ways to run a video, and the choice is about tuning.**
 
     POST /videos                          upload + the whole pipeline.  202
-      policy sampler use_video use_audio describer embedder tier sink index
+      policy sampler use_video use_audio describer embedder tier database
       -> workflow defaults for everything per-stage
 
     POST /videos  run=false               upload, probe, stop.          201
@@ -1516,7 +1925,13 @@ The second is the one a configuration UI wants: `min_s`, `every_n`,
 `threshold`, `vocabulary`, `per_second` and the rest live on the component that
 owns them, and `/capabilities.parameters` names them with their types and
 defaults. `boundaries.evidence` returns a `Produced` with `skipped: [evidence]`
-when the policy needs none, rather than nothing.
+when the policy needs none, rather than nothing -- **from the component
+itself**, not from a wrapper. It used to return `None` and `api/service.py`
+assembled the `Produced`, so one call answered differently depending on whether
+it arrived over HTTP or from an `import`, and the library's half was the one a
+caller had to special-case. A policy needing no precursor is an answer, not an
+absence, and every component returns `Produced` at both levels now -- which is
+the claim the uniform signature rests on. The wrapper is gone.
 
 **Order is the caller's responsibility on that path.** `workflow.py` is the
 reference for it; the dependencies are real — `boundaries` under `vad` or
@@ -1554,8 +1969,8 @@ backends, all six filters tried select **identical chunk sets**; rank order
 differs on two, which is the lexical halves diverging.
 
 **Time is resolved to chunk ids through the grid, never stored beside a
-vector.** One mechanism for both stores, and no Qdrant payload change -- payload
-is written only on upsert, so a span there would need a forced re-index.
+vector.** It needs no column and no migration, so nothing already stored
+becomes unreachable.
 
 **`structured` is only useful with `one_of`.**
 `/capabilities.search.structured_fields` reads the shapes and lists exactly the
@@ -1702,21 +2117,23 @@ previous pipeline was found before it silently ate writes.
 schema is in Settings → API → Exposed schemas, every request returns
 `PGRST106`, which reads as a missing table rather than a missing setting.
 
-**Embedded Qdrant takes an exclusive lock** on its storage folder -- and it is
-not only a *two-process* problem, which is how this was filed until a server
-reproduced it alone. `QdrantIndex` had no `close`, no `__del__` and no context
-manager, so a client opened for one search never gave the lock back. A CLI run
-never notices: the process exits and the lock goes with it. A long-lived API
-leaks it on the first search and every later one fails with `Storage folder ...
-is already accessed by another instance`, on a route that worked a minute
-earlier -- and the traceback frame of the first failure pins the client alive,
-so it never recovers.
+**Embedded Qdrant took an exclusive lock** on its storage folder, and the
+shape of that bug is worth keeping even though the backend is gone. It was not
+a *two-process* problem, which is how it was filed until a server reproduced
+it alone: the client had no `close`, no `__del__` and no context manager, so
+one opened for a search never gave the lock back. A CLI run never notices --
+the process exits and the lock goes with it. A long-lived API leaked it on the
+first search and failed every later one with `Storage folder ... is already
+accessed by another instance`, on a route that worked a minute earlier, and
+the traceback frame of the first failure pinned the client alive so it never
+recovered.
 
-`close()` is now called from a `finally` in both `retrieve.search` and
-`embed.run` (`indexes.release`), because the not-indexed raise in the middle of
-search is exactly the exit that leaked it. Verified: ten sequential opens
-through one server process. Served mode (`url=`) holds no lock, so `close` is a
-no-op there, and `supabase` is REST and has nothing to release.
+The fix was `close()` from a `finally` in both `retrieve.search` and
+`embed.run`, because the not-indexed raise in the middle of search is exactly
+the exit that leaked it. **The general lesson outlived the backend**: a
+component that must reach a server to finish can fail a run whose paid calls
+already succeeded. That is why `embed` now writes a file and the pipeline
+pushes -- there is nothing left in the expensive path that holds a handle.
 
 **`weights/clip/ViT-B-32.pt` (338 MB) is NOT stale.** YOLO-World embeds its
 vocabulary with OpenAI CLIP. That is a *different* CLIP from the one the scene
@@ -1749,7 +2166,15 @@ actually finds and kills them.
 
 The pipeline runs end to end on real models — Whisper `small`, pyannote 3.1,
 CLIP, YOLO, `gpt-5.4-mini`, `text-embedding-3-small`, GLiNER, DistilBERT —
-writing documents to files and Postgres and vectors to Qdrant and pgvector.
+writing every document to a file, and a copy to Postgres when a run names a
+`database`.
+
+**The API figures below predate the sink and Qdrant removal**, and were taken
+when every component took a `sink` and `embed` wrote to a vector store. The
+run itself has been re-verified since, locally and on the component path
+(`data root -> 8 components -> embedded.json`, resume 0/8 on a second pass,
+299/299 on recreate, all three oracles); what has *not* been re-run since is
+the whole thing through HTTP against a live Postgres.
 
 Verified end to end **through the API**, from wiped local, Qdrant and Postgres
 state, driving every stage with its own settings rather than the workflow's
@@ -1795,7 +2220,18 @@ code, and worth re-checking before trusting:
 ## Not built
 
 - **Tests.** No suite. Verification is recreate's byte-comparison, the schema
-  check, and ad-hoc scripts that are not kept.
+  check, `reference --check`, and ad-hoc scripts that are not kept -- which
+  now includes the two oracles this factoring rests on, the `run`-vs-verb
+  equivalence and the no-filesystem chain. Those two are worth keeping and are
+  not kept.
+- **An async surface.** `describe` is already async inside, with a
+  provider-driven concurrency gate, but nothing is awaitable from outside: a
+  caller wanting two videos at once needs threads. `arun` per component is
+  additive and was deliberately left out of the decoupling work.
+- **A formal sampler spec grammar.** `parse_spec` handles `name`, `name:q`,
+  `name:[a,b]` and `name:a+b` and there is no escaping, so a question cannot
+  contain a comma, colon or bracket. Nothing needs one yet, and the grammar is
+  documented only by example.
 - **An import checker.** The previous tree had one that AST-enforced the
   recovery invariant and proved every module loads after an install. Nothing
   enforces the recovery rule automatically now.
@@ -1816,10 +2252,11 @@ code, and worth re-checking before trusting:
   the run's other answers -- already paid for, and with concurrency more of
   them in flight -- are discarded. Writing the successes before raising would
   let a re-run pay only for the failures.
-- **A stemmed, properly weighted sparse half.** `indexes.tokenize` does not
-  stem and the sparse vector sends raw counts where `Modifier.IDF` expects BM25
-  weights. `eval/harness.py` can now grade the change; nothing has been
-  measured yet.
+- **A second backend, of any kind.** Postgres is the only one. The file is
+  the portable half -- `embedded.json` carries the vectors, so a deployment
+  can load them anywhere -- but nothing in this tree reads them back out into
+  another store. `shared/storage/supabase.py` is the shape a `sql.py` would
+  copy.
 - **Reranking, query expansion, fusion tuning.** All plausible; none measured.
 - **Live sources.** `Frame` carries no `gap_before`/`discontinuity` seams, so
   that is a retrofit through every stage rather than a field already there.
@@ -1828,5 +2265,7 @@ code, and worth re-checking before trusting:
   embedding per person crop and discards it; keeping crops, and asking the
   describer to cite numbered boxes, would let appearance decide instead. The
   labelled set is 29 scored mentions.
-- **Qdrant served mode, tested.** The `url=` path is written, never run against
-  a server.
+- **The database export, run against a live Postgres.** `video_rag.driver.export`
+  and `workflow._export_aggregates` are exercised against a recording double --
+  every artifact pushed, a failing table reported rather than raised -- and
+  not against the real thing since the rewrite.

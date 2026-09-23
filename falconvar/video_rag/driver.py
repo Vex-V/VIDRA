@@ -23,11 +23,14 @@ concerns misfiled here and now live in `shared/`, which both tiers import.
 
 from __future__ import annotations
 
+import inspect
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from ..shared import paths
+from ..shared import logs, paths
+from ..shared.errors import UnknownOption
 from ..shared.contracts.documents import Produced
 from . import audio, boundaries, cut, describe, embed, media, video
 from .retrieve import search, videos
@@ -36,7 +39,10 @@ from .retrieve import search, videos
 COMPONENTS = ("media", "audio", "boundaries.evidence", "boundaries",
               "video", "cut", "describe", "embed")
 
-DEFAULT_INDEX = embed.DEFAULT_INDEX
+#: The databases a run may also write to. A component never writes to one --
+#: it produces a file and stops -- so this is the pipeline's question alone,
+#: and `None` is the honest default: files are not a choice.
+DATABASES = ("supabase",)
 
 
 @dataclass
@@ -54,20 +60,34 @@ class Options:
     # then openai -- rather than being captured at import, before .env is read.
     describer: Optional[str] = None          # frames -> answers
     embedder: Optional[str] = None           # text -> vectors
-    sink: str = "file"                       # where documents go
-    index: str = DEFAULT_INDEX               # where vectors go
+    # Where a *copy* goes. The files are written either way; this is the
+    # pipeline reading each one back and handing it to `storage/supabase.py`.
+    database: Optional[str] = None
 
 
 @dataclass
 class Run:
+    #: The id the run settled on, read off the first step rather than off the
+    #: request -- `media` may mint a new one when a different file wants a
+    #: taken id, and everything after it is addressed by the answer.
     video_id: str
+    #: Every component's receipt, in the order they ran.
     steps: list[Produced] = field(default_factory=list)
+    #: `{component: why}`. A reason, not a flag: a component that did not run
+    #: is only useful beside why it did not -- a file with no soundtrack and
+    #: a policy that needs no precursor are different absences.
     skipped: dict[str, str] = field(default_factory=dict)
+    #: What was reported and continued past -- a database write that failed
+    #: while the files landed. Empty on a run that named no database. Reported
+    #: rather than raised, and *listed* rather than counted: "3 writes failed"
+    #: cannot say whether the same table failed three times.
+    problems: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {"video_id": self.video_id,
                 "steps": [s.as_dict() for s in self.steps],
                 "skipped": self.skipped,
+                "problems": self.problems,
                 "artifacts": paths.present(self.video_id)}
 
 
@@ -133,15 +153,113 @@ def validate(options: Options) -> list[str]:
     return problems
 
 
+def export(produced: Produced, database: str) -> list[str]:
+    """A component's artifacts into a database. Returns what went wrong.
+
+    **The pipeline's job, never a component's.** A component writes its file
+    and stops, so this reads that file back and hands it to the function named
+    for it in `shared/storage/supabase.py`. The re-read is the price of the
+    layering and it is a cheap one: the document is on disk because the next
+    component is about to read it anyway.
+
+    Best-effort, and that is now an *informed* choice rather than a default
+    nobody picked. The file has landed and the next component reads the file,
+    so a database that is down is a report. It was `sinks.write`'s decision
+    before, made once for every caller and documented the other way round.
+
+    A directory artifact -- `store`, `aggregates` -- is skipped: there is no
+    document to read, and `WRITERS` has no entry for it either.
+    """
+    if database not in DATABASES:
+        raise UnknownOption(f"unknown database {database!r}; "
+                            f"known: {', '.join(DATABASES)}")
+    from ..shared.storage import files, supabase
+
+    problems: list[str] = []
+    for artifact, where in sorted(produced.artifacts.items()):
+        if supabase.writer_for(artifact) is None or not where:
+            continue
+        try:
+            supabase.write(produced.video_id, artifact,
+                           files.read_json(Path(where)))
+        except Exception as exc:                          # noqa: BLE001
+            message = f"{artifact} -> {database}: {exc}"
+            problems.append(message)
+            logs.logger(produced.component).warning(
+                "%s", message,
+                extra={"component": produced.component, "event": "export",
+                       "video_id": produced.video_id, "artifact": artifact,
+                       "reason": str(exc)[:300]})
+
+    # Provenance for the questions this run asked, at the version it asked
+    # them under. `descriptions.model` records the hashes; only these rows can
+    # say what a hash *meant*, because editing an instruction loses the old
+    # text. Assembled only when a database was named -- `describe` used to do
+    # it unconditionally from inside the component.
+    if produced.component == "describe":
+        try:
+            from .describe.driver import prompt_rows
+            document = files.read_json(Path(produced.artifacts["descriptions"]))
+            supabase.write_prompts(
+                prompt_rows((document.get("model") or {}).get("prompts") or {}))
+        except Exception as exc:                          # noqa: BLE001
+            problems.append(f"prompts -> {database}: {exc}")
+    return problems
+
+
 def process(options: Options,
-            on_step: Optional[Callable[[str, Optional[Produced]], None]] = None
-            ) -> Run:
-    """One extraction, top to bottom. Every step is a component's `run()`."""
+            on_step: Optional[Callable[..., None]] = None) -> Run:
+    """One extraction, top to bottom. Every step is a component's `run()`.
+
+    `on_step` is called twice per component -- once by name before it runs,
+    once with its `Produced` after. It may take a **third** argument, and if
+    it does it also receives a `Progress` for every unit inside the long
+    stages:
+
+        def on_step(component, produced, progress=None):
+            if progress:
+                print(f"  {progress.completed}/{progress.total}")
+
+    Whether it takes one is read off the callback rather than announced,
+    because every two-argument callback already written -- the API's job
+    runner among them -- must keep working untouched.
+
+    A wrapper around `_run`, so the pipeline is one INFO in and one INFO out,
+    and a failure part way through is an ERROR carrying how far it got.
+    """
+    with logs.timed("video_rag") as whole:
+        return _run(options, whole, on_step)
+
+
+def _run(options: Options, whole: logs.timed,
+         on_step: Optional[Callable[..., None]] = None) -> Run:
     problems = validate(options)
     if problems:
         raise ValueError("; ".join(problems))
 
-    say = on_step or (lambda component, produced: None)
+    say = on_step or (lambda *arguments: None)
+
+    # Arity read once, not per call. A callback taking *args counts as wanting
+    # progress: it asked for whatever it is given.
+    wants_progress = False
+    if on_step is not None:
+        try:
+            parameters = inspect.signature(on_step).parameters
+            wants_progress = (
+                len(parameters) >= 3
+                or any(p.kind is inspect.Parameter.VAR_POSITIONAL
+                       for p in parameters.values()))
+        except (TypeError, ValueError):          # a builtin, or a C callable
+            wants_progress = False
+
+    def forward(event: Any) -> None:
+        say(event.component, None, event)
+
+    def announce(component: str, produced: Optional[Produced]) -> None:
+        """Two arguments always; the third is only ever a progress event."""
+        say(component, produced)
+
+    ticking = {"on_progress": forward} if wants_progress else {}
     run = Run(video_id="")
 
     def starting(name: str) -> None:
@@ -154,17 +272,20 @@ def process(options: Options,
         latest thing a poller hears is the last component to *finish*, so the
         longest stage in the run reports as the one before it.
         """
-        say(name, None)
+        announce(name, None)
 
     def step(produced: Produced) -> Produced:
         run.steps.append(produced)
-        say(produced.component, produced)
+        if options.database:
+            run.problems += export(produced, options.database)
+        announce(produced.component, produced)
         return produced
 
     # 1 · what the file is
     starting("media")
-    first = step(media.run(options.source, options.video_id, options.sink))
+    first = step(media.run(options.source, options.video_id))
     run.video_id = video_id = first.video_id
+    whole(video_id=video_id)
     described = media.load(video_id)
 
     # Whether a file carries a soundtrack is a property of the file, not of the
@@ -183,12 +304,12 @@ def process(options: Options,
     #     derive one; the order is the dependency, not a rule about modalities.
     if use_audio:
         starting("audio")
-        step(audio.run(video_id, sink=options.sink))
+        step(audio.run(video_id))
 
     # 3 · boundary evidence, if this policy needs any
     starting("boundaries.evidence")
-    evidence = boundaries.evidence(video_id, options.policy, sink=options.sink)
-    if evidence is None:
+    evidence = boundaries.evidence(video_id, options.policy)
+    if "evidence" in evidence.skipped:
         run.skipped["boundaries.evidence"] = (
             f"policy {options.policy!r} needs none -- it is arithmetic over "
             "the container duration")
@@ -197,29 +318,31 @@ def process(options: Options,
 
     # 4 · THE GRID
     starting("boundaries")
-    step(boundaries.run(video_id, options.policy, sink=options.sink))
+    step(boundaries.run(video_id, options.policy))
 
     # 5 · the picture, onto that grid. The grid is an input here and is never
     #     edited, which is why nothing needs a Chunker.
     if use_video:
         starting("video")
-        step(video.run(video_id, options.sampler, sink=options.sink))
+        step(video.run(video_id, options.sampler, **ticking))
 
     # 6 · the transcript, onto the same grid. Cheap: Whisper timestamped every
     #     word, so this can be redone against a different grid for nothing.
     if use_audio:
         starting("cut")
-        step(cut.run(video_id, options.sink))
+        step(cut.run(video_id))
 
     # 7 · one answer per (chunk, sampler)
     if use_video:
         starting("describe")
-        step(describe.run(video_id, options.describer, sink=options.sink))
+        step(describe.run(video_id, options.describer, **ticking))
 
     # 8 · vectors, from both modalities
     starting("embed")
-    step(embed.run(video_id, options.embedder, index_name=options.index))
+    step(embed.run(video_id, options.embedder, **ticking))
 
+    whole(policy=options.policy, sampler=options.sampler,
+          steps=len(run.steps), skipped=len(run.skipped))
     return run
 
 
@@ -233,8 +356,7 @@ def video_rag(source: str | Path,
               sampler: str = "uniform",
               describer: Optional[str] = None,
               embedder: Optional[str] = None,
-              sink: str = "file",
-              index: str = DEFAULT_INDEX,
+              database: Optional[str] = None,
               on_step: Optional[Callable[[str, Optional[Produced]], None]] = None
               ) -> Run:
     """The whole extraction, as keyword arguments. `process` with an `Options`.
@@ -252,7 +374,7 @@ def video_rag(source: str | Path,
     return process(Options(
         source=Path(source), video_id=video_id, policy=policy,
         use_video=use_video, use_audio=use_audio, sampler=sampler,
-        describer=describer, embedder=embedder, sink=sink, index=index,
+        describer=describer, embedder=embedder, database=database,
     ), on_step)
 
 
@@ -316,10 +438,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--embedder", default=None,
                     help="a provider or provider/model, e.g. local; "
                          "default FALCONVAR_EMBEDDER, then openai")
-    ap.add_argument("--sink", default="file",
-                    help="where documents go: file | supabase | both")
-    ap.add_argument("--index", default=DEFAULT_INDEX,
-                    help=f"where vectors go; known: {', '.join(embed.indexes.available())}")
+    ap.add_argument("--database", default=None,
+                    help=f"also write a copy to a database; known: "
+                         f"{', '.join(DATABASES)}")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -327,7 +448,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         source=args.source, video_id=args.video_id, policy=args.policy,
         use_video=not args.no_video, use_audio=not args.no_audio,
         sampler=args.sampler, describer=args.describer, embedder=args.embedder,
-        sink=args.sink, index=args.index)
+        database=args.database)
     return report(options, lambda on_step: process(options, on_step), args.json)
 
 
@@ -367,5 +488,5 @@ def report(options: Any, execute: Callable[[Callable], Run], as_json: bool) -> i
     return 0
 
 
-__all__ = ["COMPONENTS", "DEFAULT_INDEX", "Options", "Run", "main", "process",
+__all__ = ["COMPONENTS", "DATABASES", "Options", "Run", "main", "process",
            "report", "search", "validate", "video_rag", "videos", "vocabulary"]

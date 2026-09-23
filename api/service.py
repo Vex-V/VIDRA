@@ -14,9 +14,8 @@ option sorts first.
 
 from __future__ import annotations
 
-import functools
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional
 
 from falconvar import aggregates, workflow
 from falconvar.video_rag import (audio, boundaries, cut, describe, embed, media,
@@ -24,7 +23,7 @@ from falconvar.video_rag import (audio, boundaries, cut, describe, embed, media,
 from falconvar.video_rag.describe import library, prompts
 from falconvar.shared import paths
 from falconvar.shared.models import providers
-from falconvar.shared.storage import sinks
+from falconvar.shared.storage import files
 from falconvar.shared.contracts.documents import Produced
 from falconvar.video_rag.video import samplers as samplers_mod
 
@@ -36,29 +35,12 @@ def uploads() -> Path:
 
 
 
-@functools.wraps(boundaries.evidence)
-def _boundaries_evidence(video_id: str, **kwargs) -> Produced:
-    """`evidence` returns None when a policy needs none; a route needs a
-    `Produced` either way, so the skip is reported rather than absent.
-
-    `functools.wraps` carries the wrapped signature through, so `parameters()`
-    publishes what `evidence` actually takes instead of the `**kwargs` this
-    wrapper is written with.
-    """
-    produced = boundaries.evidence(video_id, **kwargs)
-    if produced is None:
-        return Produced(video_id=video_id, component="boundaries.evidence",
-                        backend="none", stats={"needed": False},
-                        skipped=["evidence"])
-    return produced
-
-
 #: component name -> the callable a request can invoke. The only place that
 #: knows a component's public entry point, and the reason one route runs any of
 #: them. Order matches `workflow.COMPONENTS`.
 COMPONENTS: dict[str, Callable[..., Produced]] = {
     "audio": audio.run,
-    "boundaries.evidence": _boundaries_evidence,
+    "boundaries.evidence": boundaries.evidence,
     "boundaries": boundaries.run,
     "video": video.run,
     "cut": cut.run,
@@ -68,15 +50,14 @@ COMPONENTS: dict[str, Callable[..., Produced]] = {
 }
 
 
-def register(source: Path, video_id: str,
-             sink: str | Sequence[str] = "file") -> Produced:
+def register(source: Path, video_id: str) -> Produced:
     """Read what streams the file carries, and nothing else.
 
     The one component a caller cannot reach through `run/{component}`, because
     until it has run there is no video id to address. Everything after it is
     the caller's to sequence.
     """
-    return media.run(source, video_id, sink)
+    return media.run(source, video_id)
 
 
 def conditions() -> dict[str, dict[str, dict[str, Any]]]:
@@ -126,7 +107,6 @@ def conditions() -> dict[str, dict[str, dict[str, Any]]]:
         "boundaries.evidence": {
             **{name: {"param": "policy", "in": list(reads)}
                for name, (reads, _) in boundaries.EVIDENCE_SETTINGS.items()},
-            "sink": {"param": "policy", "in": content},       # uniform writes nothing
         },
         "boundaries": {
             # uniform is chunk_s alone: `grid.build` never reads the guards.
@@ -245,7 +225,7 @@ def artifact(video_id: str, name: str) -> dict[str, Any]:
     path = paths.artifact(video_id, name)
     if not path.exists():
         raise FileNotFoundError(f"{video_id} has no {name}")
-    return sinks.read_json(path)
+    return files.read_json(path)
 
 
 def exports(video_id: str) -> dict[str, Any]:
@@ -379,8 +359,7 @@ def available() -> dict[str, Any]:
         # Every provider, whether it can run here and why not, and the
         # variables a default is read from. Names of keys, never keys.
         "models": providers.catalog(),
-        "indexes": embed.indexes.available(),
-        "sinks": list(sinks.BACKENDS),
+        "databases": list(workflow.video_rag.DATABASES),
         "transcribers": sorted(audio_models.TRANSCRIBERS),
         "diarizers": sorted(audio_models.DIARIZERS),
         # Read now rather than at import: a definition added through the API
@@ -406,9 +385,8 @@ def available() -> dict[str, Any]:
         "defaults": {
             "policy": workflow.Options.policy,
             "sampler": workflow.Options.sampler,
-            "index": workflow.Options.index,
             "tier": workflow.Options.tier,
-            "sink": workflow.Options.sink,
+            "database": workflow.Options.database,
             # Resolved now rather than read off the dataclass, whose fields
             # are None until a run resolves them: a form defaulting to None
             # would show nothing where the real answer is `openai`.

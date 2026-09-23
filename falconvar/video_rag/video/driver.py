@@ -11,13 +11,18 @@ from typing import Optional, Sequence
 
 from ..boundaries import load as load_timeline
 from ..media import load as load_media
-from ...shared import paths
-from ...shared.storage import sinks
-from ...shared.contracts.documents import Manifest, Produced
+from ...shared import logs, paths, progress
+from ...shared.storage import files
+from ...shared.contracts.documents import (Manifest, Media, Produced,
+                                           Timeline)
 from . import samplers as samplers_mod
-from .pipeline import ingest
+#: Aliased, not renamed: the module's takes built sampler objects and a
+#: store, this one takes a spec string and any `Frames`. Two public
+#: functions of one name in one package is the recursion `describe`
+#: had to be rescued from.
+from .pipeline import ingest as _pass
 from .reader import UnreadableSource
-from .store import FrameStore
+from ..frames import Frames, FrameStore
 
 
 def split_specs(sampler: str | Sequence[str]) -> list[str]:
@@ -183,6 +188,70 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
     return built
 
 
+def ingest(media: Media, timeline: Timeline,
+           sampler: str | Sequence[str] = "uniform",
+           per_second: float = 1.0,
+           every_n: Optional[int] = None,
+           min_interval_s: float = 0.0,
+           max_per_chunk: Optional[int] = None,
+           threshold: Optional[float] = None,
+           vocabulary: Optional[Sequence[str]] = None,
+           confidence: Optional[float] = None,
+           languages: Optional[Sequence[str]] = None,
+           frames: Optional[Frames] = None,
+           store_scope: str = "sampled",
+           on_progress: Optional[progress.Reporter] = None) -> Manifest:
+    """One decode pass over the picture, onto a grid decided elsewhere.
+
+    Takes the two documents it needs and somewhere to put pixels, and reads
+    and writes no artifact -- it does open the file `media.path` names,
+    because frames are what it is for.
+
+    `frames` is any `Frames`: a `FrameStore` over a directory you name, or a
+    `MemoryFrames` so that nothing touches disk at all. `None` keeps no
+    frames, which is a manifest and no pictures -- legible, and what
+    `--no-frame-store` has always meant.
+
+    **A typo in the question half is refused here, before anything decodes.**
+    `build_samplers` has taken a `questions` vocabulary since it was written,
+    and nothing ever passed one -- so `sampler="uniform:nope"` completed in
+    1.09 s having decoded the video and stored 61 frames (26.68 MB), and then
+    every later `describe` refused the manifest it wrote, including one naming
+    only good samplers. The only way out was to re-run this component, and
+    nothing said so. `workflow.validate` catches the same spec instantly, but a
+    caller driving the components itself never reaches it -- and that is half
+    of what the library is for, and every `POST /run/{component}` besides.
+
+    The vocabulary is resolved *here*, in the driver, which is the composition
+    root -- `workflow.validate` and the tier driver already import it the same
+    way. Ingest itself still does not depend on describe: a sampler records the
+    question as an opaque string and `samplers/base.py` never reads it.
+    """
+    from ..describe import prompts
+
+    # The samplers are built first, before a frame is decoded: every check in
+    # here is about the arguments alone, and a typo answered in 7 ms beats one
+    # answered after the grid has been loaded.
+    built = build_samplers(split_specs(sampler), every_n, min_interval_s,
+                           max_per_chunk, threshold, vocabulary, confidence,
+                           languages, questions=prompts.questions())
+    # One decode pass, so the only unit with a completion is a chunk --
+    # `pipeline.ingest` has taken an `on_chunk` since it was written and
+    # nothing ever passed one.
+    total = len(timeline)
+    seen = 0
+
+    def chunk_done(chunk_id: int, chunk: dict) -> None:
+        nonlocal seen
+        seen += 1
+        progress.report(on_progress, "video", total, seen, 0,
+                        str(chunk_id), chunk)
+
+    progress.report(on_progress, "video", total, 0)
+    return _pass(media, timeline, built, per_second, frames, store_scope,
+                 chunk_done if on_progress is not None else None)
+
+
 def video(video_id: str, sampler: str | Sequence[str] = "uniform",
           per_second: float = 1.0,
           every_n: Optional[int] = None,
@@ -195,34 +264,44 @@ def video(video_id: str, sampler: str | Sequence[str] = "uniform",
           frame_store: bool = True,
           store_scope: str = "sampled",
           prune_store: bool = False,
-          sink: str | Sequence[str] = "file") -> Produced:
-    """One decode pass over the picture, onto a grid decided elsewhere."""
-    media = load_media(video_id)
-    timeline = load_timeline(video_id)
+          on_progress: Optional[progress.Reporter] = None) -> Produced:
+    """Ingest by id, into this video's own frame store. Writes the manifest.
 
-    built = build_samplers(split_specs(sampler), every_n, min_interval_s,
-                           max_per_chunk, threshold, vocabulary, confidence,
-                           languages)
-
+    `ingest` plus a read at each end, and the one place a store path is
+    derived from a video id. `frame_store=False` keeps no frames, which is why
+    this takes a bool where `ingest` takes the store itself: over HTTP and on
+    a CLI there is nowhere to put an object.
+    """
     store = (FrameStore(paths.artifact(video_id, "store"))
              if frame_store else None)
-    manifest = ingest(media, timeline, built, per_second, store, store_scope)
+    if store is None:
+        logs.skipped("video", video_id, "store",
+                     "frame_store=False, so no pixels are kept")
 
-    pruned: list[int] = []
-    if store is not None and prune_store:
-        # After the pass, so a failure mid-run leaves the old store whole.
-        named = {f["index"] for c in manifest.chunks
-                 for b in c["samplers"].values() for f in b["frames"]}
-        pruned = store.prune(named)
+    with logs.timed("video", video_id) as done:
+        manifest = ingest(load_media(video_id), load_timeline(video_id),
+                          sampler, per_second, every_n, min_interval_s,
+                          max_per_chunk, threshold, vocabulary, confidence,
+                          languages, frames=store, store_scope=store_scope,
+                          on_progress=on_progress)
 
-    written = sinks.write(video_id, "manifest", manifest.as_dict(), sink)
-    artifacts = {"manifest": written.get("file", "")}
+        pruned: list[int] = []
+        if store is not None and prune_store:
+            # After the pass, so a failure mid-run leaves the old store whole.
+            named = {f["index"] for c in manifest.chunks
+                     for b in c["samplers"].values() for f in b["frames"]}
+            pruned = store.prune(named)
+
+        where = files.write(video_id, "manifest", manifest.as_dict())
+        done(sampled=manifest.stats.get("frames_sampled"),
+             stored=manifest.stats.get("stored_frames"),
+             samplers=",".join(manifest.sampler_ids()), pruned=len(pruned))
+    artifacts = {"manifest": where}
     if store is not None and store.written:
         artifacts["store"] = str(store.root)
 
     return Produced(
-        video_id=video_id, component="video", backend=",".join(written),
-        artifacts=artifacts,
+        video_id=video_id, component="video",        artifacts=artifacts,
         stats={**manifest.stats,
                "timeline_fingerprint": manifest.timeline_fingerprint,
                "manifest_fingerprint": manifest.fingerprint(),
@@ -239,7 +318,7 @@ run = video
 
 
 def load(video_id: str) -> Manifest:
-    return Manifest.from_dict(sinks.read_json(paths.artifact(video_id, "manifest")))
+    return Manifest.from_dict(files.read_json(paths.require(video_id, "manifest")))
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -276,7 +355,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "irreversible thing ingest can do, so it is opt-in")
     ap.add_argument("--store-scope", default="sampled",
                     choices=("sampled", "decimated"))
-    ap.add_argument("--sink", default="file")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -289,9 +367,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                        args.min_interval, args.max_per_chunk, args.threshold,
                        vocab, args.confidence, langs,
                        not args.no_frame_store, args.store_scope,
-                       args.prune_store, args.sink)
-    except (KeyError, ValueError, FileNotFoundError, UnreadableSource,
-            sinks.UnknownBackend) as exc:
+                       args.prune_store)
+    except (KeyError, ValueError, FileNotFoundError, UnreadableSource) as exc:
         print(f"error: {exc}")
         return 1
 

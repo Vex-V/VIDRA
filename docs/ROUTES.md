@@ -102,13 +102,13 @@ number that says whether a submitted job will start now or wait.
 ### GET /capabilities
 
     out   {components[], samplers[], prompts[], shapes[], pairings[],
-           policies[], describers[], embedders[], llms[], indexes[], sinks[],
+           policies[], describers[], embedders[], llms[], databases[],
            transcribers[], diarizers[], tiers[],
            aggregators: {name: {tier, about, kind, reads}},  -- kind null for code
            aggregate_inputs: {default, grammar[{syntax, reads}]},
            artifacts:   {name: about},
            parameters:  {component: [{name, type, default, required}]},
-           defaults:    {policy, sampler, index, tier, sink,
+           defaults:    {policy, sampler, tier, database,
                          describer, llm, embedder},    -- each provider/model
            models:      {providers: [{name, protocol, about, builtin, local,
                                       chat, embed, chat_model, embed_model,
@@ -139,7 +139,7 @@ run route below refuses: until it has run there is no id to address.
 Multipart, not JSON -- it carries a file.
 
     in    file (required), run?=true, video_id?, policy?, sampler?,
-          use_video?, use_audio?, tier?, sink?, index?,
+          use_video?, use_audio?, tier?, database?,
           describer?, embedder?, llm?
     out   run=true   202 {job: {...}, video_id}
           run=false  201 {video_id, media: {...Produced}, next, components[]}
@@ -336,7 +336,7 @@ untrue -- it only stops new runs asking it.
            video_ids?: [...],             omit for EVERY video
            video_id?,                     shorthand for a scope of one
            level?: "moment" | "video",
-           moments?=5, candidates?=20, index?,
+           moments?=5, candidates?=20,
            embedder?,                     -- provider or provider/model
            sampler?, question?, strategy?,        -- the three id filters
            chunk_ids?: [...], window?=0,          -- a set of chunks
@@ -352,10 +352,10 @@ untrue -- it only stops new runs asking it.
                                     notes[]}]}
           level=video   {query, level, scope,
                          videos: [{video_id, kind, content, similarity}]}
-    404   nothing indexed for this embedder in this index
+    404   nothing indexed for this embedder
     422   an empty query, an unknown level, an unknown embedder
     503   the embedder's provider has no key or cannot be reached, or
-          index=supabase and the search_embeddings RPC is missing
+          the search_embeddings RPC is missing
 
 An empty result is `moments: []` with top-level `notes`, not an error: "nothing
 matched those filters" and "nothing indexed" are different answers and only one
@@ -445,7 +445,7 @@ speech -- still fails inside the job, because that is a property of the media
 rather than of the request.
 
 **The id comes from the filename, not the client.** It keys every table, every
-output directory and every Qdrant payload, so it is derived and sanitised
+output directory and every database row, so it is derived and sanitised
 rather than accepted.
 
 **`/videos` is read from disk, not remembered.** A restarted server still knows
@@ -538,8 +538,8 @@ than a filter disagreeing.
 
 **Time is not a field on a vector.** `after`/`before` are resolved to chunk ids
 through the grid before the query, so one mechanism reaches both stores and
-Qdrant needs no payload change -- payload is written only on upsert, so adding a
-span there would need a forced re-index.
+It needs no column and no migration, so nothing already stored becomes
+unreachable.
 
 **`structured` is only useful where a shape fixed the vocabulary with
 `one_of`.** `/capabilities.search.structured_fields` lists exactly those
@@ -553,7 +553,7 @@ scores 0.1136 against a real one's 0.1294. There is no relevance floor, so the
 ranks are the signal.
 
 **`level=video` is Postgres only** -- that is where `aggregates` stores each
-video's summary as its vector, when a run's `index` names `supabase`. 4/4
+video's summary as its vector, when a run names a `database`. 4/4
 correct on the test corpus.
 
 **`/search` names its embedder.** It must be the one that built the index: a

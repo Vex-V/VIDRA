@@ -70,7 +70,11 @@ PLACEHOLDERS = {"n", "span", "vocabulary"}
 
 
 _lock = threading.Lock()
-_cache: Optional[dict[str, Any]] = None
+#: Keyed by data root, not a single slot. The custom half lives at
+#: `paths.PROMPTS`, which is under the data root -- so with one slot a
+#: second `Workspace` was served the first one's vocabulary, and a
+#: question custom to one deployment leaked into another.
+_cache: dict[str, dict[str, Any]] = {}
 
 
 class PromptError(FalconvarError, ValueError):
@@ -147,10 +151,10 @@ def load(refresh: bool = False) -> dict[str, Any]:
     file is small enough that re-reading it is cheaper than reasoning about
     when a cache is wrong.
     """
-    global _cache
+    key = str(paths.PROMPTS)
     with _lock:
-        if _cache is not None and not refresh:
-            return _cache
+        if key in _cache and not refresh:
+            return _cache[key]
 
         builtin = _read(BUILTIN_PATH)
         if not builtin:
@@ -205,7 +209,7 @@ def load(refresh: bool = False) -> dict[str, Any]:
                 continue
             merged["questions"][name] = {**entry, "builtin": False}
 
-        _cache = merged
+        _cache[key] = merged
         return merged
 
 

@@ -33,11 +33,26 @@ SECOND_WEIGHT = 0.5
 class Moment:
     """One chunk, and the units that spoke for it."""
 
+    #: Which video. Part of the key: a chunk id indexes *one* video's grid,
+    #: and grouping on the id alone fused chunk 0 of two videos into one
+    #: moment with two unrelated accounts.
     video_id: str
+    #: Which chunk of that video's grid.
     chunk_id: int
+    #: Where the chunk starts, in media seconds.
     start_ts: float
+    #: Where it ends, in media seconds.
     end_ts: float
+    #: A rank fusion, `1/(k+best) + 0.5/(k+second)` at k=10 -- NOT a
+    #: similarity. 0.1326 is the ceiling for a chunk contributing two units
+    #: and means "best ranked first, second ranked second". A nonsense query
+    #: scores like a real one, because dense always returns nearest
+    #: neighbours and there is no relevance floor. Read the ranks, not this.
     score: float
+    #: One entry per unit that matched, each a dict carrying `sampler_id`
+    #: (the pairing, e.g. `clip:text`), `sampler`, `question`, `content`,
+    #: `structured`, `dense_rank` and `text_rank`. `text_rank: None` means
+    #: the lexical half was silent on this query.
     hits: list[dict[str, Any]] = field(default_factory=list)
 
     @property

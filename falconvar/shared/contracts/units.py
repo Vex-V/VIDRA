@@ -62,17 +62,36 @@ def _render_value(value: Any) -> str:
 class Unit:
     """One embeddable thing, keyed by a hash of its own text."""
 
+    #: Which video this text came from.
     video_id: str
+    #: Which chunk of its grid. With `video_id` this is the key a moment is
+    #: grouped on -- a chunk id indexes one video's grid, and grouping on it
+    #: alone fused two videos' chunk 0 into one moment.
     chunk_id: int
+    #: The pairing that produced it, e.g. `clip:text`, or the bare sampler name
+    #: when the question *is* the strategy's own.
     sampler_id: str
+    #: The text that gets embedded: the summary and the structured fields
+    #: together. Measured, both beats either -- dense MRR 0.705 against 0.528
+    #: for the summary alone and 0.636 for the fields alone.
     content: str
+    #: The answer's fields, kept as payload so a search can filter on them.
+    #: Only useful as a filter where the values are a vocabulary: `role` is
+    #: free text, so one video produced `cashier`, `customer` and `child
+    #: customer`.
     structured: dict[str, Any] = field(default_factory=dict)
+    #: The embedding, or None when this unit was not re-embedded because its
+    #: text is unchanged. A backend handed a None writes nothing, which is why
+    #: the vectors must exist before any upsert.
     vector: Optional[list[float]] = None
     #: The two halves of `sampler_id`, carried rather than parsed. Filtering by
     #: question is the query a person actually makes -- "the text on screen",
     #: not "what the CLIP sampler said" -- and it is not expressible as a
     #: suffix match, because a bare id like `clip` means question == strategy.
     sampler: str = ""
+    #: The question half of `sampler_id`, as its own field so the-text-on-
+    #: screen-wherever-asked is one equality -- which is the query a person
+    #: actually makes.
     question: str = ""
 
     @property

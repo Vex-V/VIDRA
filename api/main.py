@@ -63,9 +63,23 @@ app = FastAPI(
 
 
 def safe_id(name: str) -> str:
+    """A filename turned into an id. The alphabet is `paths.check_id`'s, so
+    whatever this produces is accepted there."""
     stem = Path(name).stem
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-._")
     return cleaned or "video"
+
+
+@app.exception_handler(paths.UnusableVideoId)
+def _unusable_video_id(_: Any, exc: paths.UnusableVideoId) -> JSONResponse:
+    """A bad id reaches here as a *path segment*, on any of six routes.
+
+    One handler rather than a guard on each: an id is checked at the one place
+    it becomes a path, so every route that takes one fails the same way. A 422
+    and not a 404 -- the request is malformed, and "no such video" would send
+    the caller looking for something that could never have existed.
+    """
+    return JSONResponse(status_code=422, content={"error": str(exc)})
 
 
 # ------------------------------------------------------------- introspection
@@ -106,8 +120,10 @@ async def upload(
         None, description="who answers `tier=llm`: a provider, or provider/model. "
                           "Blank: FALCONVAR_LLM, then openai"),
     tier: str = Form(workflow.Options.tier, description="free | local | llm"),
-    sink: str = Form(workflow.Options.sink, description="where documents go"),
-    index: str = Form(workflow.Options.index, description="where vectors go"),
+    database: Optional[str] = Form(
+        workflow.Options.database,
+        description="also write a copy to a database, e.g. supabase. "
+                    "Blank: files only"),
     video_id: Optional[str] = Form(None),
     run: bool = Form(True, description="false: register the file and stop, so "
                                        "the caller can drive the components "
@@ -132,7 +148,7 @@ async def upload(
 
     if not run:
         try:
-            produced = service.register(target, vid, sink)
+            produced = service.register(target, vid)
         except Exception as exc:                          # noqa: BLE001
             target.unlink(missing_ok=True)
             raise HTTPException(422, {"error": str(exc)}) from None
@@ -146,7 +162,7 @@ async def upload(
         source=target, video_id=vid, policy=policy, sampler=sampler,
         use_video=use_video, use_audio=use_audio, describer=describer or None,
         embedder=embedder or None, llm=llm or None,
-        tier=tier, sink=sink, index=index)
+        tier=tier, database=database or None)
 
     problems = workflow.validate(options)
     if problems:
@@ -454,8 +470,8 @@ def one_aggregate(video_id: str, name: str) -> dict[str, Any]:
     path = paths.artifact(video_id, "aggregates") / f"{name}.json"
     if not path.exists():
         raise HTTPException(404, {"error": f"{video_id} has no {name} aggregate"})
-    from falconvar.shared.storage import sinks
-    return sinks.read_json(path)
+    from falconvar.shared.storage import files
+    return files.read_json(path)
 
 
 @app.get("/videos/{video_id}/frames/{index}", tags=["read"])
@@ -520,8 +536,7 @@ class SearchRequest(BaseModel):
                     "better fusion and a slower query")
     embedder: Optional[str] = Field(
         None, description="a provider, or provider/model -- the one that built "
-                          "the index. Blank resolves exactly as `embed` does")
-    index: str = workflow.Options.index
+                          "the vectors. Blank resolves exactly as `embed` does")
 
 
 @app.post("/search", tags=["search"])
@@ -570,8 +585,9 @@ def search(request: SearchRequest) -> dict[str, Any]:
                                "scope": scope, "videos": found}
         if not found:
             out["note"] = ("nothing in video_embeddings for this embedder -- "
-                           "run `aggregates --tier llm --index supabase`, which "
-                           "stores each summary as its video's vector")
+                           "run the pipeline with `--tier llm --database "
+                           "supabase`, which stores each summary as its "
+                           "video's vector")
         if ignored:
             out["ignored"] = (f"{', '.join(ignored)} narrow inside a video, so "
                               "they do not apply to level=video")
@@ -587,8 +603,7 @@ def search(request: SearchRequest) -> dict[str, Any]:
                                window=request.window,
                                after=request.after, before=request.before,
                                structured=request.structured,
-                               candidates=request.candidates,
-                               index_name=request.index)
+                               candidates=request.candidates)
     except FileNotFoundError as exc:
         raise HTTPException(404, {"error": str(exc)}) from None
     except (KeyError, ValueError) as exc:

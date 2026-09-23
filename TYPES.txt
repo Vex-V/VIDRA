@@ -1,0 +1,529 @@
+FALCONVAR -- TYPE REFERENCE
+===========================
+Generated from the dataclasses by `python -m falconvar.shared.contracts.reference`.
+Do not edit: the dataclasses are the source, and `--check` fails on a stale copy.
+
+Every type here is a plain dataclass. The documents carry `as_dict()` and
+`from_dict()`, which is how a component writes one and how `load` reads it
+back; nothing else here needs a constructor call from outside the library.
+
+A component's `run(video_id, ...)` returns `Produced`, a receipt for a write.
+A component's pure verb -- `split`, `listen`, `detect`, `timeline`, `ingest`,
+`apply`, `answer`, `encode` -- returns the document itself, which is one of
+the types under WHAT A COMPONENT WRITES.
+
+
+WHAT A COMPONENT WRITES
+=======================
+
+Media
+-----
+    One file, seen as the two streams it feeds.
+
+    ``duration_s`` is the *container's*, and it is the one both halves must
+    agree to use. The streams routinely disagree -- 205.280 s of video against
+    205.264 s of audio on the reference file -- and a grid built from the
+    shorter one leaves the tail of the longer outside every chunk.
+
+    video_id: str
+        The id every later component is addressed by, and the name of the
+        directory they write into. The filename stem by default -- but read it
+        off `Produced.video_id` rather than assuming, because a *different*
+        file wanting a taken id is given a new one.
+    path: str
+        Where the file was when it was described. `audio` and `video` open
+        this, so a file that has moved must be re-described.
+    container_format: str
+        The container as the demuxer names it, e.g. `mov,mp4,m4a,3gp,3g2,mj2`.
+    duration_s: Optional[float]
+        The *container's* duration, and the one both halves must agree to use.
+        None when the container reports none, which makes a grid underivable.
+    video: Optional[VideoStream]
+        The picture stream, or None if the file carries none.
+    audio: Optional[AudioStream]
+        The soundtrack stream, or None if the file carries none.
+    source: Optional[str] = None
+        What file this is, independently of where it sits or what it is
+        called. A video id is the filename stem by default, so two different
+        videos named `clip.mp4` claim one output directory -- and the
+        corruption that follows is silent, because each document stays well-
+        formed on its own. This is what lets `media` tell "the same file
+        again", which must reuse the directory or resume is defeated, from "a
+        different file with that name", which must not. See
+        `split.fingerprint`.  Optional because a `media.json` written before
+        this existed has none, and there is no way to compute one for a file
+        that may have moved.
+
+    properties
+        .has_audio
+        .has_video
+
+VideoStream
+-----------
+    How to open and address the picture.
+
+    ``time_base`` is carried as a string ("1/12800") rather than a float:
+    ``pts * time_base`` is exact rational arithmetic, and at timebases this
+    fine a rounded float lands on the wrong frame. JSON has no rational type,
+    so the exact form has to survive as text.
+
+    index: int
+        Its stream index in the container, which is what a decoder is told to
+        open.
+    codec: str
+        The codec name as the container reports it, e.g. `h264`.
+    rate: Optional[float]
+        Frames per second, averaged. None when the container will not say -- a
+        variable-rate file, or a stream with no frame count.
+    time_base: Optional[str]
+        The stream's own clock, as `num/den`. A `pts` means nothing without
+        it, and at 1/1200000 a rounded float lands on a different frame.
+    width: int
+        Coded width in pixels, before any rotation metadata.
+    height: int
+        Coded height in pixels, before any rotation metadata.
+    frames: Optional[int]
+        How many frames the container claims. None when it does not say, and
+        advisory even when it does.
+    duration_s: Optional[float]
+        This stream's own duration. The two streams routinely disagree --
+        205.280 s of video against 205.264 s of audio on the reference file --
+        which is why the grid uses `Media.duration_s` instead.
+
+AudioStream
+-----------
+    How to open the soundtrack. Deliberately not the waveform.
+
+    index: int
+        Its stream index in the container.
+    codec: str
+        The codec name as the container reports it, e.g. `aac`.
+    rate: Optional[int]
+        Samples per second. None when the container will not say.
+    channels: Optional[int]
+        How many channels. None when the container will not say.
+    duration_s: Optional[float]
+        This stream's own duration; see `VideoStream.duration_s`.
+
+RawTranscript
+-------------
+    Words, segments and speaker turns. **No chunks.**
+
+    Stored before it is cut, and that is the asymmetry the whole ordering
+    argument rests on. Whisper timestamps every word, so this can be re-cut to
+    any grid, any number of times, without touching a model -- while a
+    sampler's decisions are made during a decode pass and cannot be revisited.
+    Keeping the ungridded record as a file is what lets a grid change without
+    re-running inference; `falconvar` holds it in memory and discards it.
+
+    ``turns`` is empty when no diarizer ran, and every segment then keeps
+    ``speaker: None``. A transcript with no speaker information is truthful;
+    one where everything is `SPEAKER_00` is not.
+
+    video_id: str
+        Which video this is the soundtrack of.
+    model: dict[str, Any] = <factory>
+        Which transcriber and diarizer produced this, and under what settings.
+        Half of what makes a stored result comparable to a new one.
+    track: dict[str, Any] = <factory>
+        What the decoded audio was: sample rate, channels, duration, and the
+        RMS and peak that decide silence.
+    segments: list[dict[str, Any]] = <factory>
+        Whisper's own utterances, each with `start`, `end`, `text` and a
+        `speaker` attributed by duration. **No chunk ids** -- applying a grid
+        is `cut`'s job, and keeping them out is what makes re-cutting free.
+    words: list[dict[str, Any]] = <factory>
+        One entry per word with its own `start`/`end`, and the `speaker` whose
+        turn its *midpoint* falls in. The midpoint, because the two models
+        estimate edges independently and a word span routinely straddles a
+        turn boundary.
+    turns: list[dict[str, Any]] = <factory>
+        Diarization's spans: who spoke from when to when, before any text is
+        attached.
+    stats: dict[str, Any] = <factory>
+        Headline numbers -- segments, words, speakers, turns, speech seconds,
+        attributed words, and the three timings.
+
+    properties
+        .silent
+        .speakers
+
+Cuts
+----
+    Interior cut times, plus the score series they were thresholded from.
+
+    ``scores`` is the point of this document, not ``cuts``. A cut list is a
+    *thresholding* of the series, so keeping the series makes re-thresholding
+    arithmetic over a cached array instead of another pass over the video --
+    the same expensive-half / cheap-half split `falconvar`'s calibrator uses
+    for samplers: run the model once per frame, compare thousands of times.
+
+    That matters most because the detector is strided. It scores the
+    difference between *consecutive frames it was given*, so at stride 5 it
+    compares moments 200 ms apart rather than 40 ms, and a threshold
+    calibrated for adjacent frames fires far more often. Every real cut
+    survives a stride; false positives are what rise. Caching the scores is
+    what makes finding the new threshold free.
+
+    video_id: str
+        Which video these boundaries were found in.
+    source: str
+        Which modality they came out of: `video` for a scene pass, `audio` for
+        a speech one. What `retune` reads to know which module can re-
+        threshold them.
+    detector: str
+        What found them -- `content` for the scene detector, or the policy
+        name for a speech pass. A grid refuses cuts whose detector does not
+        match its policy.
+    params: dict[str, Any] = <factory>
+        The settings that pass ran under, so a stored result says what
+        produced it.
+    cuts: list[float] = <factory>
+        The boundary timestamps themselves, in media seconds.
+    scores: Optional[dict[str, Any]] = None
+        The per-frame score series, kept so a different threshold is
+        arithmetic over a cached array rather than a second decode -- verified
+        identical to a full re-run at 0.12 ms against 5.9 s. None for a
+        detector with no continuous score.
+    stats: dict[str, Any] = <factory>
+        How many cuts, over how many scored frames, and at what rate.
+
+Timeline
+--------
+    Where every chunk starts and ends, and what decided it.
+
+    `chunk_id` is the index into ``spans``, and it is a key three other
+    documents inherit. A chunk is simultaneously the unit a describer
+    summarises, the unit a transcript is cut into and the unit retrieval
+    returns -- so if the picture and the soundtrack disagreed about where a
+    boundary falls, one query would return two different clips with no honest
+    way to say which is the answer.
+
+    video_id: str
+        Which video this grid divides.
+    spans: list[tuple[float, float]]
+        `(start_s, end_s)` per chunk, in order and contiguous. The chunk id is
+        the index into this list, which is why nothing may renumber it.
+    policy: str = 'uniform'
+        How the boundaries were decided: `uniform`, `scene`, `vad` or
+        `speaker`.
+    params: dict[str, Any] = <factory>
+        The settings this grid was built under -- the chunk length, the floor
+        and ceiling, and whatever the evidence pass recorded.
+    derived_from: str = 'grid'
+        "video", "audio", or "grid" when the policy is arithmetic and neither
+        modality had to run. Recorded because a reader otherwise cannot tell a
+        propagated boundary from a natively derived one.
+
+    properties
+        .duration_s
+
+    methods   bounds_of fingerprint index_at nearest
+
+Manifest
+--------
+    What each sampler kept from each chunk.
+
+    **No `start_ts` / `end_ts`.** Those belong to the grid, and one copy of
+    the grid is the whole point -- `falconvar` stores the spans in
+    `video_chunks` *and* `audio_chunks` with nothing constraining them to
+    agree. A reader joins on `chunk_id` and gets them from `timeline.json`.
+
+    ``manifest_fingerprint`` is a hash of the source minus its uri, and the
+    config minus the frame store. So it is known before the first chunk
+    exists, survives the video and the store being moved, and changes when the
+    sampling changes. Staleness downstream is a comparison against it, never a
+    deletion: re-ingesting costs seconds where describing costs inference.
+
+    video_id: str
+        Which video was ingested.
+    timeline_fingerprint: str
+        The grid this was cut on. Everything cut on a grid records this, so
+        two documents that disagree were cut on different ones and `chunk_id`
+        means two different things.
+    source: dict[str, Any] = <factory>
+        What was decoded: the path, the container, the duration and the video
+        stream's own facts. This is what `recovery/` rebuilds a store from,
+        which is why it is copied here rather than referenced.
+    config: dict[str, Any] = <factory>
+        The decimator, every sampler's own configuration, and where frames
+        went. Authoritative: `recovery/` reads this and imports nothing from
+        the pipeline, so a default living in code rather than here would go
+        untested.
+    stats: dict[str, Any] = <factory>
+        Frames decimated, frames sampled, chunks, and -- when frames were kept
+        -- how many files and how many megabytes. `frames_sampled` is picks
+        and `stored_frames` is files, and they are different numbers.
+    chunks: list[dict[str, Any]] = <factory>
+        [{chunk_id, decimated_frames, samplers: {id: {frame_count,
+        frames[]}}}]
+
+    methods   fingerprint frames_of sampler_ids
+
+Transcript
+----------
+    The raw transcript cut to chunks.
+
+    **Chunks with no speech are kept, with empty text.** The grid is shared,
+    so `chunk_id` must mean the same thing here as in the manifest; dropping
+    the quiet ones renumbers everything after them and breaks that
+    correspondence silently.
+
+    Only `speakers` goes into `structured`, never `turns`. For a description
+    the structured half is worth embedding because it holds what the summary
+    does not; but `turns[].text` *is* the transcript, so rendering it would
+    append the whole chunk a second time interleaved with timestamps read as
+    numbers. The turns are the record and stay on the chunk.
+
+    video_id: str
+        Which video this is the soundtrack of.
+    timeline_fingerprint: str = ''
+        The grid it was cut on; see `Manifest.timeline_fingerprint`.
+    model: dict[str, Any] = <factory>
+        Carried through from the `RawTranscript`, so a cut transcript still
+        says which models produced the words.
+    chunks: list[dict[str, Any]] = <factory>
+        One entry per chunk of the grid, with its text, words, turns and
+        speakers. **Chunks with no speech are kept, with empty text**: the
+        grid is shared, so dropping the quiet ones would renumber everything
+        after them.
+    stats: dict[str, Any] = <factory>
+        Chunks, how many carry speech, words placed against words in the
+        transcript, words that fell outside the grid, and speakers.
+
+    methods   text_of
+
+Descriptions
+------------
+    What a model said about each chunk, per sampler.
+
+    Keyed by `sampler_id`, which for a pairing is `name:prompt` -- so
+    `yolo:overview` and `clip:overview` stay distinct while asking one
+    question. `model` carries a hash of the prompt module as well as the model
+    id: editing a prompt changes the output but not the model name, and a
+    resume that ignored it would report "10 skipped" having done nothing.
+
+    video_id: str
+        Which video was described.
+    timeline_fingerprint: str = ''
+        The grid it was described against; see
+        `Manifest.timeline_fingerprint`.
+    manifest_fingerprint: str = ''
+        Which ingest produced the frames. Part of the resume key: a re-ingest
+        that chose different frames invalidates the answers about them.
+    model: dict[str, Any] = <factory>
+        Which describer, under what settings, and `{question: hash}` for every
+        prompt asked. Per question rather than one hash over the vocabulary,
+        so *adding* a question -- which cannot change an existing answer --
+        does not invalidate every description of every video.
+    chunks: list[dict[str, Any]] = <factory>
+        One entry per chunk, holding a block per sampler id with that call's
+        summary and structured answer. There is deliberately no chunk-level
+        rollup: flattening every sampler's answer into one record forced a
+        winner for a shared key, and nothing read it.
+    stats: dict[str, Any] = <factory>
+        Described, skipped, failed, and the elapsed time.
+
+    methods   done
+
+Embedded
+--------
+    What `embed` produced: every unit's text, hash and vector.
+
+    **This is the output of embedding, not a readable copy of it.** It held no
+    vectors while a `VectorIndex` did -- Qdrant or Postgres -- and this file
+    was the human-readable half beside them. With the index gone, the vectors
+    have nowhere else to live, and having them here is what lets a re-run
+    resume: a unit whose `text_hash` is unchanged under the same embedder does
+    not need paying for twice.
+
+    It still answers the question it always did -- *what text did this chunk
+    actually contribute* -- which is the one asked when a ranking looks wrong,
+    and the measurement that established embedding the summary *and* the
+    structured fields (0.705 against 0.528 MRR).
+
+    **One file per video, and now one embedder at a time.** `units.render()`
+    produces the same text whichever model embeds it, so the readable half was
+    shared; the vectors are not, so the document names the embedder that made
+    them and is rewritten whole when that changes. Postgres still holds
+    several at once -- every row carries the embedder and every query filters
+    on it -- because a table is not rewritten whole.
+
+    video_id: str
+        Which video these units belong to.
+    timeline_fingerprint: str = ''
+        The grid they were built on; see `Manifest.timeline_fingerprint`.
+    embedder: str = ''
+        Who made the vectors, as `embedders.build().key` -- model and width. A
+        vector is only comparable inside the space that produced it, so this
+        is what a reader checks before trusting one, and what resume compares.
+    units: list[dict[str, Any]] = <factory>
+        One entry per embeddable unit: the text, its hash, and `vector`, the
+        floats themselves. `vector` is absent on a unit that was never
+        embedded.
+
+    methods   stored text_of
+
+Aggregate
+---------
+    One aggregator's answer about the whole video.
+
+    ``inputs_fingerprint`` is a hash of the chunk text actually read. A
+    summary of descriptions that have since been rewritten reads perfectly,
+    which is precisely why staleness cannot be left to a reader to notice.
+
+    video_id: str
+        Which video was answered about.
+    aggregate_id: str
+        Which aggregate this is, e.g. `summary` or `entities:actors`. A colon
+        cannot be in a Windows filename, so it is stored as
+        `entities.actors.json` and no name contains a dot.
+    tier: str
+        The cost ceiling it ran under: `free`, `local` or `llm`.
+    payload: dict[str, Any] = <factory>
+        The answer itself, shaped by the definition that produced it.
+    inputs_fingerprint: str = ''
+        A hash of the chunk text actually read. A summary of descriptions
+        since rewritten reads perfectly, which is why staleness cannot be left
+        to a reader to notice.
+    stats: dict[str, Any] = <factory>
+        Headline numbers, and `model` for an llm aggregate -- without which
+        switching `--llm` reused the stored answer and reported success.
+
+
+
+WHAT A RUN REPORTS
+==================
+
+Produced
+--------
+    What a component actually wrote.
+
+    A bare path would be shorter and say less. This reports the real output:
+    no ``store`` on a run with the frame store off, no ``transcript`` on a
+    silent file, and the stats a progress callback wants -- so a caller learns
+    what happened rather than assuming from what it asked for.
+
+    video_id: str
+        Which video, and **the answer rather than the argument**: `media` may
+        mint a new id when a different file wants a taken one, so later calls
+        read it from here.
+    component: str
+        Which component produced this. `boundaries.evidence` answers as
+        `boundaries.video` or `boundaries.audio`, naming which modality
+        supplied the cuts -- which is not knowable before it runs.
+    artifacts: dict[str, str] = <factory>
+        `{artifact name: where it went}`. Lists what *was* written rather than
+        what could be: a run with no frame store has a manifest and no store,
+        and a caller should learn that from here rather than by looking.
+    stats: dict[str, Any] = <factory>
+        The component's headline numbers. What is in here is the component's
+        business; `component` says whose vocabulary to read it in.
+    skipped: list[str] = <factory>
+        What did not happen, and it is an answer rather than an absence --
+        `boundaries.evidence` under `uniform` returns `skipped: [evidence]`
+        rather than nothing, so one call answers the same way over HTTP and
+        from an import.
+
+    methods   path
+
+Run
+---
+
+    video_id: str
+        The id the run settled on, read off the first step rather than off the
+        request -- `media` may mint a new one when a different file wants a
+        taken id, and everything after it is addressed by the answer.
+    steps: list[Produced] = <factory>
+        Every component's receipt, in the order they ran.
+    skipped: dict[str, str] = <factory>
+        `{component: why}`. A reason, not a flag: a component that did not run
+        is only useful beside why it did not -- a file with no soundtrack and
+        a policy that needs no precursor are different absences.
+    problems: list[str] = <factory>
+        What was reported and continued past -- a database write that failed
+        while the files landed. Empty on a run that named no database.
+        Reported rather than raised, and *listed* rather than counted: "3
+        writes failed" cannot say whether the same table failed three times.
+
+
+
+WHAT A SEARCH RETURNS
+=====================
+
+Moment
+------
+    One chunk, and the units that spoke for it.
+
+    video_id: str
+        Which video. Part of the key: a chunk id indexes *one* video's grid,
+        and grouping on the id alone fused chunk 0 of two videos into one
+        moment with two unrelated accounts.
+    chunk_id: int
+        Which chunk of that video's grid.
+    start_ts: float
+        Where the chunk starts, in media seconds.
+    end_ts: float
+        Where it ends, in media seconds.
+    score: float
+        A rank fusion, `1/(k+best) + 0.5/(k+second)` at k=10 -- NOT a
+        similarity. 0.1326 is the ceiling for a chunk contributing two units
+        and means "best ranked first, second ranked second". A nonsense query
+        scores like a real one, because dense always returns nearest
+        neighbours and there is no relevance floor. Read the ranks, not this.
+    hits: list[dict[str, Any]] = <factory>
+        One entry per unit that matched, each a dict carrying `sampler_id`
+        (the pairing, e.g. `clip:text`), `sampler`, `question`, `content`,
+        `structured`, `dense_rank` and `text_rank`. `text_rank: None` means
+        the lexical half was silent on this query.
+
+    properties
+        .samplers
+
+
+
+WHAT EMBEDDING WORKS ON
+=======================
+
+Unit
+----
+    One embeddable thing, keyed by a hash of its own text.
+
+    video_id: str
+        Which video this text came from.
+    chunk_id: int
+        Which chunk of its grid. With `video_id` this is the key a moment is
+        grouped on -- a chunk id indexes one video's grid, and grouping on it
+        alone fused two videos' chunk 0 into one moment.
+    sampler_id: str
+        The pairing that produced it, e.g. `clip:text`, or the bare sampler
+        name when the question *is* the strategy's own.
+    content: str
+        The text that gets embedded: the summary and the structured fields
+        together. Measured, both beats either -- dense MRR 0.705 against 0.528
+        for the summary alone and 0.636 for the fields alone.
+    structured: dict[str, Any] = <factory>
+        The answer's fields, kept as payload so a search can filter on them.
+        Only useful as a filter where the values are a vocabulary: `role` is
+        free text, so one video produced `cashier`, `customer` and `child
+        customer`.
+    vector: Optional[list[float]] = None
+        The embedding, or None when this unit was not re-embedded because its
+        text is unchanged. A backend handed a None writes nothing, which is
+        why the vectors must exist before any upsert.
+    sampler: str = ''
+        The two halves of `sampler_id`, carried rather than parsed. Filtering
+        by question is the query a person actually makes -- "the text on
+        screen", not "what the CLIP sampler said" -- and it is not expressible
+        as a suffix match, because a bare id like `clip` means question ==
+        strategy.
+    question: str = ''
+        The question half of `sampler_id`, as its own field so the-text-on-
+        screen-wherever-asked is one equality -- which is the query a person
+        actually makes.
+
+    properties
+        .key
+        .text_hash
+            Identity is the text. Re-embedding is then "what changed", not
+            "what is here", which is what makes a re-run cost nothing.

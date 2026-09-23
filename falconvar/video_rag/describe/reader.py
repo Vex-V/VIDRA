@@ -34,6 +34,7 @@ from typing import Any, Optional, Sequence
 from ...shared.contracts.documents import Descriptions, Manifest, Timeline
 from . import prompts
 from .base import Describer
+from ...shared import progress
 from .frames import FrameSource
 
 
@@ -91,8 +92,14 @@ def answer(manifest: Manifest, timeline: Timeline, describer: Describer,
              source: FrameSource,
              samplers: Optional[Sequence[str]] = None,
              existing: Optional[Descriptions] = None,
-             limit: Optional[int] = None) -> Descriptions:
-    """Describe every (chunk, sampler) the manifest names."""
+             limit: Optional[int] = None,
+             on_progress: Optional[progress.Reporter] = None) -> Descriptions:
+    """Describe every (chunk, sampler) the manifest names.
+
+    `on_progress` fires once per answer, **out of manifest order**: the
+    calls are gathered under the provider's concurrency, so completion
+    order is whatever the network gave back. The counts are still exact.
+    """
     # Every question this manifest asks, resolved before the first call so the
     # model block is complete whether or not a chunk is reached.
     model = _model_block(describer, prompts.questions_in(manifest))
@@ -144,6 +151,9 @@ def answer(manifest: Manifest, timeline: Timeline, describer: Describer,
         chunks.append(out)
 
     # -- run: concurrently, each run's frames read once ------------------------
+    finished = 0
+    progress.report(on_progress, "describe", planned, 0, skipped)
+
     async def run(chunk_id: int, run_id: str, name: str, config: dict[str, Any],
                   asked: list[tuple[str, str]], out: dict[str, Any],
                   gate: asyncio.Semaphore) -> None:
@@ -179,6 +189,14 @@ def answer(manifest: Manifest, timeline: Timeline, describer: Describer,
                     "structured": answer.fields,
                     "elapsed_s": round(time.perf_counter() - call_started, 3),
                 }
+                # After the answer is stored, so a callback that inspects the
+                # document sees this one in it. `nonlocal` rather than a lock:
+                # every one of these runs on the single event loop.
+                nonlocal finished
+                finished += 1
+                progress.report(on_progress, "describe", planned, finished,
+                                skipped, f"{chunk_id}:{sampler_id}",
+                                out["samplers"][sampler_id])
 
             await asyncio.gather(*(ask(s, q) for s, q in asked))
 

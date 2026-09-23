@@ -3,8 +3,14 @@
 **The query is embedded with the embedder that built the index.** Not a
 default, an argument. A mismatch across widths fails loudly; a mismatch between
 two models of the same width returns a well-formed ranking that means nothing,
-which is why the embedder key is in the index filename -- a wrong name searches
-a file that does not exist rather than the wrong vectors.
+which is why every row carries its embedder key and every query filters on it
+before a distance is taken -- searching with the wrong model matches no rows
+rather than the wrong vectors.
+
+Ranking is Postgres', through the `search_embeddings` RPC in `postgres.py`.
+There were two backends and the other one, embedded Qdrant, ranked worse on
+the half that differed: no stemming and raw term counts where `Modifier.IDF`
+expects BM25 weights, measured at 13 of 41 units matched against Postgres' 21.
 """
 
 from __future__ import annotations
@@ -14,12 +20,11 @@ from typing import Any, Optional, Sequence
 from ..boundaries import load as load_timeline
 from ...shared import paths
 from ...shared.models import embedders as embedders_mod
-from ..embed.driver import DEFAULT_INDEX
-from ..embed import indexes as backends
+from . import postgres
 from .search import Moment, to_moments
 
 
-def scope_of(video_id: Any = None,
+def scope_of(video_id: Optional[str | Sequence[str]] = None,
              video_ids: Optional[Sequence[str]] = None) -> Optional[list[str]]:
     """The set of videos to search. `None` means every one.
 
@@ -27,6 +32,11 @@ def scope_of(video_id: Any = None,
     different set -- so the scope is a set, and the single-video case is the
     one-element case rather than a second endpoint. `video_id` stays accepted
     as the shorthand it always was.
+
+    Annotated rather than left `Any`: `/capabilities` publishes a parameter's
+    annotation verbatim and the client picks a widget from it, so `Any` is a
+    form field with nothing to build from. It takes a string or a sequence of
+    them, and now says so.
     """
     if video_ids is not None:
         chosen = [v for v in video_ids if v]
@@ -65,18 +75,18 @@ def chunks_in(spans: Sequence[tuple[float, float]],
 
     Time is not a field on a vector and deliberately is not one: a span lives
     in the grid, so seconds are resolved to chunk ids here and the filter that
-    reaches the store is the one that already existed. That keeps one mechanism
-    for both backends and needs no Qdrant payload change -- payload is written
-    only on upsert, so adding a field there would need a forced re-index.
+    reaches the database is the one that already existed -- no column, no
+    migration, and nothing already stored becomes unreachable.
     """
     lo = float("-inf") if after is None else after
     hi = float("inf") if before is None else before
     return [i for i, (start, end) in enumerate(spans) if end > lo and start < hi]
 
 
-def search(query: str, video_id: Any = None, embedder: Optional[str] = None,
+def search(query: str, video_id: Optional[str | Sequence[str]] = None,
+           embedder: Optional[str] = None,
            moments: int = 5,
-           sampler: Optional[str] = None, index_name: str = DEFAULT_INDEX,
+           sampler: Optional[str] = None,
            candidates: int = 20,
            question: Optional[str] = None,
            strategy: Optional[str] = None,
@@ -89,9 +99,40 @@ def search(query: str, video_id: Any = None, embedder: Optional[str] = None,
            ) -> tuple[list[Moment], list[str]]:
     """Ranked moments, and anything the caller should be told about the ranking.
 
-    The notes are not decoration. A dense-only backend returns hits that look
-    exactly like fused ones minus a `t` marker, which reads as "no lexical
-    match for this query" rather than "this index cannot have one".
+    The five calls worth knowing, out of the fourteen parameters:
+
+        # every video in the index
+        moments, notes = retrieve.search("the audience laughed")
+
+        # one video
+        moments, notes = retrieve.search("the audience laughed", video_id="talk")
+
+        # a window inside one, in media seconds
+        moments, notes = retrieve.search("the key insight", video_id="talk",
+                                         after=120.0, before=300.0)
+
+        # by question, wherever it was asked -- which is the query a person
+        # actually makes. Not a suffix match on the pairing: a bare id like
+        # `clip` means the question *is* the strategy name.
+        moments, notes = retrieve.search("the diagram", video_id="talk",
+                                         question="text")
+
+        # several named videos. `video_id` is the one-element shorthand for
+        # `video_ids`, and omitting both searches everything.
+        moments, notes = retrieve.search("the budget",
+                                         video_ids=["q1", "q2"])
+
+    **Read `notes` when `moments` is empty.** That is the case they exist
+    for, and it used to be unreachable: they rode on each moment, so a search
+    that matched nothing returned a bare `[]` with nowhere to say why. Found
+    by searching with an embedder that had never indexed the video -- a silent
+    200. The note names the embedder key, because that is exactly how such a
+    search comes back empty.
+
+    **A `Moment.score` is a rank fusion, not a similarity.** Measured on the
+    four-video corpus, a nonsense query scores 0.1136 against a real one's
+    0.1294: there is no relevance floor, and the number alone says nothing.
+    The ranks on each hit are the signal.
     """
     if not (query or "").strip():
         # Refused here rather than at the provider. An empty string reached
@@ -102,23 +143,12 @@ def search(query: str, video_id: Any = None, embedder: Optional[str] = None,
 
     scope = scope_of(video_id, video_ids)
     built = embedders_mod.build(embedder)
-    # The index is built with one id only so `stored_hashes`/`prune` keep
-    # working for the writer; the scope a *search* uses is passed per call.
-    index = backends.build(index_name, scope[0] if scope else "", built.key)
-    try:
-        return _search(built, index, index_name, query, scope, moments,
-                       sampler, question, candidates, strategy, chunk_ids,
-                       window, after, before, structured)
-    finally:
-        # Embedded Qdrant holds an exclusive folder lock. A CLI run never
-        # notices -- the process exits -- but a server that does not release it
-        # fails every later search with "already accessed by another instance",
-        # on a route that worked a minute earlier. `finally`, because the
-        # not-indexed raise below is exactly the exit that would leak it.
-        backends.release(index)
+    return _search(built, query, scope, moments, sampler, question,
+                   candidates, strategy, chunk_ids, window, after, before,
+                   structured)
 
 
-def _search(built, index, index_name: str, query: str,
+def _search(built, query: str,
             scope: Optional[Sequence[str]],
             moments: int, sampler: Optional[str], question: Optional[str],
             candidates: int, strategy: Optional[str],
@@ -127,11 +157,6 @@ def _search(built, index, index_name: str, query: str,
             structured: Optional[dict[str, Any]]
             ) -> tuple[list[Moment], list[str]]:
     notes: list[str] = []
-    if not backends.has_lexical(index_name):
-        notes.append(f"{index_name} is dense-only: this ranking has no lexical "
-                     "half, which is worth 0.429 against 0.714 top-1 on the "
-                     "reference corpus")
-
     # A grid per video in scope. `chunk_id` is an index into ONE video's grid,
     # so it means nothing without knowing whose.
     known = list(scope) if scope else _all_videos()
@@ -171,8 +196,8 @@ def _search(built, index, index_name: str, query: str,
     # passage it should find, and a query embedded as a document loses recall
     # with no error anywhere.
     vector = embedders_mod.query_vector(built, query)
-    hits = index.search(vector, query, candidates, sampler, question,
-                        strategy, narrowed, structured, scope)
+    hits = postgres.search(vector, query, built.key, candidates, scope,
+                           sampler, question, strategy, narrowed, structured)
     if not hits:
         if any(f is not None for f in (sampler, question, strategy,
                                        narrowed, structured, scope)):
@@ -192,9 +217,9 @@ def _search(built, index, index_name: str, query: str,
                                 "embed them with it first"]
         where = ", ".join(scope) if scope else "any video"
         raise FileNotFoundError(
-            f"{where}: nothing indexed for {built.key} in {index_name!r}. "
-            f"Run embed with this embedder and index first -- a different "
-            f"embedder writes a different collection.")
+            f"{where}: nothing indexed for {built.key}. Run embed with this "
+            f"embedder, and a pipeline naming a database, first -- a "
+            f"different embedder writes different rows.")
     if any(f is not None for f in (sampler, question, strategy, structured)):
         notes.append("filtering gives up the agreement signal: a chunk "
                      "contributes fewer terms, so scores fall -- to a single "
@@ -244,14 +269,12 @@ def videos(query: str, embedder: Optional[str] = None, limit: int = 5
 
     Postgres only, because that is where the summaries are written.
     """
-    from ..embed.indexes.supabase import search_videos
-
     built = embedders_mod.build(embedder)
     # The query side: e5, nomic and bge embed a question differently from the
     # passage it should find, and a query embedded as a document loses recall
     # with no error anywhere.
     vector = embedders_mod.query_vector(built, query)
-    return search_videos(vector, built.key, limit)
+    return postgres.search_videos(vector, built.key, limit)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -284,8 +307,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "`severity=severe,environment=outdoor`")
     ap.add_argument("--candidates", type=int, default=20,
                     help="units ranked per half before fusion (default 20)")
-    ap.add_argument("--index", default=DEFAULT_INDEX, dest="index_name",
-                    choices=backends.available())
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -299,7 +320,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         found, notes = search(args.query, args.video_id, args.embedder,
                               args.moments, args.sampler,
-                              args.index_name, args.candidates,
+                              args.candidates,
                               question=args.question, strategy=args.strategy,
                               chunk_ids=chunk_ids, window=args.window,
                               after=args.after, before=args.before,
@@ -313,7 +334,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(json.dumps([m.as_dict() for m in found], indent=2))
         return 0
 
-    print(f"{args.query!r} in {args.video_id}   [{args.index_name}]")
+    print(f"{args.query!r} in {args.video_id or 'every video'}")
     for note in notes:
         print(f"  note: {note}")
     for moment in found:

@@ -4,30 +4,31 @@ Both modalities land here: a description from the picture and a transcript
 chunk from the soundtrack are both text with a span and some bound structure,
 so audio needed no index of its own and no code past `units.from_transcript`.
 
-Two real indexes, `qdrant` and `supabase`, both fusing a dense and a lexical
-ranking. Plus `embedded.json`, written alongside them -- the text without the
-vectors, for reading rather than searching.
+It writes one document, `embedded.json`, carrying the text and the vectors.
+Putting them in a database is the pipeline's job -- this component needs no
+server to be reachable, and a deployment that wants its vectors somewhere else
+has a file to read.
 """
 
 from __future__ import annotations
 
-from . import indexes, readable
-#: `run` is the only public spelling. The function in `driver.py` is named for
-#: its component so a traceback frame says which one failed -- eight frames
-#: called `run` carry no information -- but exporting both names would give the
-#: library two ways to say the same thing, and `load`, `build` and `available`
-#: collide across components anyway, so a bare-name style needs aliases the
-#: moment a caller wants a second thing from the same module.
-from .driver import DEFAULT_INDEX, collect, main, run
-#: Embedding is not a video_rag concern -- it takes text and returns vectors,
-#: and both tiers do it. It lives in `shared/models/` beside `llm` and
-#: `providers`, which it already used. Re-exported because `embed.build` and
-#: `embed.available()` are part of this component's surface.
-from ...shared.models.embedders import (Embedder, EmbedderUnavailable,
-                                        available, build, query_vector)
-from .units import Unit, from_descriptions, from_transcript, render
+#: **The public surface is the entry points, the errors and the return types.**
+#: `run` does the work and `load` reads the result back; anything beyond those
+#: is here because a caller cannot do without it -- a second way *in* that no
+#: naming collapses into `run`, an exception they have to catch by name, or a
+#: type they would annotate. Everything else is machinery, and stays reachable
+#: through its own module rather than advertised here. See CLAUDE.md.
+#:
+#: `main` is deliberately absent: it is argparse, and `__main__.py` reaches it
+#: as `from .driver import main`. Nothing ever imported it from the package.
+#: Bound so `embed.readable.load()` resolves on a bare import of the package.
+#: A submodule, not surface.
+from . import readable  # noqa: F401
+from .driver import encode, run
+from .units import Unit
+#: Embedding is not a video_rag concern -- it takes text and returns
+#: vectors, and both tiers do it. It lives in `shared/models/`; these two
+#: are re-exported because they are this component's surface.
+from ...shared.models.embedders import EmbedderUnavailable, available
 
-__all__ = ["DEFAULT_INDEX", "Embedder", "EmbedderUnavailable",
-           "Unit", "available", "build", "collect", "from_descriptions",
-           "from_transcript", "indexes", "main", "query_vector", "readable",
-           "render", "run"]
+__all__ = ["EmbedderUnavailable", "Unit", "available", "encode", "run"]

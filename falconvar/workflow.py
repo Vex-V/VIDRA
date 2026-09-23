@@ -48,8 +48,9 @@ class Options:
     embedder: Optional[str] = None           # text -> vectors
     llm: Optional[str] = None                # the `llm` aggregate tier
     tier: str = "free"                       # a cost ceiling
-    sink: str = "file"                       # where documents go
-    index: str = video_rag.DEFAULT_INDEX     # where vectors go
+    # Where a *copy* goes. Files are written either way; naming one makes this
+    # function read each artifact back and hand it to `storage/supabase.py`.
+    database: Optional[str] = None
 
 
 def extraction(options: Options) -> video_rag.Options:
@@ -58,7 +59,7 @@ def extraction(options: Options) -> video_rag.Options:
         source=options.source, video_id=options.video_id, policy=options.policy,
         use_video=options.use_video, use_audio=options.use_audio,
         sampler=options.sampler, describer=options.describer,
-        embedder=options.embedder, sink=options.sink, index=options.index)
+        embedder=options.embedder, database=options.database)
 
 
 def validate(options: Options) -> list[str]:
@@ -79,12 +80,55 @@ def process(options: Options,
     run = video_rag.process(extraction(options), on_step)
 
     say("aggregate", None)
-    produced = aggregates.run(run.video_id, options.tier, sink=options.sink,
-                              llm=options.llm, embedder=options.embedder,
-                              index=options.index)
+    produced = aggregates.run(run.video_id, options.tier,
+                              llm=options.llm, embedder=options.embedder)
     run.steps.append(produced)
+    if options.database:
+        run.problems += _export_aggregates(produced, options)
     say(produced.component, produced)
     return run
+
+
+def _export_aggregates(produced: Produced, options: Options) -> list[str]:
+    """The aggregates, their definitions, and the video's own vector.
+
+    Here rather than in `aggregates.run` for the reason every other export is
+    in `video_rag.driver`: a component produces documents and a pipeline
+    decides where copies go. `aggregates` wrote its own Postgres rows and made
+    its own whole-video vector, gated on an `index` parameter -- so the tier
+    could not be run at all without deciding a destination.
+
+    Each answer is its own file under `aggregates/`, so this cannot go through
+    `video_rag.export`: that resolves one path per artifact name.
+    """
+    from .shared.storage import files, supabase
+
+    problems: list[str] = []
+    for answer, where in sorted(produced.artifacts.items()):
+        try:
+            supabase.write_aggregate(produced.video_id,
+                                     files.read_json(Path(where)))
+        except Exception as exc:                          # noqa: BLE001
+            problems.append(f"{answer} -> {options.database}: {exc}")
+    try:
+        supabase.write_definitions(
+            aggregates.definition_rows(produced.stats.get("definitions") or {}))
+    except Exception as exc:                              # noqa: BLE001
+        problems.append(f"definitions -> {options.database}: {exc}")
+
+    # The whole video as one vector, from the summary this run has in hand.
+    # `embeddings` answers *which twenty seconds* and this answers *which
+    # video*, so they never share a ranking -- `/search level=video` is the
+    # only thing that reads it.
+    if "summary" in (produced.stats.get("aggregates") or []):
+        try:
+            produced.stats["video_units"] = aggregates.index_summary(
+                produced.video_id,
+                aggregates.load(produced.video_id, "summary").payload,
+                options.embedder)
+        except Exception as exc:                          # noqa: BLE001
+            problems.append(f"video vector -> {options.database}: {exc}")
+    return problems
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -112,10 +156,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="who answers --tier llm: a provider or provider/model; "
                          "default FALCONVAR_LLM, then openai")
     ap.add_argument("--tier", default="free", choices=aggregates.TIERS)
-    ap.add_argument("--sink", default="file",
-                    help="where documents go: file | supabase | both")
-    ap.add_argument("--index", default=video_rag.DEFAULT_INDEX,
-                    help="where vectors go: qdrant | supabase | both")
+    ap.add_argument("--database", default=None,
+                    help=f"also write a copy to a database; known: "
+                         f"{', '.join(video_rag.DATABASES)}")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -124,7 +167,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         use_video=not args.no_video, use_audio=not args.no_audio,
         sampler=args.sampler, describer=args.describer,
         embedder=args.embedder, llm=args.llm,
-        tier=args.tier, sink=args.sink, index=args.index)
+        tier=args.tier, database=args.database)
 
     problems = validate(options)
     if problems:
@@ -133,6 +176,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
     return video_rag.report(options, lambda on_step: process(options, on_step),
                             args.json)
+
+
+#: Declared, because without it this module published its own imports --
+#: `Callable`, `Optional`, `Path`, `dataclass`, `annotations` -- as though they
+#: were part of the surface. `extraction` is here because it is how a caller
+#: narrows a whole-run `Options` to the extraction half; `main` is not, for the
+#: reason no component exports one.
+__all__ = ["COMPONENTS", "Options", "Run", "extraction", "process", "validate"]
 
 
 if __name__ == "__main__":

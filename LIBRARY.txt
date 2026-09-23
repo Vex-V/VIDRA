@@ -1,0 +1,687 @@
+FalCONvar as a library
+======================
+
+A video goes in; both the picture and the soundtrack are read onto one chunk
+grid, described, embedded, and a searchable index of moments comes out.
+
+The product is the library. `api/` and `web/` are how it gets exercised.
+TYPES.txt is the field-by-field reference for everything returned here, and is
+generated from the dataclasses rather than written beside them.
+
+
+THE TWO LEVELS, AND THE TWO WAYS INTO LEVEL 1
+---------------------------------------------
+
+    LEVEL 2   one call, sensible defaults, no per-stage tuning
+    LEVEL 1   eight components, each callable on its own, every setting reachable
+
+Level 2 is a loop over the level 1 calls, not a different engine: run both on
+one video and the grid fingerprints match.
+
+Level 1 is where the tuning lives, and each component can be reached **two
+ways**:
+
+    by video id     `run` does the work and writes; `load` reads the result
+                    back, typed. Both resolve paths under a data root, and
+                    this is the half the pipeline and the API use.
+
+    by objects      one verb per component, taking the documents it needs and
+                    returning the document it makes. It reads no artifact,
+                    writes no artifact, and needs no `configure()` -- so a
+                    component can be used without adopting this pipeline's
+                    directory layout at all.
+
+Both do the same work. The `run` path *is* the object path with a read at each
+end, so there is one implementation and one set of argument checks, and the
+two cannot drift. Verified by putting one video through both and comparing
+every document byte for byte.
+
+
+INSTALL
+-------
+    pip install falconvar            core: `uniform` sampling + an API model
+    pip install "falconvar[local]"   clip/yolo/objects/text, in-process models
+    pip install "falconvar[audio]"   whisper + pyannote
+    pip install "falconvar[all]"
+
+An extra that is not installed fails at the point of use with Python's own
+ModuleNotFoundError. Nothing silently falls back to a lesser code path.
+
+
+AT A GLANCE
+-----------
+    import falconvar
+    falconvar.configure(data_root="/var/lib/falconvar")   # before anything runs
+
+    # ------------------------------------------------ level 2: the pipeline
+    from falconvar.video_rag import video_rag
+    run = video_rag("talk.mp4", policy="scene", sampler="clip:[text,scene]")
+
+    # -------------------------------------- level 1, by id: one component
+    from falconvar.video_rag import boundaries, describe, embed
+    boundaries.evidence(vid, "scene", stride=5)    # not everything is `run`
+    embed.run(vid, embedder="local")
+    descriptions = describe.load(vid)              # read a result back
+
+    # ------------------------------- level 1, by objects: no filesystem
+    from falconvar.video_rag import media, boundaries, video, describe
+    from falconvar.video_rag.frames import MemoryFrames
+
+    described = media.split("talk.mp4")                           # -> Media
+    cuts      = boundaries.detect("scene", media=described)       # -> Cuts
+    grid      = boundaries.timeline(described, "scene", cuts=cuts) # -> Timeline
+    held      = MemoryFrames()
+    manifest  = video.ingest(described, grid, "uniform", frames=held)
+    answers   = describe.answer(manifest, grid, held, describer="openai")
+
+    # ------------------------------------------------------ and the search
+    from falconvar.video_rag import retrieve
+    moments, notes = retrieve.search("the moment it exploded", video_id=vid)
+
+
+WHERE OUTPUT GOES
+-----------------
+Everything one video produces lives in one directory, `<data>/out/<video_id>/`
+-- grouped by video rather than by artifact type, so one video's whole output
+is one thing to inspect, copy or delete.
+
+Precedence for `<data>`, highest first:
+
+    1  an active Workspace         see WORKSPACES below
+    2  falconvar.configure(...)    an application guaranteeing where it writes
+    3  $FALCONVAR_DATA             for when you do not control the caller
+    4  the checkout                only when running from the repository
+    5  ~/.falconvar                an installed copy with nothing else said
+
+`$FALCONVAR_WEIGHTS` is the same for model checkpoints, which are a cache
+rather than output. Neither is a `.env` key: `.env` is read when a key is
+needed, which can be earlier or later than a path is, and a root that moved
+depending on which module was touched first would be worse than one that
+cannot live there at all.
+
+The pure verbs resolve none of this. The only data-root file any of them
+touches is the describe question vocabulary (`<data>/prompts.json`), which is
+deployment configuration rather than a video's output, and which need not
+exist.
+
+
+LEVEL 2 -- THE WHOLE PIPELINE
+-----------------------------
+    from falconvar.video_rag import video_rag
+    run = video_rag(source, video_id=None, policy="uniform",
+                    use_video=True, use_audio=True, sampler="uniform",
+                    describer=None, embedder=None, database=None) -> Run
+
+    from falconvar import workflow
+    workflow.process(options, on_step=None) -> Run    # + the aggregates tier
+    workflow.validate(options) -> list[str]           # problems, before it runs
+
+    source      a path to the file
+    video_id    defaults to the filename stem. READ IT BACK OFF THE RESULT:
+                a different file wanting a taken id is given a new one
+    policy      uniform | scene | vad | speaker -- and it decides the order,
+                because it decides what must have run first
+    use_video   read the picture
+    use_audio   read the soundtrack
+    sampler     which frames, and what to ask: "clip:[text,scene],yolo"
+    describer   a provider or provider/model; None -> $FALCONVAR_DESCRIBER,
+                then openai
+    embedder    the same, for vectors
+    database    also write a copy to a database, e.g. "supabase". None means
+                files only, which is what a component writes either way
+
+`Run` carries `video_id`, `steps` (one `Produced` each), `skipped`
+(`{component: why}`) and `problems` (database writes that were reported and
+continued past; empty when no database was named).
+
+**Level 2 carries no per-stage tuning, deliberately.** A scene grid with a
+30-second floor, a uniform stride of 5, an `objects` vocabulary -- those live
+on the component that owns them. This is the convenient path, not the
+configurable one.
+
+The one thing worth knowing up front: on a machine with no Hugging Face token,
+a video that carries audio needs `use_audio=False`, or pyannote fails inside
+the run.
+
+
+LEVEL 1 -- THE COMPONENTS
+-------------------------
+Every component exports `run`, its pure verb, its errors, and (in six of
+eight) `load`, plus any registry worth asking about. Nothing else.
+
+`run` and `load` are two *directions*, not two steps. Nothing in a pipeline
+written by hand calls `load` to make the pipeline work -- each `run` resolves
+its own inputs through the other components' `load`, so nothing is passed
+between those calls but an id and settings.
+
+The module is the unit: `embed.run`, never a bare `embed`. `load` appears in
+six of eight components and `build` in three, so a bare-name style needs an
+alias the moment a caller wants a second thing from one module.
+
+
+1 - media
+~~~~~~~~~
+The only component that takes a **path** rather than a video id, because it is
+the one that establishes the id.
+
+    run(path, video_id=None, on_conflict="new")               -> Produced
+    load(video_id)                                            -> Media
+    split(path, video_id=None)                                -> Media
+
+    writes   media.json
+    raises   UnusableMedia, VideoIdTaken, UnusableVideoId
+
+`on_conflict` decides what happens when a video id is already taken:
+
+    new        mint the next free id -- clip-2, clip-3 (default)
+    replace    delete everything under the old id and take it
+    refuse     raise VideoIdTaken, so the caller decides
+
+**Only a *different* file is a conflict.** The same file again reuses its own
+directory whatever this says -- `video_rag()` begins with `media.run` on every
+pass, and minting there would orphan the manifest, the descriptions and the
+vectors, so a re-run would pay a second time for everything already done.
+`Media.source` is what tells them apart, and it is free: every part of it was
+read to describe the streams anyway.
+
+`replace` deletes the whole directory, not just `media.json`. Taking the id
+while leaving the old artifacts is precisely the corruption this exists to
+stop -- a directory whose timeline covered 205 s of a 60 s file, both documents
+well-formed.
+
+
+2 - audio
+~~~~~~~~~
+    run(video_id, transcriber="whisper", diarizer="pyannote", model=None,
+        language=None, vad_filter=None, compute_type=None, device=None,
+        diarizer_model=None, exclusive=None)                  -> Produced
+    load(video_id)                                            -> RawTranscript
+    listen(media, ...the same settings...)                    -> RawTranscript
+
+    reads    media.json (for the path -- it opens the file itself)
+    writes   transcript.raw.json
+    raises   NoAudio, ModelUnavailable, ValueError
+
+Every setting defaults to None, meaning *leave the backend's own default*, so
+a call naming none of them constructs exactly what it always did. A setting no
+chosen backend takes is refused rather than dropped: `stub` has no `language`,
+`none` has no `exclusive`.
+
+`exclusive` is the one worth knowing. pyannote answers with overlapping speech
+either resolved or not, and the whole grid rests on the resolved form: a word
+cannot belong to two speakers.
+
+**No chunk ids are written here.** Applying a grid is `cut`'s job, and keeping
+them out is what makes re-cutting free where transcription is not.
+
+Silence is answered without loading a model at all: an empty microphone sits
+three orders of magnitude below narration.
+
+
+3 - boundaries
+~~~~~~~~~~~~~~
+Three ways in, and only one of them is `run`. No naming collapses them.
+
+    evidence(video_id, policy, stride=5, threshold=27.0, detect_width=320,
+             silence_s=0.65)                                  -> Produced
+    run(video_id, policy="uniform", chunk_s=20.0, min_s=5.0,
+        max_s=None)                                           -> Produced
+    retune(video_id, threshold)                               -> Produced
+    load(video_id)                                            -> Timeline
+
+    detect(policy, media=None, transcript=None, stride=5, threshold=27.0,
+           detect_width=320, silence_s=0.65)                  -> Cuts | None
+    timeline(media, policy="uniform", cuts=None, chunk_s=20.0,
+             min_s=5.0, max_s=None)                           -> Timeline
+
+    registries  POLICIES, EVIDENCE_SETTINGS
+    writes      cuts.json (evidence, retune) · timeline.json (run)
+    raises      KeyError, ValueError, MissingArtifact
+
+`POLICIES` is what each policy depends on, and so the run order:
+
+    uniform    nothing.  arithmetic over a duration media.json already has
+    scene      the picture.  a scene pass decodes and scores it
+    vad        a transcript. audio must finish first
+    speaker    a transcript. audio must finish first
+
+Measured on the reference video: `evidence` 14.0 s, `run` 0.03 s, `retune`
+0.004 s. `retune` is ~3,500x faster than re-detecting because the score series
+is cached, and it is exact rather than approximate -- both threshold the same
+array.
+
+`detect` returns None for `uniform`: there are no cuts, and that is the
+document. `evidence` still returns a `Produced` carrying `skipped:
+["evidence"]`, because a receipt for a step that did nothing is still a
+receipt -- and one call must answer the same way over HTTP and from an import.
+
+A setting the chosen policy cannot read is refused, not ignored:
+`--policy speaker --silence 2.0` names a parameter `speaker_cuts` does not
+take.
+
+A floor above the ceiling is refused too. `enforce` merges up to `min_s` and
+*then* splits at `max_s`, so the split wins -- `min_s=30` against a ceiling
+defaulting to 20 produced an 18.07 s chunk and reported success.
+
+
+4 - video
+~~~~~~~~~
+    run(video_id, sampler="uniform", per_second=1.0, every_n=None,
+        min_interval_s=0.0, max_per_chunk=None, threshold=None,
+        vocabulary=None, confidence=None, languages=None,
+        frame_store=True, store_scope="sampled", prune_store=False,
+        on_progress=None)                                     -> Produced
+    load(video_id)                                            -> Manifest
+    ingest(media, timeline, sampler="uniform", ..., frames=None,
+           store_scope="sampled", on_progress=None)           -> Manifest
+
+    registry  SAMPLER_SETTINGS
+    reads     media.json, timeline.json
+    writes    manifest.json, store/
+    raises    UnreadableSource, ValueError
+
+    sampler         uniform | clip | yolo | objects | text, each optionally
+                    carrying a question: `clip:text`, `clip:[text,scene]`,
+                    `clip:text+scene`. Specs naming the same sampler merge
+                    into one run -- selecting frames is the expensive half,
+                    and a second question about frames already chosen costs
+                    one more describe call
+    per_second      frames kept per second of media time
+    every_n         uniform only: a stride over the *decimated* stream, so
+                    the cadence in seconds depends on per_second
+    min_interval_s  a floor in seconds, enforced before the strategy runs
+    max_per_chunk   a ceiling per chunk, likewise
+    threshold       how much the frame must have CHANGED to keep it
+    confidence      how sure the DETECTOR must be that a box is a box. A
+                    different quantity on a different scale -- objects only
+    vocabulary      objects only: the class names to look for. The
+                    highest-value setting here, and it has no useful default
+    languages       text only: what EasyOCR is asked to read. Without it the
+                    sampler is English-only with no way to say otherwise
+    frames          (ingest) any `Frames`: a FrameStore over a directory you
+                    name, or a MemoryFrames so nothing touches disk
+    frame_store     (run) whether to keep pixels at all
+    store_scope     sampled | decimated. `decimated` keeps every frame the
+                    samplers were offered, so a threshold can be retuned
+                    later without decoding again
+    prune_store     delete stored frames no manifest names. Irreversible,
+                    which is why it is opt-in
+
+A setting no chosen sampler reads is refused: `sampler="uniform"` with
+`confidence=0.55` names something only `objects` reads. So is an unknown
+question -- `sampler="uniform:nope"` used to complete in 1.09 s having stored
+61 frames (26.68 MB) and then poison every later describe. It is 0 ms now,
+with nothing decoded.
+
+`frames_sampled` is picks and `stored_frames` is files, and they are different
+numbers: a frame two samplers chose is one file.
+
+
+5 - cut
+~~~~~~~
+    run(video_id)                                             -> Produced
+    load(video_id)                                            -> Transcript
+    apply(timeline, raw)                                      -> Transcript
+
+    reads    transcript.raw.json, timeline.json
+    writes   transcript.json
+
+Costs no model and can be repeated at will -- which is the whole point of
+storing the raw transcript before cutting it. Chunks with no speech are kept,
+with empty text: the grid is shared, so dropping the quiet ones would renumber
+everything after them.
+
+
+6 - describe
+~~~~~~~~~~~~
+The expensive stage. One call per (chunk, sampler).
+
+    run(video_id, describer=None, samplers=None, limit=None, resume=True,
+        max_output_tokens=None, on_progress=None)             -> Produced
+    load(video_id)                                             -> Descriptions
+    answer(manifest, timeline, frames, describer=None, samplers=None,
+           limit=None, existing=None, max_output_tokens=None,
+           on_progress=None)                                   -> Descriptions
+    available()                                                -> list[str]
+
+    reads    manifest.json, timeline.json, store/
+    writes   descriptions.json
+    raises   DescriberUnavailable, StoreUnavailable, ProviderUnavailable,
+             ValueError
+
+    describer          provider or provider/model; None -> $FALCONVAR_DESCRIBER,
+                       then openai
+    samplers           only these pairings, e.g. ["clip:text"]
+    limit              at most this many calls. `limit=0` is refused: the word
+                       reads as a ceiling, and no ceiling is what None means,
+                       so zero is the one value with two readings
+    resume             skip pairs already answered under the same manifest,
+                       describer and prompt version
+    existing           (answer) the previous Descriptions -- which is what
+                       `resume` reads from disk on the id path
+    max_output_tokens  the ceiling on one answer. Part of the resume key, so
+                       raising it re-describes everything, at cost
+
+Resume is keyed on the manifest, the describer **and** the prompts -- and the
+prompt hashes are per question, so adding a question invalidates nothing.
+Measured: editing one question of two gave 14 described / 14 skipped; adding
+an unrelated third gave 0 described / 28 skipped in 0.0 s.
+
+A missing API key is refused in ~2 ms, before the manifest, the grid or a
+single frame -- not after the whole video has been read.
+
+Describing reads the frames it was given and nothing else. There is no
+seek-the-video fallback: it would quietly do the store's job while leaving it
+broken, silently, since the output is identical and only ~40x slower.
+
+
+7 - embed
+~~~~~~~~~
+    run(video_id, embedder=None, batch=64, on_progress=None)  -> Produced
+    encode(descriptions=None, transcript=None, embedder=None, batch=64,
+           on_progress=None)                                  -> list[Unit]
+    available()                                               -> list[str]
+    readable.load(video_id)                                   -> Embedded
+
+    reads    descriptions.json, transcript.json, embedded.json (to resume)
+    writes   embedded.json -- the text AND the vectors
+    raises   EmbedderUnavailable, ProviderUnavailable, ValueError
+
+**There is no destination argument, and there have been two.** A `sink` it
+never read, then an `index_name` naming a vector store to upsert into. Both
+made the paid half depend on a server being reachable. It writes one file; a
+pipeline naming a `database` pushes a copy through
+`supabase.write_embeddings`. `batch=0` is refused -- it used to reach
+`range()`, which answers "arg 3 must not be zero", the interpreter talking
+about a loop the caller cannot see.
+
+`run` embeds **only what changed**: it reads the previous `embedded.json` and
+carries forward every vector whose `text_hash` is unchanged *under the same
+embedder key*, so a switched model is entirely new work. `encode` does not
+resume -- it is handed documents, not a data root -- and says so.
+
+`embedded.json` names the embedder that made its vectors and is rewritten
+whole, so one embedder is on disk at a time. Postgres holds several at once:
+every row carries the key and every query filters on it before a distance is
+taken.
+
+This is the only component with no `load`; `readable.load(video_id)` is how.
+
+
+8 - retrieve
+~~~~~~~~~~~~
+    search(query, video_id=None, embedder=None, moments=5, sampler=None,
+           candidates=20, question=None, strategy=None,
+           chunk_ids=None, window=0, after=None, before=None,
+           structured=None, video_ids=None)   -> (list[Moment], list[str])
+    videos(query, embedder=None, limit=5)  -> list[dict]
+
+Neither `run` nor `load`: a query is not a video id, and what comes back is a
+ranking rather than an artifact.
+
+`videos` answers a **different question** from `search`: which video is this
+about, ranked by each video's whole-video summary out of `video_embeddings`.
+`search` answers which twenty seconds, and every filter it takes narrows
+*inside* one video. Postgres only, because that is where the summaries are
+written -- and the two never share a ranking, because a whole-video "moment"
+beside real ones is not something you can play.
+
+    # every video in the index
+    moments, notes = retrieve.search("the audience laughed")
+
+    # one video
+    moments, notes = retrieve.search("the audience laughed", video_id="talk")
+
+    # a window inside one, in media seconds
+    moments, notes = retrieve.search("the key insight", video_id="talk",
+                                     after=120.0, before=300.0)
+
+    # by question, wherever it was asked -- the query a person actually makes
+    moments, notes = retrieve.search("the diagram", video_id="talk",
+                                     question="text")
+
+    # several named videos; video_id is the one-element shorthand
+    moments, notes = retrieve.search("the budget", video_ids=["q1", "q2"])
+
+The three narrowings worth knowing are `sampler` (one pairing, `clip:text`),
+`question` (wherever it was asked) and `strategy` (one sampler's whole
+output). They return genuinely different answers, which is the point.
+
+A `Moment` is `(video_id, chunk_id, start_ts, end_ts, score, hits)`. Each hit
+carries `sampler_id`, `sampler`, `question`, `content`, `structured`,
+`dense_rank` and `text_rank` -- `text_rank: None` means the lexical half was
+silent on that query.
+
+**The score is a rank fusion, not a similarity.** `1/(k+best) +
+0.5/(k+second)` at k=10, so 0.1326 is the ceiling for a chunk contributing two
+units. Measured, a nonsense query scores 0.1136 against a real one's 0.1294:
+there is no relevance floor, and the ranks are the signal.
+
+**Read `notes` when `moments` is empty.** That is the case they exist for --
+searching with an embedder that never indexed the video is otherwise a silent
+200, and the note names the embedder key.
+
+
+FRAMES
+------
+Pixels are the one thing components hand each other that is not a document, so
+they have their own protocol.
+
+    from falconvar.video_rag.frames import Frames, FrameStore, MemoryFrames
+
+    FrameStore(root)     one JPEG per frame under a directory you name. What
+                         the pipeline uses and what `recovery/` rebuilds
+    MemoryFrames()       the same bytes in a dict. Nothing written
+
+Both answer `write(index, image)`, `read(index) -> bytes`, `index in frames`,
+`prune(keep)` and `config()`.
+
+`MemoryFrames` is what makes a filesystem-free run possible, and the cost is
+the caller's to accept: measured, a 5-minute video at 1 fps held 299 frames
+and **170 MB**. An hour of the same is gigabytes. Name a directory with
+`FrameStore` when that matters.
+
+Frames are byte-identical between the two -- verified, 299/299 on the
+reference video.
+
+
+WORKSPACES
+----------
+`configure()` says where *this process* writes, which is the right answer for
+an application that owns its deployment and the wrong one for anything serving
+more than one.
+
+    from falconvar import Workspace
+
+    ws = Workspace(data_root="/var/lib/tenant-a")
+    ws.media.run("talk.mp4")            # bound to this workspace
+    ws.videos()                         # what is under its root
+
+    with Workspace(data_root="/var/lib/tenant-b"):
+        media.run("talk.mp4")           # module-level call, other root
+
+A `ContextVar`, so it is already per-thread and per-asyncio-task and two
+workspaces cannot bleed into each other under the concurrency `describe`
+already runs. Nesting unwinds exactly. Verified across threads, and across the
+describe question vocabulary -- which lives under the data root and whose
+cache is keyed by it.
+
+**API keys are process-global.** `env_file=` reads that file, but keys land in
+`os.environ`, and one process has one of those. Two workspaces needing
+*different* values for `OPENAI_API_KEY` is not supported, and saying so beats
+a parameter that looks like it works.
+
+The pure verbs need none of this: they resolve no root at all.
+
+
+PROGRESS
+--------
+`Produced` says what a component did once it has finished, which is no answer
+at all for a stage that takes four minutes of paid calls.
+
+    from falconvar.shared.progress import Progress
+
+    def tick(p: Progress):
+        print(f"{p.component} {p.completed}/{p.total}  {p.current}")
+
+    describe.run(vid, on_progress=tick)     # per answer
+    video.run(vid, on_progress=tick)        # per chunk
+    embed.run(vid, on_progress=tick)        # per batch
+
+`Progress` carries `component`, `total`, `completed`, `skipped`, `current`,
+`result` and a `.fraction`. `skipped` is counted separately because "nothing
+to do" and "everything done" look identical otherwise.
+
+**describe's events arrive out of order.** Calls are gathered under the
+provider's concurrency, so completion order is not manifest order. The counts
+are still exact; `current` is whichever call just landed. The callback runs on
+the event loop, so a slow one serialises the gather it is reporting on.
+
+At level 2, an `on_step` that takes a **third** argument also receives these:
+
+    def on_step(component, produced, progress=None): ...
+
+Whether it takes one is read off the callback, so every two-argument callback
+already written keeps working untouched.
+
+
+LOGGING
+-------
+One logger per component, and the library configures no handlers.
+
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger("falconvar").setLevel(logging.DEBUG)
+
+    INFO  falconvar.media       started
+    INFO  falconvar.media       done in 30.4 ms  duration_s=299.0 ...
+    INFO  falconvar.boundaries  done in 19.2 ms  policy=scene chunks=15 ...
+    INFO  falconvar.video       done in 5031.4 ms  sampled=299 stored=299 ...
+    INFO  falconvar.video_rag   done in 7693.1 ms  policy=uniform steps=5 ...
+
+Every record carries `video_id`, `component`, `event` (read/write/skip/done),
+`duration_ms`, `artifact` and `reason` on `extra`, so a JSON handler has them
+without parsing the message.
+
+DEBUG is what was read and what was skipped and why; INFO is a component
+starting and finishing with its headline numbers; ERROR is a failure. WARNING
+is reserved for what is reported-but-continued, and is deliberately *not* used
+for a setting resolved by its documented default -- warning about a working
+default teaches people to filter warnings out.
+
+
+WHERE THINGS GO
+---------------
+**A component writes one file and stops.** No component takes a destination
+argument of any kind -- not a `sink`, not an index name. It produces its
+document at the path its artifact name resolves to, and that is the whole of
+its relationship with storage.
+
+Whether a copy also lands in a database is the *pipeline's* question:
+
+    video_rag("x.mp4", database="supabase")
+    workflow.Options(..., database="supabase")
+
+which reads each artifact back and hands it to the function named for it in
+`falconvar.shared.storage.supabase` -- `write_media`, `write_timeline`,
+`write_manifest`, `write_descriptions`, `write_embeddings` and so on, one per
+document. A second database is a sibling module offering the same names.
+
+    supabase.write_timeline(video_id, document)     # one document
+    supabase.write(video_id, "timeline", document)  # by name, for a loop
+
+One per document, and `WRITERS` is the whole list:
+
+    media            write_media            videos
+    raw_transcript   write_raw_transcript   transcripts
+    cuts             write_cuts             cuts
+    timeline         write_timeline         timelines + chunks
+    manifest         write_manifest         chunk_samplers + manifests
+    transcript       write_transcript       transcripts + transcript_chunks
+    descriptions     write_descriptions     descriptions
+    embedded         write_embeddings       embeddings
+    aggregate        write_aggregate        aggregates (+ entities)
+
+`store` is absent and that is the answer for it: a directory of JPEGs has no
+row representation. So is anything else missing from that table -- `write`
+returns False rather than writing nothing and reporting success.
+
+Failures are **reported and continued past**, and land in `Run.problems` as a
+list. The files have landed and the next component reads the files, so a
+database that is down is a report rather than a failed run. Each one is also
+logged at WARNING under the producing component.
+
+`embed` writes its vectors into `embedded.json` like any other document. There
+was a `VectorIndex` with two implementations, Qdrant and Postgres, and it made
+the paid half of embedding depend on a server being reachable -- a database
+down, or an embedded Qdrant folder lock still held, failed a run whose API
+calls had already been paid for. Ranking is still Postgres', through the
+`search_embeddings` RPC.
+
+
+ERRORS
+------
+Every deliberate failure is a `FalconvarError`, and every one keeps its
+builtin base, so `except ValueError` already written still fires.
+
+    FalconvarError
+      Unavailable                  <- the branch worth catching: no package,
+        ModelUnavailable              no weights, no key, no server. None of
+        ProviderUnavailable           it fixed by retrying
+        DescriberUnavailable
+        EmbedderUnavailable
+        StoreUnavailable
+      UnusableMedia                (RuntimeError)      not a media file
+      UnusableVideoId              (ValueError)        the id names a directory
+      VideoIdTaken                 (FileExistsError)   a different file has it
+      MissingArtifact              (FileNotFoundError) a step was skipped
+      UnknownOption                (ValueError)        not in a fixed
+                                                       vocabulary
+      UnreadableSource             (RuntimeError)      the decoder refused it
+
+**Catch `Unavailable` for a missing key, not the component's own class.** The
+check lives in `providers.require`, which knows the *role* and not the
+component, so `except embed.EmbedderUnavailable` does not catch it.
+
+`MissingArtifact` names the component that makes what is missing:
+
+    V has no timeline; `boundaries` writes it. Present: media
+    no video 'ghost' under <root>\out -- `media(path)` is what creates one
+
+
+THINGS WORTH KNOWING
+--------------------
+
+**Read `video_id` off the result, not off what you passed in.** A different
+file holding that id gets a new one, and every later call needs the answer.
+
+**A video id becomes a directory name, so it is checked and not cleaned.**
+ASCII letters, digits, `.`, `_` and `-`, and no leading underscore.
+`media.run(f, video_id="../../escaped")` used to write two levels above the
+data root while `Produced.video_id` read back unchanged. Cleaning instead of
+refusing would be worse: two ids differing only in a refused character would
+land in one directory and overwrite each other.
+
+**Components exchange files, never objects -- on the `run` path.** That is
+what makes each independently runnable, retryable and testable, and what lets
+one API route serve all of them. The pure verbs are the same work with the
+files taken out.
+
+**`import falconvar.video_rag` stays under 1 ms.** The exports are lazy:
+binding `video_rag` imports 53 modules and `av`, which someone wanting one
+component should not pay for.
+
+**Every heavy stage wants the same GPU.** CLIP and YOLO in the video pass,
+Whisper and pyannote in the audio one. Two videos at once doubles the resident
+weights and invites an allocator failure halfway through the dearer one.
+
+**Thresholds do not transfer between videos.** Same sampler, same domain, the
+keep rate ranged 13.4% to 59.2% across three files. If cost is too high use
+`min_interval_s` or `max_per_chunk`, not a lower threshold: those keep the
+most-changed frames and even out the per-chunk yield, where a lower threshold
+just keeps fewer and leaves the distribution lopsided.
+
+**A store accumulates across runs and is never pruned automatically.**
+Ingesting with `uniform` and then `clip` left 206 files where the manifest
+named 83. `prune_store=True` is opt-in because deleting frames is the one
+irreversible thing ingest can do.

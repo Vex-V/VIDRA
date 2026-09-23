@@ -23,7 +23,7 @@ from typing import Any, Optional, Sequence
 
 from ..shared import paths
 from ..shared.contracts.documents import Aggregate, Produced, fingerprint_of
-from ..shared.storage import sinks
+from ..shared.storage import files
 from . import available, build, definitions, expand, kind_of, takes_inputs, tier_of
 from .base import TIERS, Context, missing
 from .inputs import (InputError, answer_id, answer_of_file, check, filename,
@@ -43,14 +43,14 @@ def context_for(video_id: str) -> Context:
     from ..shared import paths
     from ..shared.contracts.documents import (Descriptions, Manifest, Timeline,
                                               Transcript)
-    from ..shared.storage import sinks
+    from ..shared.storage import files
 
     def read(name: str, cls: Any) -> Any:
-        return (cls.from_dict(sinks.read_json(paths.artifact(video_id, name)))
+        return (cls.from_dict(files.read_json(paths.require(video_id, name)))
                 if paths.exists(video_id, name) else None)
 
     timeline = Timeline.from_dict(
-        sinks.read_json(paths.artifact(video_id, "timeline")))
+        files.read_json(paths.require(video_id, "timeline")))
     return Context(video_id, timeline, read("manifest", Manifest),
                    read("descriptions", Descriptions),
                    read("transcript", Transcript))
@@ -157,18 +157,16 @@ def validate(tier: str = "free", llm: Optional[str] = None, inputs: Any = None,
 def run(video_id: str, tier: str = "free",
         only: Optional[Sequence[str] | str] = None,
         force: bool = False,
-        sink: str | Sequence[str] = "file",
         llm: Optional[str] = None,
         embedder: Optional[str] = None,
-        index: Optional[str] = None,
         inputs: Optional[dict[str, str] | str] = None) -> Produced:
     """Run every aggregator up to ``tier``, cheapest first.
 
     `inputs` is `{aggregator: selection}` -- or `name=selection;...` -- and an
     aggregator not named reads its own default. `llm` is who answers the paid
     tier and `embedder` who embeds for the link profiles, each a provider or
-    `provider/model`. `index` naming `supabase` also stores the summary as the
-    video's vector, which `/search level=video` ranks.
+    `provider/model`. The video's own summary vector is not made here:
+    `workflow` asks for it with `index_summary` when a run names a database.
     """
     problems = _plan_problems(tier, inputs, only)
     if problems:
@@ -182,7 +180,6 @@ def run(video_id: str, tier: str = "free",
     grid = context.timeline.fingerprint()
 
     directory = paths.artifact(video_id, "aggregates")
-    backends = sinks.parse(sink)
     produced: dict[str, str] = {}
     skipped: dict[str, str] = {}
     ran: list[str] = []
@@ -227,7 +224,7 @@ def run(video_id: str, tier: str = "free",
             # model is a different answer the caller asked for.
             stored = None
             if not force and path.exists():
-                candidate = Aggregate.from_dict(sinks.read_json(path))
+                candidate = Aggregate.from_dict(files.read_json(path))
                 if (candidate.inputs_fingerprint == expected
                         and made_by(candidate) == author):
                     stored = candidate
@@ -251,44 +248,27 @@ def run(video_id: str, tier: str = "free",
             if kind_of(name) is not None:
                 used[name] = aggregator.version
 
-            # Not `sinks.write`: that resolves one path per artifact name, and
-            # each answer writes its own file under `aggregates/`. The row half
-            # goes through the same writer every other component uses.
-            if "file" in backends:
-                produced[answer] = str(sinks.write_json(path, document.as_dict())
-                                       if stored is None else path)
-            if "supabase" in backends:
-                from ..shared.storage import rows
-                rows.WRITERS["aggregate"](video_id, document.as_dict())
-                produced.setdefault(answer, "aggregate@supabase")
+            # Not `files.write`: that resolves one path per artifact name, and
+            # each answer writes its own file under `aggregates/`. Postgres is
+            # the caller's business -- `workflow` reads these back and hands
+            # each to `supabase.write_aggregate`.
+            produced[answer] = str(files.write_json(path, document.as_dict())
+                                   if stored is None else path)
             ran.append(answer)
-
-    recorded = _record_definitions(used, backends)
-
-    # The whole-video vector, from the summary this run has in hand. It lived
-    # in `embed`, which read `summary.json` -- a file that on a first run did
-    # not exist yet, because embed runs before aggregate. Written here now,
-    # through `shared`, so the handoff is not a call into the other tier.
-    video_units = 0
-    if "summary" in ran and index:
-        video_units = index_summary(
-            video_id, load(video_id, "summary").payload, embedder, index)
 
     return Produced(
         video_id=video_id, component="aggregate",
-        backend=",".join(backends),
         artifacts=produced,
         stats={"tier": tier, "ran": len(ran), "current": current,
                "computed": len(ran) - current, "aggregates": ran,
-               "models": sorted(models), "video_units": video_units,
-               "skipped": skipped, **recorded},
+               "models": sorted(models),
+               "skipped": skipped, "definitions": used},
         skipped=sorted(skipped),
     )
 
 
 def index_summary(video_id: str, payload: dict[str, Any],
-                  embedder: Optional[str] = None,
-                  index: Optional[str] = None) -> int:
+                  embedder: Optional[str] = None) -> int:
     """Store the whole video as one vector in `video_embeddings`. Postgres only.
 
     **Its own table, never beside the moments.** `embeddings` answers *which
@@ -305,12 +285,9 @@ def index_summary(video_id: str, payload: dict[str, Any],
     Best-effort: a video-level vector that fails to write must not fail the
     aggregates that already succeeded.
     """
-    names = [n.strip() for n in (index or "").split(",") if n.strip()]
-    if "supabase" not in names:
-        return 0
     from ..shared.contracts.units import Unit, render
     from ..shared.models import embedders
-    from ..shared.storage import rows
+    from ..shared.storage import supabase
     try:
         summary = (payload.get("summary") or "").strip()
         if not summary:
@@ -322,20 +299,18 @@ def index_summary(video_id: str, payload: dict[str, Any],
                     structured, sampler="summary", question="summary")
         built = embedders.build(embedder)
         unit.vector = built.embed([unit.content])[0]
-        return rows.write_video_unit(unit, built.key)
+        return supabase.write_video_unit(unit, built.key)
     except Exception:                                    # noqa: BLE001
         return 0
 
 
-def _record_definitions(used: dict[str, str], backends: Sequence[str]) -> dict[str, Any]:
+def definition_rows(used: dict[str, str]) -> list[dict[str, Any]]:
     """Provenance for Postgres: what each definition said at the version used.
 
-    Reported, never raised -- the answers already landed, and a missing table
-    must read as a missing table rather than as a run with nothing to record.
+    Built here because the vocabulary is this tier's; written by whoever names
+    a database. It used to write them itself, from inside the run -- the same
+    layering the sink removal undid across video_rag.
     """
-    if "supabase" not in backends or not used:
-        return {}
-    from ..shared.storage import rows
     entries = []
     for name, version in sorted(used.items()):
         section, definition = definitions.locate(name)
@@ -343,16 +318,12 @@ def _record_definitions(used: dict[str, str], backends: Sequence[str]) -> dict[s
         entries.append({"name": name, "version": version, "kind": kind_of(name),
                         "definition": {k: v for k, v in entry.items() if k != "builtin"},
                         "builtin": bool(entry.get("builtin"))})
-    try:
-        return {"definitions_recorded": rows.write_definitions(entries)}
-    except Exception as exc:                              # noqa: BLE001
-        return {"definitions_recorded": 0,
-                "definitions_error": f"{type(exc).__name__}: {exc}"[:300]}
+    return entries
 
 
 def load(video_id: str, name: str) -> Aggregate:
     path = paths.artifact(video_id, "aggregates") / filename(name)
-    return Aggregate.from_dict(sinks.read_json(path))
+    return Aggregate.from_dict(files.read_json(path))
 
 
 def answers(video_id: str) -> list[str]:
@@ -379,15 +350,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "summary=transcript+clip:activity or "
                          "summary=clip:hazards[severity],clip:hazards[hazards]")
     ap.add_argument("--force", action="store_true", help="rebuild what is current")
-    ap.add_argument("--sink", default="file", help="file | supabase | both")
     ap.add_argument("--llm", default=None,
                     help="who answers the llm tier: a provider or provider/model; "
                          "default FALCONVAR_LLM, then openai")
     ap.add_argument("--embedder", default=None,
                     help="who embeds for the link profiles: a provider or "
                          "provider/model; default FALCONVAR_EMBEDDER, then openai")
-    ap.add_argument("--index", default=None,
-                    help="`supabase` also stores the summary as the video's vector")
     ap.add_argument("--list", action="store_true",
                     help="every aggregator, its tier and what it reads by default")
     ap.add_argument("--json", action="store_true")
@@ -406,8 +374,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         ap.error("video_id is required unless --list")
 
     try:
-        produced = run(args.video_id, args.tier, args.only, args.force, args.sink,
-                       args.llm, args.embedder, args.index, ";".join(args.input))
+        produced = run(args.video_id, args.tier, args.only, args.force,
+                       args.llm, args.embedder, ";".join(args.input))
     except (KeyError, ValueError, FileNotFoundError) as exc:
         print(f"error: {exc}")
         return 1
@@ -419,7 +387,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     s = produced.stats
     print(f"{produced.video_id}   tier={s['tier']}")
     print(f"  ran          {s['ran']}   ({s['computed']} computed, "
-          f"{s['current']} reused)   -> {produced.backend}")
+          f"{s['current']} reused)")
     for name in s["aggregates"]:
         print(f"    {name}")
     for name, why in s["skipped"].items():

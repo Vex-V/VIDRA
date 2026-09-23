@@ -6,20 +6,31 @@ from typing import Optional, Sequence
 
 from ..boundaries import load as load_timeline
 from ..video import load as load_manifest
-from ...shared import env, paths
-from ...shared.storage import sinks
-from ...shared.contracts.documents import Descriptions, Produced
+from ...shared import env, logs, paths, progress
+from ...shared.storage import files
+from ...shared.contracts.documents import (Descriptions, Manifest,
+                                           Produced, Timeline)
 from . import base, library, prompts
 from .backends import stub  # noqa: F401  -- self-registers
-from .frames import FrameSource, StoreUnavailable
+from ..frames import Frames
+from .frames import FrameSource, StoreUnavailable, store_of
 
-def describe(video_id: str, describer: Optional[str] = None,
-             samplers: Optional[Sequence[str]] = None,
-             limit: Optional[int] = None,
-             resume: bool = True,
-             max_output_tokens: Optional[int] = None,
-             sink: str | Sequence[str] = "file") -> Produced:
-    """One call per (chunk, sampler). The expensive stage.
+def answer(manifest: Manifest, timeline: Timeline, frames: Frames,
+           describer: Optional[str] = None,
+           samplers: Optional[Sequence[str]] = None,
+           limit: Optional[int] = None,
+           existing: Optional[Descriptions] = None,
+           max_output_tokens: Optional[int] = None,
+           on_progress: Optional[progress.Reporter] = None) -> Descriptions:
+    """One call per (chunk, sampler), over documents and pixels in hand.
+
+    Reads and writes no artifact. `frames` is any `Frames` -- the
+    `FrameStore` ingest wrote, or the `MemoryFrames` it filled -- so a whole
+    run can happen without a data root.
+
+    `existing` is what `resume` reads from disk on the `run` path: hand it the
+    previous `Descriptions` and every pair still current is skipped, exactly
+    as it would be. Omit it and everything is described, at cost.
 
     `describer` is a provider or `provider/model`; None resolves through
     `shared.models.providers` -- FALCONVAR_DESCRIBER, then openai.
@@ -34,12 +45,26 @@ def describe(video_id: str, describer: Optional[str] = None,
     cannot say which it was. A backend that loads no model (`stub`) ignores it.
     """
     env.load()
-    manifest = load_manifest(video_id)
-    timeline = load_timeline(video_id)
+    # Before a single frame is read: a missing key found by the first call
+    # arrives after every frame has been read, which is the failure
+    # `workflow.validate` exists to prevent -- and a caller driving the
+    # components itself never passes through `validate`. Here rather than in
+    # `run` so that both ways in are guarded.
+    from ...shared.models import providers
+    providers.require("describe", describer)
+
+    # `limit=0` described nothing and reported success. To a caller the word
+    # reads as a ceiling, and no ceiling is what `None` means here -- so zero
+    # is the one value with two readings, and the run that does nothing looks
+    # exactly like the run that had nothing to do.
+    if limit is not None and limit < 1:
+        raise ValueError(
+            f"limit must be at least 1, not {limit}; "
+            f"leave it None for no limit")
 
     if manifest.timeline_fingerprint != timeline.fingerprint():
         raise ValueError(
-            f"{video_id}: the manifest was built on a different grid "
+            f"{manifest.video_id}: the manifest was built on a different grid "
             f"({manifest.timeline_fingerprint} vs {timeline.fingerprint()}). "
             "Re-run ingest against the current timeline.")
 
@@ -52,25 +77,55 @@ def describe(video_id: str, describer: Optional[str] = None,
             f"manifest names unknown question(s) {', '.join(unknown)}; "
             f"known: {', '.join(prompts.questions())}")
 
-    existing = None
-    if resume and paths.exists(video_id, "descriptions"):
-        existing = load(video_id)
-
     built = base.build(describer, **({} if max_output_tokens is None
                                      else {"max_output_tokens": max_output_tokens}))
-    from .reader import answer
+    from .reader import answer as _pass
 
-    with FrameSource(video_id, manifest) as source:
-        document = answer(manifest, timeline, built, source,
-                          samplers, existing, limit)
+    with FrameSource(frames, manifest) as source:
+        return _pass(manifest, timeline, built, source, samplers, existing,
+                     limit, on_progress)
 
-    written = sinks.write(video_id, "descriptions", document.as_dict(), sink)
+
+def describe(video_id: str, describer: Optional[str] = None,
+             samplers: Optional[Sequence[str]] = None,
+             limit: Optional[int] = None,
+             resume: bool = True,
+             max_output_tokens: Optional[int] = None,
+             on_progress: Optional[progress.Reporter] = None) -> Produced:
+    """Describe by id, from this video's own frame store. The expensive stage.
+
+    `answer` plus a read at each end; every check lives down there. `resume`
+    is the one thing that cannot: it means "read what is already on disk",
+    which is what `answer` takes as `existing`.
+    """
+    with logs.timed("describe", video_id) as done:
+        manifest = load_manifest(video_id)
+        timeline = load_timeline(video_id)
+
+        existing = None
+        if resume and paths.exists(video_id, "descriptions"):
+            existing = load(video_id)
+
+        document = answer(manifest, timeline,
+                          store_of(video_id),
+                          describer, samplers, limit, existing,
+                          max_output_tokens, on_progress)
+
+        where = files.write(video_id, "descriptions", document.as_dict())
+        done(described=document.stats.get("described"),
+             skipped_pairs=document.stats.get("skipped"),
+             describer=_named(document.model))
     return Produced(
-        video_id=video_id, component="describe", backend=",".join(written),
-        artifacts={"descriptions": written.get("file", "")},
-        stats={**document.stats, "describer": built.name,
-               "model": (document.model.get("params") or {}).get("model", built.name),
-               **_record_prompts(document.model.get("prompts") or {}, sink)},
+        video_id=video_id, component="describe",
+        artifacts={"descriptions": where},
+        # Off the stored model block rather than off a local: `answer` builds
+        # the describer now, and the block is what a reader has anyway.
+        # `name` is the model backend's key and `describer` the stub's -- the
+        # two registries spell it differently, and both are `built.name`.
+        stats={**document.stats, "describer": _named(document.model),
+               "model": ((document.model.get("params") or {})
+                         .get("model", _named(document.model))),
+               },
     )
 
 
@@ -80,30 +135,26 @@ def describe(video_id: str, describer: Optional[str] = None,
 run = describe
 
 
-def _record_prompts(versions: dict[str, str],
-                    sink: str | Sequence[str]) -> dict[str, object]:
-    """Append what each question said, at the version this run asked it under.
+def _named(model: dict[str, object]) -> str:
+    """The describer's own name, whichever key its backend records it under."""
+    return str(model.get("name") or model.get("describer") or "")
+
+
+def prompt_rows(versions: dict[str, str]) -> list[dict[str, object]]:
+    """What each question said, at the version a run asked it under.
 
     `descriptions.model` already records `{question: hash}`, which lets a
     reader *detect* that an answer came from a different prompt version. It
     cannot recover what that version said -- edit an instruction and the old
-    text is gone -- so the row is what makes a description's provenance
+    text is gone -- so these rows are what make a description's provenance
     readable rather than merely comparable.
 
-    Best-effort and after the descriptions are written, exactly as the Postgres
-    half of `sinks.write` is: this is provenance, and losing it must not fail a
-    stage that has already paid for its answers.
-
-    But the failure is **reported**, never swallowed. Returning a bare 0 made a
-    missing column read exactly like a run with nothing to record -- and the
-    first version of this did precisely that, hiding a `PGRST204` behind a
-    number that looked ordinary. `sinks.write` takes the same stance: continue,
-    and say what went wrong.
+    This builds them and writes nothing. It used to write them to Postgres
+    itself, from inside the component, which is the layering the sink removal
+    undid: `video_rag.driver` hands these to `supabase.write_prompts` when a
+    run names a database, and a run that names none never assembles them.
     """
-    if "supabase" not in sinks.parse(sink) or not versions:
-        return {"prompts_recorded": 0}
-    from ...shared.storage import rows
-    entries = []
+    entries: list[dict[str, object]] = []
     for name, version in sorted(versions.items()):
         entry = library.load()["questions"].get(name) or {}
         shape = library.shape_of(name)
@@ -115,16 +166,12 @@ def _record_prompts(versions: dict[str, str],
             "builtin": bool(entry.get("builtin")),
             "about": entry.get("about") or None,
         })
-    try:
-        return {"prompts_recorded": rows.write_prompts(entries)}
-    except Exception as exc:                              # noqa: BLE001
-        return {"prompts_recorded": 0,
-                "prompts_error": f"{type(exc).__name__}: {exc}"[:300]}
+    return entries
 
 
 def load(video_id: str) -> Descriptions:
     return Descriptions.from_dict(
-        sinks.read_json(paths.artifact(video_id, "descriptions")))
+        files.read_json(paths.require(video_id, "descriptions")))
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -145,7 +192,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--max-tokens", type=int, default=None, dest="max_output_tokens",
                     help="ceiling on one answer (default 2000). Part of the "
                          "resume key, so changing it re-describes everything")
-    ap.add_argument("--sink", default="file")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -154,9 +200,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         produced = run(args.video_id, args.describer, samplers,
                        args.limit, not args.no_resume,
-                       args.max_output_tokens, args.sink)
+                       args.max_output_tokens)
     except (KeyError, ValueError, FileNotFoundError, StoreUnavailable,
-            base.DescriberUnavailable, sinks.UnknownBackend) as exc:
+            base.DescriberUnavailable) as exc:
         print(f"error: {exc}")
         return 1
 

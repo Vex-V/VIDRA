@@ -6,7 +6,7 @@
     python db/wipe.py --yes            # no question
 
 Irreversible: descriptions, embeddings and llm aggregates cost paid calls to
-rebuild. Stop the API first -- the embedded Qdrant store is locked while it runs.
+rebuild.
 
 Keeps the schema (no re-install), custom prompts and definitions
 (`data/*.json`), `data/eval/` and `weights/`. The `prompts` and
