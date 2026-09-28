@@ -25,8 +25,8 @@ from __future__ import annotations
 #: `main` is deliberately absent: it is argparse, and `__main__.py` reaches it
 #: as `from .driver import main`. Nothing ever imported it from the package.
 from .base import DescriberUnavailable, available
-from .driver import answer, load, run
+from .driver import answer, describe, load
 from .frames import StoreUnavailable
 
 __all__ = ["DescriberUnavailable", "StoreUnavailable", "answer",
-           "available", "load", "run"]
+           "available", "describe", "load"]

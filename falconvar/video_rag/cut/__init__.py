@@ -25,6 +25,6 @@ from __future__ import annotations
 #:
 #: `main` is deliberately absent: it is argparse, and `__main__.py` reaches it
 #: as `from .driver import main`. Nothing ever imported it from the package.
-from .driver import apply, load, run
+from .driver import apply, cut, load
 
-__all__ = ["apply", "load", "run"]
+__all__ = ["apply", "cut", "load"]

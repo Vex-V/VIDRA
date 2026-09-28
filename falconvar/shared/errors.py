@@ -45,8 +45,9 @@ class ModelUnavailable(Unavailable):
     """
 
 
-class UnknownOption(FalconvarError, ValueError):
-    """A value outside a fixed vocabulary -- a sink, a policy, a conflict rule.
+class UnknownOption(FalconvarError, ValueError, KeyError):
+    """A value outside a fixed vocabulary -- a policy, a sampler, a
+    transcriber, a conflict rule.
 
     `sinks.UnknownBackend` covered exactly this while documents fanned out to
     several destinations, and removing it left the two remaining vocabularies
@@ -54,7 +55,29 @@ class UnknownOption(FalconvarError, ValueError):
     `ValueError`, which "anything the library refused" could not catch. Not
     exported: nobody catches a bad literal by name, and `except ValueError`
     already fires. It is here so the hierarchy has no hole in it.
+
+    **Both builtin bases.** The registries -- policies, samplers, audio
+    backends -- raised `KeyError` for an unknown name and the rest `ValueError`,
+    for the same mistake. Each is kept, so every `except` already written
+    against either still fires. `KeyError` renders its message quoted, as a
+    missing key's repr; this is a sentence, so it renders as one.
+    """
+
+    __str__ = Exception.__str__
+
+
+class Refused(FalconvarError, ValueError):
+    """A request the library will not carry out as given.
+
+    A setting out of range (`limit=0`, `batch=0`, a stride of 0), settings that
+    contradict each other (a floor above the ceiling), a setting nothing it
+    would run reads (`silence_s` under `speaker`), documents that do not belong
+    together (two videos, two grids), or nothing to do at all. Every one used
+    to be a bare `ValueError` -- measured by `example.py`, seven of the
+    refusals a caller meets first could not be caught as "anything the library
+    refused". The message says what to do instead.
     """
 
 
-__all__ = ["FalconvarError", "ModelUnavailable", "Unavailable", "UnknownOption"]
+__all__ = ["FalconvarError", "ModelUnavailable", "Refused", "Unavailable",
+           "UnknownOption"]

@@ -18,7 +18,8 @@ from typing import Any, Optional, Protocol
 
 from .source import Track
 #: The same class the local aggregates raise; see `shared/errors.py`.
-from ...shared.errors import ModelUnavailable
+from falconvar.shared.errors import ModelUnavailable
+from falconvar.shared.errors import UnknownOption
 
 
 # ---------------------------------------------------------------- transcribe
@@ -179,7 +180,7 @@ DIARIZERS: dict[str, Any] = {"none": NoDiarizer,
 
 def _resolve(registry: dict[str, Any], name: str, kind: str):
     if name not in registry:
-        raise KeyError(f"unknown {kind} {name!r}; known: {', '.join(registry)}")
+        raise UnknownOption(f"unknown {kind} {name!r}; known: {', '.join(registry)}")
     entry = registry[name]
     if isinstance(entry, str):
         module_name, class_name = entry.split(":")
@@ -213,7 +214,7 @@ def settings(kind: str, name: str) -> set[str]:
     """
     registry = {"transcriber": TRANSCRIBERS, "diarizer": DIARIZERS}.get(kind)
     if registry is None:
-        raise KeyError(f"unknown kind {kind!r}; known: transcriber, diarizer")
+        raise UnknownOption(f"unknown kind {kind!r}; known: transcriber, diarizer")
     import inspect
     cls = _resolve(registry, name, kind)
     if cls.__init__ is object.__init__:

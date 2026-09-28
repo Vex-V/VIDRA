@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...shared.contracts.documents import Cuts, RawTranscript
+from falconvar.shared.contracts.documents import Cuts, RawTranscript
+from falconvar.shared.errors import Refused, UnknownOption
 
 #: Below this, a gap between speech is a breath rather than a boundary.
 #: Whisper's own segments on narration sit a median 4.8 s apart with sub-second
@@ -100,7 +101,7 @@ def detect(transcript: RawTranscript, policy: str,
             scored = speaker_cuts(transcript)
             params = {"speakers": len(transcript.speakers)}
     else:
-        raise KeyError(f"unknown speech policy {policy!r}; known: vad, speaker")
+        raise UnknownOption(f"unknown speech policy {policy!r}; known: vad, speaker")
 
     return Cuts(
         video_id=transcript.video_id,
@@ -127,11 +128,11 @@ def rethreshold(cuts: Cuts, silence_s: float) -> Cuts:
     raising the number would silently drop real speaker changes.
     """
     if cuts.detector != "vad":
-        raise ValueError(
+        raise Refused(
             f"{cuts.detector!r} cuts are not thresholded, so there is nothing "
             "to retune; re-run the pass to change them")
     if not cuts.scores:
-        raise ValueError("this cuts document carries no gap series")
+        raise Refused("this cuts document carries no gap series")
     scored = list(zip(cuts.scores["at"], cuts.scores["values"]))
     kept = [(at, gap) for at, gap in scored if gap >= silence_s]
     return Cuts(

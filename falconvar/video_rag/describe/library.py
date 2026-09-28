@@ -49,9 +49,9 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from ...shared import paths
-from ...shared.errors import FalconvarError
-from ...shared.contracts.fields import (FIELD_NAME, FIELD_TYPES, MAX_ENUM,
+from falconvar.shared import paths
+from falconvar.shared.errors import FalconvarError
+from falconvar.shared.contracts.fields import (FIELD_NAME, FIELD_TYPES, MAX_ENUM,
                                         MAX_FIELDS, MAX_NESTED_KEYS,
                                         check_fields, compile_fields)
 
@@ -72,8 +72,9 @@ PLACEHOLDERS = {"n", "span", "vocabulary"}
 _lock = threading.Lock()
 #: Keyed by data root, not a single slot. The custom half lives at
 #: `paths.PROMPTS`, which is under the data root -- so with one slot a
-#: second `Workspace` was served the first one's vocabulary, and a
-#: question custom to one deployment leaked into another.
+#: `configure()` that moved the root mid-process was still served the old
+#: root's vocabulary, and a question custom to one deployment leaked into
+#: another.
 _cache: dict[str, dict[str, Any]] = {}
 
 
@@ -116,7 +117,7 @@ def compile_shape(spec: dict[str, Any]) -> dict[str, Any]:
     return {
         "summary": spec.get("summary") or "standard",
         "fallback": False,
-        "fields": {name: _compile_field(f) for name, f in fields.items()},
+        "fields": compile_fields(fields),
     }
 
 
@@ -187,16 +188,21 @@ def load(refresh: bool = False) -> dict[str, Any]:
                 continue
             try:
                 merged["shapes"][name] = compile_shape(spec)
-                declared = {f: list(s["identity"])
-                            for f, s in (spec.get("fields") or {}).items()
-                            if isinstance(s, dict) and s.get("identity")}
-                if declared:
-                    merged["identity"][name] = declared
-            except Exception:                              # noqa: BLE001
+            except Exception as exc:                       # noqa: BLE001
                 # A hand-edited shape that will not compile is dropped, and the
                 # question falls back to the general shape exactly as an
                 # unknown shape name already does. Refusing at write time is
                 # where the error belongs; this file is editable by hand too.
+                #
+                # Dropped *out loud*: `compile_shape` once called a function
+                # that did not exist, and every custom shape on disk was
+                # dropped here in silence -- nine of nine, each question
+                # answering in the fallback shape with nothing reporting it.
+                from falconvar.shared import logs
+                logs.logger("describe").warning(
+                    "custom shape %r dropped: %s", name, exc,
+                    extra={"component": "describe", "event": "dropped",
+                           "reason": f"{type(exc).__name__}: {exc}"[:300]})
                 continue
 
         for name, entry in (custom.get("questions") or {}).items():

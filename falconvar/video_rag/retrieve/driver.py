@@ -15,13 +15,15 @@ expects BM25 weights, measured at 13 of 41 units matched against Postgres' 21.
 
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence
 
 from ..boundaries import load as load_timeline
-from ...shared import paths
-from ...shared.models import embedders as embedders_mod
+from falconvar.shared.models import embedders as embedders_mod
 from . import postgres
 from .search import Moment, to_moments
+from falconvar.shared.errors import Refused
+from falconvar.shared.paths import MissingArtifact
 
 
 def scope_of(video_id: Optional[str | Sequence[str]] = None,
@@ -49,24 +51,28 @@ def scope_of(video_id: Optional[str | Sequence[str]] = None,
     return None
 
 
-def spans_of(video_id: str) -> list[tuple[float, float]]:
-    """The grid, from the local file or from `chunks` if there is none.
+def spans_of(video_id: str,
+             timeline: Optional[str | Path] = None) -> list[tuple[float, float]]:
+    """The grid: from a `timeline.json` if one is named, else from `chunks`.
 
     A span is stored in exactly one place -- the grid -- and everything else
-    joins on `chunk_id`. But `load_timeline` reads `timeline.json`, so a
-    deployment holding every row in Postgres and no output directory could not
-    search at all: measured, moving one file aside turned a working query into
-    `404 No such file or directory`. The database is the other copy of the same
-    grid, so it is the fallback rather than a second source of truth.
+    joins on `chunk_id`. The database holds the other copy of that same grid,
+    so it is a second reading of one source rather than a second source.
+
+    **The local half used to be found rather than given**, by resolving
+    `timeline.json` under a data root. That made a search depend on this
+    project's directory layout: measured, moving one file aside turned a
+    working query into `404 No such file or directory`. A caller that has the
+    grid on disk names it; one that does not gets the database, which is
+    where the vectors being searched already live.
     """
-    try:
-        return load_timeline(video_id).spans
-    except FileNotFoundError:
-        from ...shared.storage import db
-        rows = (db.client(write=False).table("chunks")
-                .select("chunk_id,start_ts,end_ts")
-                .eq("video_id", video_id).order("chunk_id").execute().data or [])
-        return [(float(r["start_ts"]), float(r["end_ts"])) for r in rows]
+    if timeline is not None and Path(timeline).exists():
+        return load_timeline(timeline).spans
+    from falconvar.shared.storage import db
+    rows = (db.client(write=False).table("chunks")
+            .select("chunk_id,start_ts,end_ts")
+            .eq("video_id", video_id).order("chunk_id").execute().data or [])
+    return [(float(r["start_ts"]), float(r["end_ts"])) for r in rows]
 
 
 def chunks_in(spans: Sequence[tuple[float, float]],
@@ -95,7 +101,8 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
            after: Optional[float] = None,
            before: Optional[float] = None,
            structured: Optional[dict[str, Any]] = None,
-           video_ids: Optional[Sequence[str]] = None
+           video_ids: Optional[Sequence[str]] = None,
+           grids: Optional[Mapping[str, str | Path]] = None
            ) -> tuple[list[Moment], list[str]]:
     """Ranked moments, and anything the caller should be told about the ranking.
 
@@ -139,13 +146,13 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
         # OpenAI and came back `400 Invalid 'input'` -- an error about the
         # request body, from inside the embedder, for a mistake the caller made
         # and can fix. A search for nothing has no answer worth inventing.
-        raise ValueError("a search needs a query; this one is empty")
+        raise Refused("a search needs a query; this one is empty")
 
     scope = scope_of(video_id, video_ids)
     built = embedders_mod.build(embedder)
     return _search(built, query, scope, moments, sampler, question,
                    candidates, strategy, chunk_ids, window, after, before,
-                   structured)
+                   structured, grids)
 
 
 def _search(built, query: str,
@@ -154,13 +161,15 @@ def _search(built, query: str,
             candidates: int, strategy: Optional[str],
             chunk_ids: Optional[Sequence[int]], window: int,
             after: Optional[float], before: Optional[float],
-            structured: Optional[dict[str, Any]]
+            structured: Optional[dict[str, Any]],
+            grids: Optional[Mapping[str, str | Path]] = None
             ) -> tuple[list[Moment], list[str]]:
     notes: list[str] = []
     # A grid per video in scope. `chunk_id` is an index into ONE video's grid,
     # so it means nothing without knowing whose.
     known = list(scope) if scope else _all_videos()
-    spans = {vid: spans_of(vid) for vid in known}
+    spans = {vid: spans_of(vid, (grids or {}).get(vid))
+             for vid in known}
     one = spans.get(known[0], []) if len(known) == 1 else spans
 
     # A time window and a chunk set are the same filter. Resolved before the
@@ -216,7 +225,7 @@ def _search(built, query: str,
                                 "if that embedder never indexed these videos, "
                                 "embed them with it first"]
         where = ", ".join(scope) if scope else "any video"
-        raise FileNotFoundError(
+        raise MissingArtifact(
             f"{where}: nothing indexed for {built.key}. Run embed with this "
             f"embedder, and a pipeline naming a database, first -- a "
             f"different embedder writes different rows.")
@@ -238,18 +247,16 @@ def _search(built, query: str,
 
 
 def _all_videos() -> list[str]:
-    """Every video this deployment has a grid for.
+    """Every video the database has a grid for.
 
-    From disk, falling back to `timelines` -- the same two-copies-of-one-grid
-    rule `spans_of` follows, so a database-only deployment still resolves a
-    span.
+    It used to read the output directory first and fall back to `timelines`.
+    There is no output directory to read now -- a component is pointed at
+    files rather than resolving them -- and the database is the copy that the
+    vectors being searched are stored beside, so it is the only honest answer
+    to "every video this search could reach".
     """
-    from ...shared import paths
-    found = paths.videos()
-    if found:
-        return found
     try:
-        from ...shared.storage import db
+        from falconvar.shared.storage import db
         rows = (db.client(write=False).table("timelines")
                 .select("video_id").execute().data or [])
         return [r["video_id"] for r in rows]

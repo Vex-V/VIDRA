@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...shared.contracts.documents import RawTranscript, Timeline
+from falconvar.shared.contracts.documents import RawTranscript, Timeline
 
 
 def _midpoint(word: dict[str, Any]) -> float:
@@ -43,16 +43,13 @@ def to_chunks(raw: RawTranscript, timeline: Timeline) -> list[dict[str, Any]]:
     and break the correspondence with nothing reporting it.
     """
     buckets: list[list[dict[str, Any]]] = [[] for _ in range(len(timeline))]
-    placed = lost = 0
     for word in raw.words:
         index = timeline.index_at(_midpoint(word))
         if index is None:
-            # Outside the grid entirely. Counted rather than silently dropped:
-            # a transcript that loses words should say how many.
-            lost += 1
+            # Outside the grid entirely. Not silently dropped: `stats_for`
+            # reports how many as `words_outside_grid`.
             continue
         buckets[index].append(word)
-        placed += 1
 
     chunks: list[dict[str, Any]] = []
     for chunk_id, words in enumerate(buckets):

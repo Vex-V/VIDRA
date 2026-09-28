@@ -34,10 +34,15 @@ which module was imported first.
 from __future__ import annotations
 
 import os
-from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Optional
-from .errors import FalconvarError
+from .errors import FalconvarError, Unavailable
+
+
+class NotACheckout(Unavailable, RuntimeError):
+    """A development tool run from an installed copy: it writes source files
+    under the repository (`db/json`, `TYPES.txt`), and there is none."""
+
 
 #: Where an installed copy writes when nothing says otherwise.
 FALLBACK_HOME = Path.home() / ".falconvar"
@@ -65,15 +70,6 @@ CHECKOUT = _checkout_root()
 #: What `configure()` set, if anything. One process, one default.
 _configured: dict[str, Path] = {}
 
-#: The `Workspace` active on this thread or task, if any. A `ContextVar`
-#: rather than a plain global because it is already per-thread and
-#: per-asyncio-task, so two workspaces cannot bleed into each other under the
-#: concurrency `describe` already runs -- and `reset` on a token is the only
-#: honest way to nest them.
-_active: ContextVar[Optional[dict[str, Path]]] = ContextVar("falconvar_roots",
-                                                            default=None)
-
-
 def configure(data_root: Optional[Path | str] = None,
               weights: Optional[Path | str] = None) -> None:
     """Say where this process reads and writes. Takes precedence over both the
@@ -88,12 +84,8 @@ def configure(data_root: Optional[Path | str] = None,
 
 
 def _resolve(key: str, variable: str, in_checkout: str) -> Path:
-    # A workspace outranks `configure()`, which outranks the environment: it
-    # is the most explicit statement there is, made by the code making the
-    # call rather than by the process it happens to be running in.
-    active = _active.get()
-    if active and key in active:
-        return active[key]
+    # `configure()` outranks the environment: an application embedding this
+    # must be able to guarantee where it writes.
     if key in _configured:
         return _configured[key]
     value = os.environ.get(variable)
@@ -124,7 +116,7 @@ def checkout_root() -> Path:
     module exists to prevent.
     """
     if CHECKOUT is None:
-        raise RuntimeError(
+        raise NotACheckout(
             "not running from a FalCONvar checkout -- this is a development "
             "tool and needs the repository, not an installed copy")
     return CHECKOUT
@@ -201,6 +193,12 @@ PRODUCED_BY: dict[str, str] = {
     "embedded": "embed",
     "store": "video",
     "aggregates": "aggregates",
+    # Not artifacts of a video's folder -- an aggregate's inputs and answers
+    # go wherever their caller says -- but a reader that finds none still
+    # wants the step that writes one.
+    "excerpt": "aggregates.select",
+    "sightings": "aggregates.select",
+    "aggregate": "aggregates",
 }
 
 
@@ -353,7 +351,7 @@ def videos() -> list[str]:
 
 
 __all__ = ["ARTIFACTS", "CHECKOUT", "DIRECTORIES", "FALLBACK_HOME",
-           "PRODUCED_BY", "RESERVED_PREFIX", "MissingArtifact",
+           "PRODUCED_BY", "RESERVED_PREFIX", "MissingArtifact", "NotACheckout",
            "UnknownArtifact", "UnusableVideoId",
            "artifact", "check_id", "checkout_root", "configure", "data_root",
            "exists", "home", "out_root", "present", "require", "videos",

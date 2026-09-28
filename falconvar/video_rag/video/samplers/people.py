@@ -8,6 +8,7 @@ from .detection import DetectionChangeSampler
 
 if TYPE_CHECKING:
     from .perception.detectors import ObjectDetector
+    from .perception.embedders import FrameEmbedder
 
 
 class PersonChangeSampler(DetectionChangeSampler):

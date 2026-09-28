@@ -12,39 +12,42 @@ frames it claims is indistinguishable from a correct one once written down.
 The source is now *given* rather than resolved. It used to build its own path
 from a video id, which meant `describe` could only ever read frames the
 pipeline's directory layout had put there -- so a caller driving the
-components itself had to adopt that layout to use this one. It takes any
-`Frames` now, which is how `MemoryFrames` lets a whole run happen with no
-filesystem at all. `store_of` is the pipeline's spelling, kept in one place so
-`run()` is the only thing that knows where a store lives.
+components itself had to adopt that layout to use this one. The store is an
+argument now, so a caller points this at whatever directory holds the frames.
+`store_of` is one line over `FrameStore`, kept so the spelling lives in one
+place.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from ...shared import paths
-from ...shared.contracts.documents import Manifest
-from ...shared.errors import Unavailable
-from ..frames import Frames, FrameStore
+from falconvar.shared.contracts.documents import Manifest
+from falconvar.shared.errors import Unavailable
+from ..helpers import FrameStore
 
 
 class StoreUnavailable(Unavailable):
     """The frame store is missing, or lacks a frame the manifest names."""
 
 
-def store_of(video_id: str) -> FrameStore:
-    """The store this video's ingest wrote -- the one place a store path is
-    derived from a video id.
+def store_of(store: str | Path) -> FrameStore:
+    """The store at this path, checked before any describing starts.
+
+    Nothing derives a store path from a video id any more: the caller says
+    where the frames are, which is what lets `describe` read a store this
+    layout never wrote.
 
     Checked here rather than on first read, because "no store at all" and "a
     store missing one frame" are different mistakes with different fixes, and
     the first is worth saying before any describing starts.
     """
-    root = paths.artifact(video_id, "store")
+    root = Path(store)
     if not root.exists():
         raise StoreUnavailable(
-            f"no frame store at {root}. Re-run ingest with a frame store, "
+            f"no frame store at {root}. Re-run ingest with a store=, "
             f"or rebuild it from the manifest and the video.")
     return FrameStore(root)
 
@@ -69,7 +72,7 @@ class FrameSource:
     they are different questions -- but only ever read once.
     """
 
-    def __init__(self, frames: Frames, manifest: Manifest) -> None:
+    def __init__(self, frames: FrameStore, manifest: Manifest) -> None:
         self.frames = frames
         self.manifest = manifest
         self._cache: dict[int, bytes] = {}

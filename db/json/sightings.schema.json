@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sightings",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "document",
+    "profile",
+    "selection",
+    "version",
+    "video_id"
+  ],
+  "properties": {
+    "document": {
+      "const": "sightings"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "video_id": {
+      "type": "string"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "selection": {
+      "type": "string"
+    },
+    "field_name": {
+      "type": "string"
+    },
+    "keys": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "timeline": {
+      "type": "object"
+    },
+    "mentions": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "transcript": {
+      "type": "object"
+    }
+  }
+}

@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ...shared.storage import db
-from ...shared.storage.supabase import EMBEDDINGS
+from falconvar.shared.storage import db
+from falconvar.shared.storage.supabase import EMBEDDINGS
 
 #: The whole-video half. Its own table because `embeddings` answers *which
 #: twenty seconds* and this answers *which video* -- and a video is not a

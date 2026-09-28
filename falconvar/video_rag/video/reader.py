@@ -23,8 +23,8 @@ from typing import Callable, Iterator, Optional
 import av
 import numpy as np
 
-from ...shared.contracts.documents import Media
-from ...shared.errors import FalconvarError
+from falconvar.shared.contracts.documents import Media
+from falconvar.shared.errors import FalconvarError
 
 #: OpenCV auto-applies container rotation; PyAV does not, so the reader does.
 #: PyAV 18.1 exposes the display matrix through none of `side_data`,
@@ -59,7 +59,6 @@ class Frame:
     media_ts: float
     pts: Optional[int] = None
     image: Optional[np.ndarray] = field(default=None, repr=False)
-    is_keyframe: bool = False
 
     def release(self) -> None:
         """Drop the pixels. A method, so the one dangerous operation greps."""
@@ -128,8 +127,7 @@ def read_frames(media: Media,
                 if rotate is not None:
                     import cv2
                     image = cv2.rotate(image, rotate)
-                yield Frame(index=index, media_ts=media_ts, pts=pts,
-                            image=image, is_keyframe=bool(av_frame.key_frame))
+                yield Frame(index=index, media_ts=media_ts, pts=pts, image=image)
             index += 1
     finally:
         container.close()

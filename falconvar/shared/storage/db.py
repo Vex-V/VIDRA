@@ -34,6 +34,12 @@ class DatabaseUnavailable(Unavailable):
     """No URL, no key, no client library, or a server that will not answer."""
 
 
+class SchemaOutOfDate(DatabaseUnavailable, RuntimeError):
+    """A database whose schema predates this code: `install.sql` was not
+    re-run. Not fixed by retrying, which is what makes it `Unavailable`; a
+    `RuntimeError` still, as it always was."""
+
+
 def _first(names: tuple[str, ...]) -> Optional[str]:
     env.load()
     return next((os.environ[n] for n in names if os.environ.get(n)), None)
@@ -77,7 +83,7 @@ def upsert_vectors(table: str, rows: list[dict[str, Any]], api: Any = None) -> i
     except Exception as exc:                             # noqa: BLE001
         if "dimension" not in str(exc).lower():
             raise
-        raise RuntimeError(
+        raise SchemaOutOfDate(
             f"{table} refused these vectors ({exc}). The column still has a "
             "fixed width: re-run db/supabase/install.sql, which lets it hold "
             "any embedder's") from None
@@ -117,14 +123,6 @@ def upsert(table: str, rows: list[dict[str, Any]], api: Any = None,
     return len(rows)
 
 
-def delete_where(table: str, match: dict[str, Any], api: Any = None) -> None:
-    api = api or client()
-    query = api.table(table).delete()
-    for column, value in match.items():
-        query = query.eq(column, value)
-    query.execute()
-
-
 def delete_stale_chunks(table: str, video_id: str, keep_below: int,
                         api: Any = None) -> None:
     """Remove rows naming a chunk that no longer exists.
@@ -158,4 +156,4 @@ def delete_except(table: str, match: dict[str, Any], column: str,
 
 __all__ = ["as_vector", "upsert_vectors", "DatabaseUnavailable", "PUBLISHABLE_VARS", "SECRET_VARS",
            "URL_VARS", "client", "configured", "delete_except",
-           "delete_stale_chunks", "delete_where", "upsert"]
+           "delete_stale_chunks", "upsert"]

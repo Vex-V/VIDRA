@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Excerpt",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "document",
+    "selection",
+    "version",
+    "video_id"
+  ],
+  "properties": {
+    "document": {
+      "const": "excerpt"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "video_id": {
+      "type": "string"
+    },
+    "selection": {
+      "type": "string"
+    },
+    "timeline": {
+      "type": "object"
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "answers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

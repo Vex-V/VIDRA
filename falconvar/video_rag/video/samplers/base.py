@@ -30,6 +30,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional, Sequence
 
 from ..reader import Frame
+from falconvar.shared.errors import Refused
 
 
 class Sampler(ABC):
@@ -42,9 +43,9 @@ class Sampler(ABC):
                  sampler_id: Optional[str] = None,
                  prompts: Optional[Sequence[str]] = None) -> None:
         if min_interval_s < 0:
-            raise ValueError("min_interval_s must be >= 0")
+            raise Refused("min_interval_s must be >= 0")
         if max_per_chunk is not None and max_per_chunk < 1:
-            raise ValueError("max_per_chunk must be >= 1; every chunk keeps a frame")
+            raise Refused("max_per_chunk must be >= 1; every chunk keeps a frame")
         self.min_interval_s = min_interval_s
         self.max_per_chunk = max_per_chunk
         self._sampler_id = sampler_id

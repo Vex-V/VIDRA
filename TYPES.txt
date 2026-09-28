@@ -434,6 +434,11 @@ Run
         The id the run settled on, read off the first step rather than off the
         request -- `media` may mint a new one when a different file wants a
         taken id, and everything after it is addressed by the answer.
+    home: Path
+        The folder every artifact went into, likewise off the receipt. Under
+        id addressing a caller could re-derive this from the id and the data
+        root; here it is the run's own answer and there is nowhere else to get
+        it, so it is reported.
     steps: list[Produced] = <factory>
         Every component's receipt, in the order they ran.
     skipped: dict[str, str] = <factory>
@@ -445,6 +450,8 @@ Run
         while the files landed. Empty on a run that named no database.
         Reported rather than raised, and *listed* rather than counted: "3
         writes failed" cannot say whether the same table failed three times.
+
+    methods   artifacts
 
 
 

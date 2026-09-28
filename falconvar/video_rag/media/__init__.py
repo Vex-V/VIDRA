@@ -20,7 +20,7 @@ from __future__ import annotations
 #: what a file is before committing a directory to it. It is also the only way
 #: to obtain a `Media` without `run`, and this is the one component that takes
 #: a path rather than a video id, so the question has nowhere else to go.
-from .driver import VideoIdTaken, load, run
+from .driver import VideoIdTaken, load, media
 from .split import UnusableMedia, split
 
-__all__ = ["UnusableMedia", "VideoIdTaken", "load", "run", "split"]
+__all__ = ["UnusableMedia", "VideoIdTaken", "load", "media", "split"]

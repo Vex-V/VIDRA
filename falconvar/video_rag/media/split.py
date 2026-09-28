@@ -23,9 +23,9 @@ from typing import Optional
 
 import av
 
-from ...shared.contracts.documents import (AudioStream, Media, VideoStream,
+from falconvar.shared.contracts.documents import (AudioStream, Media, VideoStream,
                                            fingerprint_of)
-from ...shared.errors import FalconvarError
+from falconvar.shared.errors import FalconvarError
 
 
 class UnusableMedia(FalconvarError, RuntimeError):

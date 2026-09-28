@@ -18,6 +18,7 @@ from typing import Type
 
 from .base import Sampler
 from .uniform import UniformSampler
+from falconvar.shared.errors import UnknownOption
 
 #: name -> "module:ClassName", resolved on first use. The registry name is what
 #: a manifest, a description and an embedding are all keyed by, so it stays
@@ -43,7 +44,7 @@ def _resolve(name: str) -> Type[Sampler]:
     if name in _REGISTRY:
         return _REGISTRY[name]
     if name not in _LAZY:
-        raise KeyError(f"unknown sampler {name!r}; known: {', '.join(available())}")
+        raise UnknownOption(f"unknown sampler {name!r}; known: {', '.join(available())}")
     module_name, class_name = _LAZY[name].split(":")
     module = importlib.import_module(f".{module_name}", __package__)
     return register(getattr(module, class_name))

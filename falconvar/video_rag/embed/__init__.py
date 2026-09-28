@@ -24,11 +24,12 @@ from __future__ import annotations
 #: Bound so `embed.readable.load()` resolves on a bare import of the package.
 #: A submodule, not surface.
 from . import readable  # noqa: F401
-from .driver import encode, run
+from .driver import embed, encode, load
 from .units import Unit
 #: Embedding is not a video_rag concern -- it takes text and returns
 #: vectors, and both tiers do it. It lives in `shared/models/`; these two
 #: are re-exported because they are this component's surface.
-from ...shared.models.embedders import EmbedderUnavailable, available
+from falconvar.shared.models.embedders import EmbedderUnavailable, available
 
-__all__ = ["EmbedderUnavailable", "Unit", "available", "encode", "run"]
+__all__ = ["EmbedderUnavailable", "Unit", "available", "embed",
+           "encode", "load"]

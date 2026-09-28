@@ -25,8 +25,9 @@ from typing import Any, Optional, Sequence
 
 import av
 
-from ...shared.contracts.documents import Cuts, Media
-from ...shared.errors import FalconvarError
+from falconvar.shared.contracts.documents import Cuts, Media
+from falconvar.shared.errors import FalconvarError
+from falconvar.shared.errors import Refused
 
 #: Cuts are a global property of the frame; full resolution buys nothing but
 #: time. Detection runs on a downscaled copy.
@@ -61,7 +62,7 @@ def score_frames(media: Media, stride: int = DEFAULT_STRIDE,
     if not media.has_video:
         raise NoPicture(f"{media.path} has no video stream")
     if stride < 1:
-        raise ValueError("stride must be >= 1; it is a frame stride")
+        raise Refused("stride must be >= 1; it is a frame stride")
 
     from scenedetect import ContentDetector, FrameTimecode
     from scenedetect.stats_manager import StatsManager
@@ -166,7 +167,7 @@ def rethreshold(cuts: Cuts, threshold: float) -> Cuts:
     `cuts_from_scores`.
     """
     if not cuts.scores:
-        raise ValueError(
+        raise Refused(
             f"{cuts.video_id}: this cuts document carries no score series, so a "
             "threshold cannot be changed without re-running the pass")
     scored = list(zip(cuts.scores["at"], cuts.scores["values"]))
@@ -190,7 +191,7 @@ def sweep(cuts: Cuts, thresholds: Sequence[float]) -> list[dict[str, Any]]:
     same domain.
     """
     if not cuts.scores:
-        raise ValueError("no score series to sweep")
+        raise Refused("no score series to sweep")
     scored = list(zip(cuts.scores["at"], cuts.scores["values"]))
     values = [v for _, v in scored]
     rows = []

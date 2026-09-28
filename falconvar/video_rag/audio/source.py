@@ -16,7 +16,7 @@ from typing import Any
 
 import av
 import numpy as np
-from ...shared.errors import FalconvarError
+from falconvar.shared.errors import FalconvarError
 
 #: What both Whisper and pyannote are trained on. Not a parameter.
 SAMPLE_RATE = 16000

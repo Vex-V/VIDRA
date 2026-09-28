@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 from ..reader import Frame
 from .base import Sampler
+from falconvar.shared.errors import Refused
 
 if TYPE_CHECKING:
     from .perception.descriptors import RegionDescriptor
@@ -49,9 +50,9 @@ class DetectionChangeSampler(Sampler):
     ) -> None:
         super().__init__(min_interval_s, max_per_chunk, sampler_id, prompts)
         if not 0.0 <= threshold <= 1.0:
-            raise ValueError("threshold must be a similarity in [0, 1]")
+            raise Refused("threshold must be a similarity in [0, 1]")
         if detector is None or descriptor is None:
-            raise ValueError("detector and descriptor are required")
+            raise Refused("detector and descriptor are required")
         self.detector = detector
         self.descriptor = descriptor
         self.threshold = threshold
@@ -67,7 +68,7 @@ class DetectionChangeSampler(Sampler):
 
     def describe(self, frame: Frame):
         if frame.image is None:
-            raise ValueError(f"{type(self).__name__} needs pixels; frame.image is None")
+            raise Refused(f"{type(self).__name__} needs pixels; frame.image is None")
         detections = self.detector.detect(frame.image)
         return self.descriptor.describe(frame.image, detections)
 

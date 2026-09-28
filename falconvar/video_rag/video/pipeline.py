@@ -13,39 +13,42 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Optional, Sequence
 
-from ...shared.contracts.documents import Manifest, Media, Timeline
+from falconvar.shared.contracts.documents import Manifest, Media, Timeline
 from .decimate import Decimator
 from .reader import read_frames
 from .samplers import Sampler
-from ..frames import Frames
+from ..helpers import FrameStore
+from falconvar.shared.errors import Refused, UnknownOption
 
 
 def ingest(media: Media, timeline: Timeline,
            samplers: Sequence[Sampler],
            per_second: float = 1.0,
-           store: Optional[Frames] = None,
+           store: Optional[FrameStore] = None,
            store_scope: str = "sampled",
            on_chunk: Optional[Callable[[int, dict[str, Any]], None]] = None
            ) -> Manifest:
     """Decode once, offer every decimated frame to every sampler."""
     if not samplers:
-        raise ValueError("name at least one sampler")
+        raise Refused("name at least one sampler")
     ids = [s.sampler_id for s in samplers]
     if len(set(ids)) != len(ids):
         # The manifest keys frames by sampler id, so a collision would silently
         # drop one sampler's results into another's.
-        raise ValueError(f"sampler ids must be unique, got {ids}")
+        raise Refused(f"sampler ids must be unique, got {ids}")
     if store_scope not in ("sampled", "decimated"):
-        raise ValueError("store_scope must be 'sampled' or 'decimated'")
+        raise UnknownOption("store_scope must be 'sampled' or 'decimated'")
 
     decimator = Decimator(per_second)
     config = {
         "decimator": decimator.config(),
         "samplers": [s.config() for s in samplers],
-        # `is not None`, not truthiness: `MemoryFrames` is sized, so an
-        # empty one is falsy -- and it is always empty here, before the first
-        # frame is decoded. Truthiness wrote `frame_store: null` into every
-        # in-memory manifest.
+        # `is not None`, not truthiness. `MemoryFrames` was sized, so an
+        # empty one was falsy -- and it is always empty here, before the first
+        # frame is decoded, so truthiness wrote `frame_store: null` into every
+        # in-memory manifest. That class is gone; the rule outlives it,
+        # because "was I given a store" and "does it hold anything yet" are
+        # different questions and only one of them is being asked.
         "frame_store": ({**store.config(), "scope": store_scope}
                         if store is not None else None),
     }

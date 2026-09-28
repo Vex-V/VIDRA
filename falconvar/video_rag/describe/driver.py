@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional, Sequence
 
-from ..boundaries import load as load_timeline
-from ..video import load as load_manifest
-from ...shared import env, logs, paths, progress
-from ...shared.storage import files
-from ...shared.contracts.documents import (Descriptions, Manifest,
+from falconvar.shared import env, logs, progress
+from falconvar.shared.contracts.documents import (Descriptions, Manifest,
                                            Produced, Timeline)
+from falconvar.shared.storage.files import maybe, read, write
+from falconvar.shared.contracts.documents import same_video
 from . import base, library, prompts
 from .backends import stub  # noqa: F401  -- self-registers
-from ..frames import Frames
+from ..helpers import FrameStore
 from .frames import FrameSource, StoreUnavailable, store_of
+from falconvar.shared.errors import Refused, UnknownOption
 
-def answer(manifest: Manifest, timeline: Timeline, frames: Frames,
+def answer(manifest: Manifest, timeline: Timeline, frames: FrameStore,
            describer: Optional[str] = None,
            samplers: Optional[Sequence[str]] = None,
            limit: Optional[int] = None,
@@ -24,9 +25,9 @@ def answer(manifest: Manifest, timeline: Timeline, frames: Frames,
            on_progress: Optional[progress.Reporter] = None) -> Descriptions:
     """One call per (chunk, sampler), over documents and pixels in hand.
 
-    Reads and writes no artifact. `frames` is any `Frames` -- the
-    `FrameStore` ingest wrote, or the `MemoryFrames` it filled -- so a whole
-    run can happen without a data root.
+    Reads and writes no artifact. `frames` is the `FrameStore` ingest
+    wrote, opened over whatever directory holds it -- so this reads pixels
+    it was handed rather than resolving a path a second time.
 
     `existing` is what `resume` reads from disk on the `run` path: hand it the
     previous `Descriptions` and every pair still current is skipped, exactly
@@ -50,7 +51,7 @@ def answer(manifest: Manifest, timeline: Timeline, frames: Frames,
     # `workflow.validate` exists to prevent -- and a caller driving the
     # components itself never passes through `validate`. Here rather than in
     # `run` so that both ways in are guarded.
-    from ...shared.models import providers
+    from falconvar.shared.models import providers
     providers.require("describe", describer)
 
     # `limit=0` described nothing and reported success. To a caller the word
@@ -58,12 +59,12 @@ def answer(manifest: Manifest, timeline: Timeline, frames: Frames,
     # is the one value with two readings, and the run that does nothing looks
     # exactly like the run that had nothing to do.
     if limit is not None and limit < 1:
-        raise ValueError(
+        raise Refused(
             f"limit must be at least 1, not {limit}; "
             f"leave it None for no limit")
 
     if manifest.timeline_fingerprint != timeline.fingerprint():
-        raise ValueError(
+        raise Refused(
             f"{manifest.video_id}: the manifest was built on a different grid "
             f"({manifest.timeline_fingerprint} vs {timeline.fingerprint()}). "
             "Re-run ingest against the current timeline.")
@@ -73,7 +74,7 @@ def answer(manifest: Manifest, timeline: Timeline, frames: Frames,
                       for q in prompts.questions_of(s, s.get("id", ""))
                       if q not in known})
     if unknown:
-        raise ValueError(
+        raise UnknownOption(
             f"manifest names unknown question(s) {', '.join(unknown)}; "
             f"known: {', '.join(prompts.questions())}")
 
@@ -86,32 +87,35 @@ def answer(manifest: Manifest, timeline: Timeline, frames: Frames,
                      limit, on_progress)
 
 
-def describe(video_id: str, describer: Optional[str] = None,
+def describe(manifest: str | Path, timeline: str | Path,
+             store: str | Path, out: str | Path,
+             previous: Optional[str | Path] = None,
+             describer: Optional[str] = None,
              samplers: Optional[Sequence[str]] = None,
              limit: Optional[int] = None,
-             resume: bool = True,
              max_output_tokens: Optional[int] = None,
              on_progress: Optional[progress.Reporter] = None) -> Produced:
-    """Describe by id, from this video's own frame store. The expensive stage.
+    """One model call per (chunk, sampler). The expensive stage.
 
-    `answer` plus a read at each end; every check lives down there. `resume`
-    is the one thing that cannot: it means "read what is already on disk",
-    which is what `answer` takes as `existing`.
+    `answer` plus a read at each end; every check lives down there.
+
+    **`resume` became `previous`.** Addressed by id this read its own last
+    output for itself whenever `resume=True` -- a hidden read, and the one
+    thing `answer` could not be given. Named, it is one more path and one
+    less thing happening off-screen: point it at the `descriptions.json` an
+    earlier run wrote and every pair still current is skipped; leave it off
+    and everything is described again, at cost.
     """
+    plan = read(manifest, Manifest)
+    grid = read(timeline, Timeline)
+    existing = maybe(previous, Descriptions)
+    video_id = same_video(manifest=plan, timeline=grid, previous=existing)
+
     with logs.timed("describe", video_id) as done:
-        manifest = load_manifest(video_id)
-        timeline = load_timeline(video_id)
+        document = answer(plan, grid, store_of(store), describer, samplers,
+                          limit, existing, max_output_tokens, on_progress)
 
-        existing = None
-        if resume and paths.exists(video_id, "descriptions"):
-            existing = load(video_id)
-
-        document = answer(manifest, timeline,
-                          store_of(video_id),
-                          describer, samplers, limit, existing,
-                          max_output_tokens, on_progress)
-
-        where = files.write(video_id, "descriptions", document.as_dict())
+        where = write(out, document)
         done(described=document.stats.get("described"),
              skipped_pairs=document.stats.get("skipped"),
              describer=_named(document.model))
@@ -127,12 +131,6 @@ def describe(video_id: str, describer: Optional[str] = None,
                          .get("model", _named(document.model))),
                },
     )
-
-
-#: The uniform name every component also answers to: what a dispatch
-#: table calls and what a form introspects. The same function object.
-#: See `media/driver.py`.
-run = describe
 
 
 def _named(model: dict[str, object]) -> str:
@@ -169,9 +167,9 @@ def prompt_rows(versions: dict[str, str]) -> list[dict[str, object]]:
     return entries
 
 
-def load(video_id: str) -> Descriptions:
-    return Descriptions.from_dict(
-        files.read_json(paths.require(video_id, "descriptions")))
+def load(path: str | Path) -> Descriptions:
+    """Read a `descriptions.json` back, typed."""
+    return read(path, Descriptions)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -179,7 +177,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     import json
 
     ap = argparse.ArgumentParser(description="Describe every (chunk, sampler).")
-    ap.add_argument("video_id")
+    ap.add_argument("manifest", help="path to manifest.json")
+    ap.add_argument("timeline", help="path to timeline.json")
+    ap.add_argument("store", help="the frame store directory")
+    ap.add_argument("out", help="where to write descriptions.json")
+    ap.add_argument("--previous", default=None,
+                    help="an earlier descriptions.json; pairs still "
+                         "current are skipped. Omit to describe all")
     ap.add_argument("--describer", default=None,
                     help="a provider or provider/model; default "
                          f"FALCONVAR_DESCRIBER, then openai. Known: "
@@ -188,7 +192,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="comma-separated subset to describe")
     ap.add_argument("--limit", type=int, default=None,
                     help="stop after N calls. Costs money, so this exists")
-    ap.add_argument("--no-resume", action="store_true")
     ap.add_argument("--max-tokens", type=int, default=None, dest="max_output_tokens",
                     help="ceiling on one answer (default 2000). Part of the "
                          "resume key, so changing it re-describes everything")
@@ -198,9 +201,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     samplers = ([s.strip() for s in args.sampler.split(",") if s.strip()]
                 if args.sampler else None)
     try:
-        produced = run(args.video_id, args.describer, samplers,
-                       args.limit, not args.no_resume,
-                       args.max_output_tokens)
+        produced = describe(args.manifest, args.timeline, args.store,
+                            args.out, args.previous, args.describer,
+                            samplers, args.limit, args.max_output_tokens)
     except (KeyError, ValueError, FileNotFoundError, StoreUnavailable,
             base.DescriberUnavailable) as exc:
         print(f"error: {exc}")

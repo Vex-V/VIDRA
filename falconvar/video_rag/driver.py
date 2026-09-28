@@ -1,24 +1,52 @@
-"""The video_rag driver: extraction as a list of component calls, and the search.
+"""The pipeline: every component in order, over one folder of files.
 
-Every step is one component's `run()`, in dependency order. Nothing here
-decodes, loads a model or builds a path.
+The components take filepaths and resolve nothing. Something still has to
+decide where the files go, in what order they are written, and which of them
+this run needs at all -- and that is this module. It is the same driver as
+before with the addressing moved into it: where `falconvar/video_rag/driver.py`
+passed a video id to eight components that each resolved their own paths, this
+asks `media` for a folder and composes every later path inside it.
 
-Order is not decided here -- it falls out of what the chosen policy depends on,
-and `boundaries.POLICIES` is that table:
+    video_rag("x.mp4", "data/out", policy="scene", sampler="clip:[text,scene]")
+
+`into` is the whole of the output decision. `media` makes `<into>/<id>/`, the
+receipt says which folder it settled on -- a mint under `on_conflict="new"`
+means the id is not the one that was asked for -- and `layout()` names every
+file inside it from the library's own table.
+
+Order is not decided here either. It falls out of what the chosen policy
+depends on, and `boundaries.POLICIES` is that table:
 
     uniform    nothing;  arithmetic over a duration `media.json` already has
     scene      the picture;  boundaries.evidence decodes and scores it
     vad        a transcript; audio must finish first
     speaker    a transcript; audio must finish first
 
-`Options` carries only what extraction must decide -- which file, which grid,
-which modalities, what to look at, who answers, where output goes. Per-stage
-tuning lives on each component's own CLI.
+**What this driver has that the id one did not is the answer to "which file".**
+Three things were implicit in addressing by id and are decisions here:
 
-The bottom of the file is the whole of what `aggregates` may ask of this tier:
-`vocabulary()`, so an input naming a question or a sampler can be checked
-before a job is queued. It was seven functions; the other six were shared
-concerns misfiled here and now live in `shared/`, which both tiers import.
+    the folder      `media(source, into)` mints or replaces, and every later
+                    path is composed from the receipt's `home` rather than
+                    from the id that was asked for
+    resume          `describe` read its own last output whenever
+                    `resume=True`, and `embed` diffed against an index. Both
+                    are `previous=` now, so this passes the earlier document
+                    when there is one -- which is the same behaviour, spelled
+                    where it can be turned off
+    consistency     two documents from different videos in one call is
+                    possible under paths and was not under ids. The components
+                    refuse it themselves (`documents.same_video`); keeping every
+                    file in one folder is what makes it not arise
+
+Per-stage tuning is deliberately absent, as before: a scene threshold, a
+sampler's `confidence`, an audio `compute_type`. Those live on the component
+that owns them, and a caller who wants them drives the components directly --
+every one takes the paths this function composes, in the order it uses them.
+
+The bottom of the file is still the whole of what `aggregates` may ask of
+this tier: `vocabulary()`, so an input naming a question or a sampler can be
+checked before a job is queued. Addressing never touched it -- a vocabulary
+is a fact about the library rather than about a video.
 """
 
 from __future__ import annotations
@@ -29,11 +57,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from ..shared import logs, paths
-from ..shared.errors import UnknownOption
-from ..shared.contracts.documents import Produced
+from falconvar.shared import logs, paths
+from falconvar.shared.contracts.documents import Produced
+from falconvar.shared.errors import UnknownOption
 from . import audio, boundaries, cut, describe, embed, media, video
-from .retrieve import search, videos
+#: Unadvertised machinery, reached through the module it lives in: the
+#: component publishes its entry points, and a caller's `on_conflict` is
+#: checked against the same table `media` checks it against.
+from .media.driver import ON_CONFLICT
+from falconvar.shared.errors import Refused
 
 #: Every component, in the order it can run.
 COMPONENTS = ("media", "audio", "boundaries.evidence", "boundaries",
@@ -45,12 +77,37 @@ COMPONENTS = ("media", "audio", "boundaries.evidence", "boundaries",
 DATABASES = ("supabase",)
 
 
+def layout(home: str | Path) -> dict[str, Path]:
+    """Every artifact's path inside one video's folder.
+
+    **Read from the library's tables rather than spelled here.** A pipeline
+    typing its own filenames would write `raw_transcript.json` where every
+    component writes `transcript.raw.json`, and nothing would say so until a
+    read failed -- which is the one thing naming-in-the-library buys now that
+    resolving has left.
+
+    Directories are in it too: `store` is not a document, but it is a path
+    this run decides and `video` and `describe` both need the same one.
+    """
+    root = Path(home)
+    return {**{name: root / filename for name, filename in paths.ARTIFACTS.items()},
+            **{name: root / folder for name, folder in paths.DIRECTORIES.items()}}
+
+
 @dataclass
 class Options:
     """The shape of one extraction. Tuning lives on the component CLIs."""
 
     source: Path
+    #: The directory that holds one folder per video. The output decision, and
+    #: the only one: everything else is composed inside whatever `media`
+    #: settles on under it.
+    into: Path
     video_id: Optional[str] = None
+    #: What to do when a *different* file wants a taken id. `media`'s, and so
+    #: the pipeline's, because `into` is the pipeline's argument: `new` mints
+    #: `clip-2`, `replace` deletes the folder, `refuse` raises.
+    on_conflict: str = "new"
     policy: str = "uniform"                  # decides who runs first
     use_video: bool = True
     use_audio: bool = True
@@ -60,6 +117,11 @@ class Options:
     # then openai -- rather than being captured at import, before .env is read.
     describer: Optional[str] = None          # frames -> answers
     embedder: Optional[str] = None           # text -> vectors
+    #: Hand `describe` and `embed` the documents an earlier run wrote, so a
+    #: pair or a vector still current is not paid for twice. True is what
+    #: addressing by id did unconditionally; False is "describe it all again",
+    #: which was previously only reachable by deleting the file.
+    resume: bool = True
     # Where a *copy* goes. The files are written either way; this is the
     # pipeline reading each one back and handing it to `storage/supabase.py`.
     database: Optional[str] = None
@@ -71,6 +133,11 @@ class Run:
     #: request -- `media` may mint a new one when a different file wants a
     #: taken id, and everything after it is addressed by the answer.
     video_id: str
+    #: The folder every artifact went into, likewise off the receipt. Under
+    #: id addressing a caller could re-derive this from the id and the data
+    #: root; here it is the run's own answer and there is nowhere else to get
+    #: it, so it is reported.
+    home: Path
     #: Every component's receipt, in the order they ran.
     steps: list[Produced] = field(default_factory=list)
     #: `{component: why}`. A reason, not a flag: a component that did not run
@@ -83,12 +150,18 @@ class Run:
     #: cannot say whether the same table failed three times.
     problems: list[str] = field(default_factory=list)
 
+    def artifacts(self) -> dict[str, str]:
+        """What is actually in the folder, by artifact name."""
+        return {name: str(where) for name, where in sorted(layout(self.home).items())
+                if where.exists()}
+
     def as_dict(self) -> dict[str, Any]:
         return {"video_id": self.video_id,
+                "home": str(self.home),
                 "steps": [s.as_dict() for s in self.steps],
                 "skipped": self.skipped,
                 "problems": self.problems,
-                "artifacts": paths.present(self.video_id)}
+                "artifacts": self.artifacts()}
 
 
 def validate(options: Options) -> list[str]:
@@ -114,6 +187,17 @@ def validate(options: Options) -> list[str]:
         problems.append("nothing to do: read the picture, the soundtrack, or both")
     if not Path(options.source).exists():
         problems.append(f"{options.source} does not exist")
+    if options.on_conflict not in ON_CONFLICT:
+        problems.append(f"on_conflict must be one of "
+                        f"{', '.join(ON_CONFLICT)}")
+
+    # `into` is a directory that will be created, so the check is that nothing
+    # is already *in the way* -- a file at that path makes every later write
+    # fail, one component at a time, after the first has run.
+    into = Path(options.into)
+    if into.exists() and not into.is_dir():
+        problems.append(f"{into} is a file; `into` is the directory that holds "
+                        f"one folder per video")
 
     # Both halves of every `name:question` pair, against the two registries.
     #
@@ -144,7 +228,7 @@ def validate(options: Options) -> list[str]:
     # with a model and a key. A missing key discovered by `describe` arrives
     # after the whole video has been decoded. Whether a local server is up is
     # not asked: that would make validation a network call.
-    from ..shared.models import providers
+    from falconvar.shared.models import providers
     wanted = [("embed", options.embedder)]
     if options.use_video:
         wanted.append(("describe", options.describer))
@@ -157,23 +241,23 @@ def export(produced: Produced, database: str) -> list[str]:
     """A component's artifacts into a database. Returns what went wrong.
 
     **The pipeline's job, never a component's.** A component writes its file
-    and stops, so this reads that file back and hands it to the function named
-    for it in `shared/storage/supabase.py`. The re-read is the price of the
-    layering and it is a cheap one: the document is on disk because the next
-    component is about to read it anyway.
+    and stops, so this reads that file back -- from the path in its own
+    receipt, which is the whole of what a component now says about where its
+    output went -- and hands it to the function named for it in
+    `shared/storage/supabase.py`. The re-read is cheap: the document is on
+    disk because the next component is about to read it anyway.
 
-    Best-effort, and that is now an *informed* choice rather than a default
-    nobody picked. The file has landed and the next component reads the file,
-    so a database that is down is a report. It was `sinks.write`'s decision
-    before, made once for every caller and documented the other way round.
+    Best-effort, and an *informed* choice rather than a default nobody picked.
+    The file has landed and the next component reads the file, so a database
+    that is down is a report.
 
-    A directory artifact -- `store`, `aggregates` -- is skipped: there is no
-    document to read, and `WRITERS` has no entry for it either.
+    A directory artifact -- `store` -- is skipped: there is no document to
+    read, and `WRITERS` has no entry for it either.
     """
     if database not in DATABASES:
         raise UnknownOption(f"unknown database {database!r}; "
                             f"known: {', '.join(DATABASES)}")
-    from ..shared.storage import files, supabase
+    from falconvar.shared.storage import files, supabase
 
     problems: list[str] = []
     for artifact, where in sorted(produced.artifacts.items()):
@@ -194,8 +278,7 @@ def export(produced: Produced, database: str) -> list[str]:
     # Provenance for the questions this run asked, at the version it asked
     # them under. `descriptions.model` records the hashes; only these rows can
     # say what a hash *meant*, because editing an instruction loses the old
-    # text. Assembled only when a database was named -- `describe` used to do
-    # it unconditionally from inside the component.
+    # text. Assembled only when a database was named.
     if produced.component == "describe":
         try:
             from .describe.driver import prompt_rows
@@ -209,7 +292,7 @@ def export(produced: Produced, database: str) -> list[str]:
 
 def process(options: Options,
             on_step: Optional[Callable[..., None]] = None) -> Run:
-    """One extraction, top to bottom. Every step is a component's `run()`.
+    """One extraction, top to bottom. Every step is one component call.
 
     `on_step` is called twice per component -- once by name before it runs,
     once with its `Produced` after. It may take a **third** argument, and if
@@ -221,8 +304,8 @@ def process(options: Options,
                 print(f"  {progress.completed}/{progress.total}")
 
     Whether it takes one is read off the callback rather than announced,
-    because every two-argument callback already written -- the API's job
-    runner among them -- must keep working untouched.
+    because every two-argument callback already written must keep working
+    untouched.
 
     A wrapper around `_run`, so the pipeline is one INFO in and one INFO out,
     and a failure part way through is an ERROR carrying how far it got.
@@ -231,11 +314,11 @@ def process(options: Options,
         return _run(options, whole, on_step)
 
 
-def _run(options: Options, whole: logs.timed,
+def _run(options: Options, whole: Any,
          on_step: Optional[Callable[..., None]] = None) -> Run:
     problems = validate(options)
     if problems:
-        raise ValueError("; ".join(problems))
+        raise Refused("; ".join(problems))
 
     say = on_step or (lambda *arguments: None)
 
@@ -260,7 +343,6 @@ def _run(options: Options, whole: logs.timed,
         say(component, produced)
 
     ticking = {"on_progress": forward} if wants_progress else {}
-    run = Run(video_id="")
 
     def starting(name: str) -> None:
         """Announce a component before it runs.
@@ -274,6 +356,16 @@ def _run(options: Options, whole: logs.timed,
         """
         announce(name, None)
 
+    # 1 · what the file is, and -- the part addressing by id did not have --
+    #     which folder everything else lands in.
+    starting("media")
+    first = media.media(options.source, options.into, options.video_id,
+                        options.on_conflict)
+    home = Path(first.stats["home"])
+    at = layout(home)
+    run = Run(video_id=first.video_id, home=home)
+    whole(video_id=run.video_id)
+
     def step(produced: Produced) -> Produced:
         run.steps.append(produced)
         if options.database:
@@ -281,84 +373,118 @@ def _run(options: Options, whole: logs.timed,
         announce(produced.component, produced)
         return produced
 
-    # 1 · what the file is
-    starting("media")
-    first = step(media.run(options.source, options.video_id))
-    run.video_id = video_id = first.video_id
-    whole(video_id=video_id)
-    described = media.load(video_id)
+    step(first)
+
+    def earlier(name: str) -> Optional[Path]:
+        """The document an earlier run left, for `previous=`.
+
+        `None` when resume is off or there is nothing there, which is what
+        both components read as "describe/embed it all". A path that does not
+        exist would do as well -- `files.maybe` answers None for either -- but
+        saying it here keeps the decision in the one place that made it.
+        """
+        if not options.resume:
+            return None
+        return at[name] if at[name].exists() else None
 
     # Whether a file carries a soundtrack is a property of the file, not of the
-    # request, so it is found here rather than in `validate`.
-    use_audio = options.use_audio and described.has_audio
-    use_video = options.use_video and described.has_video
-    for name, wanted, present in (("audio", options.use_audio, described.has_audio),
-                                  ("video", options.use_video, described.has_video)):
-        if wanted and not present:
+    # request. The receipt says so -- `skipped` lists the streams it lacks --
+    # so this reads the answer rather than opening the container again.
+    absent = set(first.skipped)
+    use_audio = options.use_audio and "audio" not in absent
+    use_video = options.use_video and "video" not in absent
+    for name in ("audio", "video"):
+        if getattr(options, f"use_{name}") and name in absent:
             run.skipped[name] = f"the file carries no {name} stream"
             if boundaries.POLICIES[options.policy] == name:
-                raise ValueError(f"policy {options.policy!r} needs the {name} "
-                                 f"stream, and {described.path} has none")
+                raise Refused(f"policy {options.policy!r} needs the {name} "
+                                 f"stream, and {options.source} has none")
 
     # 2 · the soundtrack. Before the grid when the policy needs a transcript to
     #     derive one; the order is the dependency, not a rule about modalities.
     if use_audio:
         starting("audio")
-        step(audio.run(video_id))
+        step(audio.audio(at["media"], at["raw_transcript"]))
+    else:
+        run.skipped.setdefault("audio", "this run is not reading the soundtrack")
 
-    # 3 · boundary evidence, if this policy needs any
+    # 3 · boundary evidence, if this policy needs any. Both inputs are handed
+    #     over and `POLICIES` decides which is opened -- a scene pass never
+    #     reads the transcript, and under `uniform` neither is read for
+    #     anything but the receipt's id.
     starting("boundaries.evidence")
-    evidence = boundaries.evidence(video_id, options.policy)
-    if "evidence" in evidence.skipped:
+    found = boundaries.evidence(at["cuts"], options.policy,
+                                media=at["media"],
+                                raw_transcript=(at["raw_transcript"]
+                                                if use_audio else None))
+    if "evidence" in found.skipped:
         run.skipped["boundaries.evidence"] = (
             f"policy {options.policy!r} needs none -- it is arithmetic over "
             "the container duration")
     else:
-        step(evidence)
+        step(found)
 
-    # 4 · THE GRID
+    # 4 · THE GRID. `cuts=` only when something wrote one: under `uniform`
+    #     nothing did, and pointing the component at a file that is not there
+    #     would be a missing input rather than a policy that needs none.
     starting("boundaries")
-    step(boundaries.run(video_id, options.policy))
+    step(boundaries.boundaries(at["media"], at["timeline"], options.policy,
+                               cuts=at["cuts"] if at["cuts"].exists() else None,
+                               ))
 
     # 5 · the picture, onto that grid. The grid is an input here and is never
-    #     edited, which is why nothing needs a Chunker.
+    #     edited, which is why nothing needs a Chunker. `store=` is where the
+    #     pixels go, and it is the same directory `describe` is pointed at --
+    #     the one thing two components must agree on that is not a document.
     if use_video:
         starting("video")
-        step(video.run(video_id, options.sampler, **ticking))
+        step(video.video(at["media"], at["timeline"], at["manifest"],
+                         store=at["store"], sampler=options.sampler, **ticking))
+    else:
+        run.skipped.setdefault("video", "this run is not reading the picture")
 
     # 6 · the transcript, onto the same grid. Cheap: Whisper timestamped every
     #     word, so this can be redone against a different grid for nothing.
     if use_audio:
         starting("cut")
-        step(cut.run(video_id))
+        step(cut.cut(at["timeline"], at["raw_transcript"], at["transcript"]))
 
     # 7 · one answer per (chunk, sampler)
     if use_video:
         starting("describe")
-        step(describe.run(video_id, options.describer, **ticking))
+        step(describe.describe(at["manifest"], at["timeline"], at["store"],
+                               at["descriptions"],
+                               previous=earlier("descriptions"),
+                               describer=options.describer, **ticking))
 
-    # 8 · vectors, from both modalities
+    # 8 · vectors, from both modalities. Whichever documents this run wrote --
+    #     `embed` needs at least one and takes either.
     starting("embed")
-    step(embed.run(video_id, options.embedder, **ticking))
+    step(embed.embed(at["embedded"],
+                     descriptions=at["descriptions"] if use_video else None,
+                     transcript=at["transcript"] if use_audio else None,
+                     previous=earlier("embedded"),
+                     timeline=at["timeline"],
+                     embedder=options.embedder, **ticking))
 
     whole(policy=options.policy, sampler=options.sampler,
           steps=len(run.steps), skipped=len(run.skipped))
     return run
 
 
-# --------------------------------------------- what aggregates may ask of this
-
 def video_rag(source: str | Path,
+              into: str | Path,
               video_id: Optional[str] = None,
+              on_conflict: str = "new",
               policy: str = "uniform",
               use_video: bool = True,
               use_audio: bool = True,
               sampler: str = "uniform",
               describer: Optional[str] = None,
               embedder: Optional[str] = None,
+              resume: bool = True,
               database: Optional[str] = None,
-              on_step: Optional[Callable[[str, Optional[Produced]], None]] = None
-              ) -> Run:
+              on_step: Optional[Callable[..., None]] = None) -> Run:
     """The whole extraction, as keyword arguments. `process` with an `Options`.
 
     The library front door. `Options` is the validated record a form or an API
@@ -366,15 +492,15 @@ def video_rag(source: str | Path,
     by hand, so the arguments are named and checked at the call rather than
     assembled into a dataclass first.
 
-    Per-stage tuning is deliberately absent -- a scene threshold, a sampler's
-    `confidence`, an audio `compute_type`. Those live on the component that
-    owns them, and a caller who wants them drives the components directly;
-    every one is `run(video_id, ...)`, in the order this function uses.
+    `into` is the second positional argument because it is the one decision
+    the components no longer make: they are handed paths, and these are the
+    paths. Everything a run writes lands under `<into>/<video_id>/`.
     """
     return process(Options(
-        source=Path(source), video_id=video_id, policy=policy,
-        use_video=use_video, use_audio=use_audio, sampler=sampler,
-        describer=describer, embedder=embedder, database=database,
+        source=Path(source), into=Path(into), video_id=video_id,
+        on_conflict=on_conflict, policy=policy, use_video=use_video,
+        use_audio=use_audio, sampler=sampler, describer=describer,
+        embedder=embedder, resume=resume, database=database,
     ), on_step)
 
 
@@ -397,7 +523,9 @@ def video_rag(source: str | Path,
 # And it cannot be read from a video's output either. `aggregates.validate`
 # takes no `video_id` -- a request is checked before any video is named, which
 # is what makes a typo a 422 at submit time rather than a job that runs and
-# finds nothing.
+# finds nothing. It is also the half of this seam that addressing never
+# touched: a vocabulary is a fact about the library, not about a video, so
+# it reads the same whether a component is reached by id or by path.
 def vocabulary() -> dict[str, Any]:
     """What an aggregate's input may name: every sampler, and every question
     with its fields -- `{field: [entry keys]}` for a list of objects, `None`
@@ -419,13 +547,18 @@ def vocabulary() -> dict[str, Any]:
 
 def main(argv: Optional[list[str]] = None) -> int:
     import argparse
-    import json
 
     ap = argparse.ArgumentParser(
-        description="Extract once: media to embed. Per-stage tuning lives on each "
-                    "component's own CLI, e.g. `python -m falconvar.video_rag.video`.")
+        description="Extract once: media to embed, into a folder you name. "
+                    "Per-stage tuning lives on each component's own CLI, e.g. "
+                    "`python -m proto.video`.")
     ap.add_argument("source", type=Path)
+    ap.add_argument("into", type=Path,
+                    help="the directory that holds one folder per video; the "
+                         "run writes everything under <into>/<video-id>/")
     ap.add_argument("--video-id", default=None)
+    ap.add_argument("--on-conflict", default="new", choices=sorted(ON_CONFLICT),
+                    help="what to do when a different file wants a taken id")
     ap.add_argument("--policy", default="uniform", choices=sorted(boundaries.POLICIES))
     ap.add_argument("--sampler", default="uniform",
                     help="comma-separated; any may carry a question after a "
@@ -438,6 +571,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--embedder", default=None,
                     help="a provider or provider/model, e.g. local; "
                          "default FALCONVAR_EMBEDDER, then openai")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="describe and embed everything again, ignoring what "
+                         "an earlier run left in the folder")
     ap.add_argument("--database", default=None,
                     help=f"also write a copy to a database; known: "
                          f"{', '.join(DATABASES)}")
@@ -445,15 +581,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     options = Options(
-        source=args.source, video_id=args.video_id, policy=args.policy,
+        source=args.source, into=args.into, video_id=args.video_id,
+        on_conflict=args.on_conflict, policy=args.policy,
         use_video=not args.no_video, use_audio=not args.no_audio,
         sampler=args.sampler, describer=args.describer, embedder=args.embedder,
-        database=args.database)
+        resume=not args.no_resume, database=args.database)
     return report(options, lambda on_step: process(options, on_step), args.json)
 
 
-def report(options: Any, execute: Callable[[Callable], Run], as_json: bool) -> int:
-    """Validate, run and print, for this CLI and `workflow`'s."""
+def report(options: Any, execute: Callable[[Callable], Run],
+           as_json: bool) -> int:
+    """Validate, run and print, for this CLI and `workflow`'s.
+
+    `options` is annotated `Any` because `workflow` passes its own, wider
+    `Options` -- one that also carries a tier and an llm, and that
+    `workflow.validate` has already checked against both tiers. Re-checking
+    it here would mean this tier's `validate` reading fields it does not
+    own, so the isinstance is the guard rather than a cast.
+    """
     import json
 
     problems = validate(options) if isinstance(options, Options) else []
@@ -471,7 +616,9 @@ def report(options: Any, execute: Callable[[Callable], Run], as_json: bool) -> i
         print(f"  {component:<22} -> {', '.join(produced.artifacts) or '-'}")
 
     if not as_json:
-        print(f"{options.source}   policy={options.policy}")
+        where = getattr(options, "into", None)
+        print(f"{options.source}   policy={options.policy}"
+              f"{f'   into={where}' if where else ''}")
     try:
         run = execute(on_step)
     except Exception as exc:                             # noqa: BLE001
@@ -483,10 +630,10 @@ def report(options: Any, execute: Callable[[Callable], Run], as_json: bool) -> i
         return 0
     for name, why in run.skipped.items():
         print(f"  {name:<22} -- skipped: {why}")
-    print(f"\n{run.video_id} -> {paths.home(run.video_id)}")
-    print(f"  artifacts: {', '.join(paths.present(run.video_id))}")
+    print(f"\n{run.video_id} -> {run.home}")
+    print(f"  artifacts: {', '.join(run.artifacts())}")
     return 0
 
 
-__all__ = ["COMPONENTS", "DATABASES", "Options", "Run", "main", "process",
-           "report", "search", "validate", "video_rag", "videos", "vocabulary"]
+__all__ = ["COMPONENTS", "DATABASES", "Options", "Run", "export", "layout",
+           "main", "process", "report", "validate", "video_rag", "vocabulary"]

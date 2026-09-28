@@ -87,11 +87,10 @@ is one thing to inspect, copy or delete.
 
 Precedence for `<data>`, highest first:
 
-    1  an active Workspace         see WORKSPACES below
-    2  falconvar.configure(...)    an application guaranteeing where it writes
-    3  $FALCONVAR_DATA             for when you do not control the caller
-    4  the checkout                only when running from the repository
-    5  ~/.falconvar                an installed copy with nothing else said
+    1  falconvar.configure(...)    an application guaranteeing where it writes
+    2  $FALCONVAR_DATA             for when you do not control the caller
+    3  the checkout                only when running from the repository
+    4  ~/.falconvar                an installed copy with nothing else said
 
 `$FALCONVAR_WEIGHTS` is the same for model checkpoints, which are a cache
 rather than output. Neither is a `.env` key: `.env` is read when a key is
@@ -485,33 +484,13 @@ Frames are byte-identical between the two -- verified, 299/299 on the
 reference video.
 
 
-WORKSPACES
-----------
-`configure()` says where *this process* writes, which is the right answer for
-an application that owns its deployment and the wrong one for anything serving
-more than one.
-
-    from falconvar import Workspace
-
-    ws = Workspace(data_root="/var/lib/tenant-a")
-    ws.media.run("talk.mp4")            # bound to this workspace
-    ws.videos()                         # what is under its root
-
-    with Workspace(data_root="/var/lib/tenant-b"):
-        media.run("talk.mp4")           # module-level call, other root
-
-A `ContextVar`, so it is already per-thread and per-asyncio-task and two
-workspaces cannot bleed into each other under the concurrency `describe`
-already runs. Nesting unwinds exactly. Verified across threads, and across the
-describe question vocabulary -- which lives under the data root and whose
-cache is keyed by it.
-
-**API keys are process-global.** `env_file=` reads that file, but keys land in
-`os.environ`, and one process has one of those. Two workspaces needing
-*different* values for `OPENAI_API_KEY` is not supported, and saying so beats
-a parameter that looks like it works.
-
-The pure verbs need none of this: they resolve no root at all.
+WORKSPACES -- removed
+---------------------
+A `Workspace` gave each thread its own data root, back when every component
+found its files by id under that root. Addressing by path took the reason
+away: a component writes where it is told. What still reads the root is
+configuration -- prompts.json, aggregates.json, providers.json, the weights
+cache -- and workflow's default `into`, and `configure()` covers those.
 
 
 PROGRESS

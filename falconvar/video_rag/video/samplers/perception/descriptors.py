@@ -30,6 +30,7 @@ import cv2
 import numpy as np
 
 from .detectors import Detection
+from falconvar.shared.errors import UnknownOption
 
 
 class RegionDescriptor(ABC):
@@ -149,7 +150,7 @@ class BoxGeometryDescriptor(RegionDescriptor):
 
     def __init__(self, class_aware: bool = True, metric: str = "proximity") -> None:
         if metric not in ("proximity", "iou"):
-            raise ValueError("metric must be 'proximity' or 'iou'")
+            raise UnknownOption("metric must be 'proximity' or 'iou'")
         self.class_aware = class_aware
         self.metric = metric
 

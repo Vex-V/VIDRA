@@ -16,6 +16,7 @@ server process, and reloading a model per query costs seconds.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from ... import env, paths

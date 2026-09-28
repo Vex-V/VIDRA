@@ -156,10 +156,6 @@ def check_fields(fields: dict[str, Any]) -> list[str]:
                                 f"{FIELD_NAME.pattern}")
             if not str(description or "").strip():
                 problems.append(f"{where}: key {key!r} needs a description")
-        if identity is not None and not (isinstance(identity, list) and identity
-                                         and all(k in nested for k in identity)):
-            problems.append(f"{where}: `identity` must be a non-empty list of "
-                            f"keys from `of` ({', '.join(nested)})")
     return problems
 
 

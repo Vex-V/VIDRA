@@ -1,6 +1,8 @@
 """What every artifact is.
 
-Imports nothing, and that is load-bearing: if a document's dataclass lived in
+Imports nothing but `shared.errors` -- a leaf that itself imports nothing, so
+a document can refuse with the library's own error without growing an edge.
+And that is load-bearing: if a document's dataclass lived in
 the component that produces it, `cut` would import `boundaries` to read a
 timeline, growing exactly the edges the file-handoff design removes. Every
 component imports a shape from here; none imports another.
@@ -18,6 +20,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
+from ..errors import Refused
 
 #: Rounding for identity and serialisation. Boundaries come from float
 #: arithmetic over two independent clocks, so comparing them exactly would
@@ -394,7 +397,7 @@ class Timeline:
         if index is not None:
             return index
         if not self.spans:
-            raise ValueError("an empty timeline contains no chunk")
+            raise Refused("an empty timeline contains no chunk")
         return 0 if ts < self.spans[0][0] else len(self.spans) - 1
 
     def fingerprint(self) -> str:
@@ -749,6 +752,102 @@ class Aggregate:
                    stats=d.get("stats", {}))
 
 
+# --------------------------------------------------------------------------
+# 10 · excerpt and sightings  --  what ONE aggregate reads, as a file
+# --------------------------------------------------------------------------
+
+@dataclass
+class Excerpt:
+    """The rows one selection took from a record: what a text aggregate reads.
+
+    **The whole input of `summary`, `chapters`, `events`, `ner`, `sentiment`
+    and every custom prompt**, so each of them is a component with one file in
+    and one file out. `select` writes it; the selection that chose the rows is
+    kept beside them, and so is the grid they came from -- a row's times are
+    resolved from it when it is written, and `chapters` still needs the whole
+    grid to say whether every chunk was covered. Nothing else is read.
+
+    A row is `{chunk_id, start_ts, end_ts, parts: [[source, text], ...]}`:
+    one chunk, with what each source said about it, in source order. Chunks
+    the selection found nothing in are absent.
+    """
+
+    #: Which video -- or combination -- the rows were taken from.
+    video_id: str
+    #: The input as written, e.g. `transcript+clip:activity`. Carried because
+    #: an answer records what it read, and because it is how an answer made
+    #: from this file is told apart from one made from another selection.
+    selection: str
+    #: The grid, as `timeline.json` holds it. Embedded rather than referenced,
+    #: so the file is the whole input; `Timeline.from_dict` reads it back.
+    timeline: dict[str, Any] = field(default_factory=dict)
+    #: One entry per chunk that the selection found something in.
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    #: The answer ids that contributed, and `transcript` when it did.
+    answers: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"document": "excerpt", "version": 1, "video_id": self.video_id,
+                "selection": self.selection, "count": len(self.rows),
+                "answers": self.answers, "timeline": self.timeline,
+                "rows": self.rows}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Excerpt":
+        return cls(video_id=d["video_id"], selection=d.get("selection", ""),
+                   timeline=d.get("timeline", {}), rows=d.get("rows", []),
+                   answers=d.get("answers", []))
+
+
+@dataclass
+class Sightings:
+    """The mentions one link profile reads: every entry that might be someone.
+
+    The input of `entities`, and the reason it is not an `Excerpt`: linking
+    reads *entries* -- one person in one answer, with every key the describer
+    gave -- not rendered text, and it needs to know which answer each came from,
+    because two entries of one answer are different people by the question's
+    own wording. That is the cannot-link rule, and it survives the file.
+    """
+
+    #: Which video -- or combination -- the mentions were taken from.
+    video_id: str
+    #: The link profile they were selected for, e.g. `people`. An entities run
+    #: under a different profile is refused: identity keys are the profile's.
+    profile: str
+    #: The input as written, e.g. `*` or `yolo[people.clothing]`.
+    selection: str
+    #: The list field linked, e.g. `people`, or `transcript` / `summary` for a
+    #: whole-value profile.
+    field_name: str = ""
+    #: The identity keys each mention is signed by -- the profile's, or fewer
+    #: when the selection narrowed them.
+    keys: list[str] = field(default_factory=list)
+    #: The grid, as `timeline.json` holds it: an entity's span and time on
+    #: screen are resolved from it.
+    timeline: dict[str, Any] = field(default_factory=dict)
+    #: `{chunk_id, sampler_id, field, index, signature, entry}` per mention.
+    mentions: list[dict[str, Any]] = field(default_factory=list)
+    #: `{chunk_id: what was said}` for the chunks mentioned, only when the
+    #: profile's account reads the transcript. Empty otherwise.
+    transcript: dict[str, str] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"document": "sightings", "version": 1, "video_id": self.video_id,
+                "profile": self.profile, "selection": self.selection,
+                "field": self.field_name, "keys": self.keys,
+                "count": len(self.mentions), "timeline": self.timeline,
+                "mentions": self.mentions, "transcript": self.transcript}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Sightings":
+        return cls(video_id=d["video_id"], profile=d.get("profile", ""),
+                   selection=d.get("selection", ""), field_name=d.get("field", ""),
+                   keys=d.get("keys", []), timeline=d.get("timeline", {}),
+                   mentions=d.get("mentions", []),
+                   transcript={str(k): v for k, v in (d.get("transcript") or {}).items()})
+
+
 def fingerprint_of(payload: dict[str, Any]) -> str:
     """A stable hash of arbitrary content. Exposed for components that need
     their own staleness key -- `inputs_fingerprint`, `text_hash`."""
@@ -799,13 +898,39 @@ class Produced:
                 "stats": self.stats, "skipped": self.skipped}
 
 
+def same_video(**documents: Any) -> str:
+    """The one id these documents agree on, or a refusal naming the argument.
+
+    Here because it is a fact about documents rather than about storage: every
+    one of them carries its own `video_id`, and a component works on one
+    video. Needs nothing but that attribute, so it does not cost this module
+    the import-nothing rule.
+
+    Addressed by video id this could not happen -- `paths.artifact(id, name)`
+    is a join, so two artifacts read under one id are that video's by
+    construction. Addressed by path it can, and a pipeline keeping every file
+    in one folder makes it rare rather than impossible. So the check is
+    written down once, where a caller wiring components by hand also gets it.
+    """
+    seen = {name: doc.video_id for name, doc in documents.items()
+            if doc is not None}
+    ids = set(seen.values())
+    if len(ids) > 1:
+        detail = ", ".join(f"{name}={vid!r}" for name, vid in sorted(seen.items()))
+        raise Refused(
+            f"these documents are not the same video: {detail}. "
+            f"Each carries its own id, and a component works on one video.")
+    return next(iter(ids)) if ids else ""
+
+
 DOCUMENTS = {"media": Media, "raw_transcript": RawTranscript,
              "cuts": Cuts, "timeline": Timeline, "manifest": Manifest,
              "transcript": Transcript, "descriptions": Descriptions,
              "embedded": Embedded,
-             "aggregate": Aggregate}
+             "aggregate": Aggregate,
+             "excerpt": Excerpt, "sightings": Sightings}
 
 __all__ = ["PRECISION", "VideoStream", "AudioStream", "Media",
            "RawTranscript", "Cuts", "Timeline", "Manifest", "Transcript",
-           "Descriptions", "Embedded", "Aggregate", "Produced", "fingerprint_of",
-           "DOCUMENTS"]
+           "Descriptions", "Embedded", "Aggregate", "Excerpt", "Sightings",
+           "Produced", "fingerprint_of", "DOCUMENTS", "same_video"]

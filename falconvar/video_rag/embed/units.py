@@ -20,11 +20,8 @@ also occurs inside values and made field boundaries invisible.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Optional
-
-from ...shared.contracts.documents import Descriptions, Transcript
-from ...shared.contracts.units import Unit, render
+from falconvar.shared.contracts.documents import Descriptions, Transcript
+from falconvar.shared.contracts.units import Unit, render
 
 
 def from_descriptions(document: Descriptions) -> list[Unit]:

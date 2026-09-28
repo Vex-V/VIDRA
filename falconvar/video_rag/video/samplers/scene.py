@@ -8,6 +8,7 @@ import numpy as np
 
 from ..reader import Frame
 from .base import Sampler
+from falconvar.shared.errors import Refused, UnknownOption
 
 if TYPE_CHECKING:
     from .perception.embedders import FrameEmbedder
@@ -54,9 +55,9 @@ class ClipChangeSampler(Sampler):
     ) -> None:
         super().__init__(min_interval_s, max_per_chunk, sampler_id, prompts)
         if mode not in ("reference", "consecutive"):
-            raise ValueError("mode must be 'reference' or 'consecutive'")
+            raise UnknownOption("mode must be 'reference' or 'consecutive'")
         if not 0.0 <= threshold <= 1.0:
-            raise ValueError("threshold must be a cosine similarity in [0, 1]")
+            raise Refused("threshold must be a cosine similarity in [0, 1]")
         if embedder is None:
             from .perception.embedders import CLIPEmbedder
 
@@ -79,7 +80,7 @@ class ClipChangeSampler(Sampler):
 
     def describe(self, frame: Frame) -> np.ndarray:
         if frame.image is None:
-            raise ValueError("ClipChangeSampler needs pixels; frame.image is None")
+            raise Refused("ClipChangeSampler needs pixels; frame.image is None")
         return self.embedder.embed_one(frame.image)
 
     def compare(self, current: np.ndarray, reference: np.ndarray) -> float:

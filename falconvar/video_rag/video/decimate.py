@@ -16,6 +16,7 @@ It answers from a timestamp alone, which is what lets the reader ask it
 from __future__ import annotations
 
 from typing import Any, Optional
+from falconvar.shared.errors import Refused
 
 
 class Decimator:
@@ -28,7 +29,7 @@ class Decimator:
 
     def __init__(self, per_second: float = 1.0) -> None:
         if per_second <= 0:
-            raise ValueError("per_second must be positive")
+            raise Refused("per_second must be positive")
         self.per_second = per_second
         self._last_bucket: Optional[int] = None
 

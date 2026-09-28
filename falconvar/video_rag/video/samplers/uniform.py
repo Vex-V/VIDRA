@@ -25,6 +25,7 @@ from typing import Any, Optional, Sequence
 
 from ..reader import Frame
 from .base import Sampler
+from falconvar.shared.errors import Refused
 
 
 class UniformSampler(Sampler):
@@ -38,7 +39,7 @@ class UniformSampler(Sampler):
                  prompts: Optional[Sequence[str]] = None) -> None:
         every_n = int(every_n)
         if every_n < 1:
-            raise ValueError("every_n must be >= 1; it is a frame stride")
+            raise Refused("every_n must be >= 1; it is a frame stride")
         # The stride is the strategy and lives in `propose`; `min_interval_s`
         # stays what it is for every other sampler -- an independent ceiling,
         # unset by default. Nothing is lost by deciding here because this

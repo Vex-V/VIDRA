@@ -1,28 +1,29 @@
 """The ingest component: `media.json` + `timeline.json` -> `manifest.json`, `store/`.
 
 Two artifacts, which is why `Produced` lists what was written rather than
-returning one path: a `--no-frame-store` run produces a manifest and no store,
+returning one path: a run with no `store` produces a manifest and no store,
 and a caller should learn that from the result rather than by looking.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional, Sequence
 
-from ..boundaries import load as load_timeline
-from ..media import load as load_media
-from ...shared import logs, paths, progress
-from ...shared.storage import files
-from ...shared.contracts.documents import (Manifest, Media, Produced,
+from falconvar.shared import logs, progress
+from falconvar.shared.contracts.documents import (Manifest, Media, Produced,
                                            Timeline)
+from falconvar.shared.storage.files import read, write
+from falconvar.shared.contracts.documents import same_video
 from . import samplers as samplers_mod
 #: Aliased, not renamed: the module's takes built sampler objects and a
-#: store, this one takes a spec string and any `Frames`. Two public
+#: store, this one takes a spec string and a directory. Two public
 #: functions of one name in one package is the recursion `describe`
 #: had to be rescued from.
 from .pipeline import ingest as _pass
 from .reader import UnreadableSource
-from ..frames import Frames, FrameStore
+from ..helpers import FrameStore
+from falconvar.shared.errors import Refused, UnknownOption
 
 
 def split_specs(sampler: str | Sequence[str]) -> list[str]:
@@ -144,7 +145,7 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
         name, asked = parse_spec(spec)
         for question in asked:
             if questions is not None and question not in questions:
-                raise ValueError(
+                raise UnknownOption(
                     f"{spec!r}: unknown question {question!r}; "
                     f"known: {', '.join(questions)}")
         merged = grouped.setdefault(name, [])
@@ -165,7 +166,7 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
         detail = "; ".join(f"{s} is read by "
                            f"{', '.join(SAMPLER_SETTINGS[s])}"
                            for s in unreachable)
-        raise ValueError(
+        raise Refused(
             f"no chosen sampler reads {', '.join(unreachable)} "
             f"(chosen: {', '.join(sorted(grouped))}) -- {detail}")
 
@@ -198,7 +199,7 @@ def ingest(media: Media, timeline: Timeline,
            vocabulary: Optional[Sequence[str]] = None,
            confidence: Optional[float] = None,
            languages: Optional[Sequence[str]] = None,
-           frames: Optional[Frames] = None,
+           frames: Optional[FrameStore] = None,
            store_scope: str = "sampled",
            on_progress: Optional[progress.Reporter] = None) -> Manifest:
     """One decode pass over the picture, onto a grid decided elsewhere.
@@ -207,10 +208,9 @@ def ingest(media: Media, timeline: Timeline,
     and writes no artifact -- it does open the file `media.path` names,
     because frames are what it is for.
 
-    `frames` is any `Frames`: a `FrameStore` over a directory you name, or a
-    `MemoryFrames` so that nothing touches disk at all. `None` keeps no
+    `frames` is a `FrameStore` over a directory you name. `None` keeps no
     frames, which is a manifest and no pictures -- legible, and what
-    `--no-frame-store` has always meant.
+    omitting `store` has always meant.
 
     **A typo in the question half is refused here, before anything decodes.**
     `build_samplers` has taken a `questions` vocabulary since it was written,
@@ -252,7 +252,9 @@ def ingest(media: Media, timeline: Timeline,
                  chunk_done if on_progress is not None else None)
 
 
-def video(video_id: str, sampler: str | Sequence[str] = "uniform",
+def video(media: str | Path, timeline: str | Path, out: str | Path,
+          store: Optional[str | Path] = None,
+          sampler: str | Sequence[str] = "uniform",
           per_second: float = 1.0,
           every_n: Optional[int] = None,
           min_interval_s: float = 0.0,
@@ -261,64 +263,64 @@ def video(video_id: str, sampler: str | Sequence[str] = "uniform",
           vocabulary: Optional[Sequence[str]] = None,
           confidence: Optional[float] = None,
           languages: Optional[Sequence[str]] = None,
-          frame_store: bool = True,
           store_scope: str = "sampled",
           prune_store: bool = False,
           on_progress: Optional[progress.Reporter] = None) -> Produced:
-    """Ingest by id, into this video's own frame store. Writes the manifest.
+    """Sample the picture onto the grid; write the manifest to `out`.
 
-    `ingest` plus a read at each end, and the one place a store path is
-    derived from a video id. `frame_store=False` keeps no frames, which is why
-    this takes a bool where `ingest` takes the store itself: over HTTP and on
-    a CLI there is nowhere to put an object.
+    `ingest` plus a read at each end. `store` is a *directory* and it is the
+    one input no filepath describes: a frame store is a protocol, and the
+    a caller could satisfy it without one -- so `ingest` takes the object and
+    this takes somewhere to put it. `store=None` keeps no frames, which is
+    what omitting `store` has always meant.
     """
-    store = (FrameStore(paths.artifact(video_id, "store"))
-             if frame_store else None)
-    if store is None:
+    described = read(media, Media)
+    grid = read(timeline, Timeline)
+    video_id = same_video(media=described, timeline=grid)
+
+    frames = FrameStore(Path(store)) if store is not None else None
+    if frames is None:
         logs.skipped("video", video_id, "store",
-                     "frame_store=False, so no pixels are kept")
+                     "no store= was given, so no pixels are kept")
 
     with logs.timed("video", video_id) as done:
-        manifest = ingest(load_media(video_id), load_timeline(video_id),
-                          sampler, per_second, every_n, min_interval_s,
-                          max_per_chunk, threshold, vocabulary, confidence,
-                          languages, frames=store, store_scope=store_scope,
-                          on_progress=on_progress)
+        manifest = ingest(described, grid, sampler, per_second, every_n,
+                          min_interval_s, max_per_chunk, threshold, vocabulary,
+                          confidence, languages, frames=frames,
+                          store_scope=store_scope, on_progress=on_progress)
 
         pruned: list[int] = []
-        if store is not None and prune_store:
+        if frames is not None and prune_store:
             # After the pass, so a failure mid-run leaves the old store whole.
             named = {f["index"] for c in manifest.chunks
                      for b in c["samplers"].values() for f in b["frames"]}
-            pruned = store.prune(named)
+            pruned = frames.prune(named)
 
-        where = files.write(video_id, "manifest", manifest.as_dict())
+        where = write(out, manifest)
         done(sampled=manifest.stats.get("frames_sampled"),
              stored=manifest.stats.get("stored_frames"),
              samplers=",".join(manifest.sampler_ids()), pruned=len(pruned))
     artifacts = {"manifest": where}
-    if store is not None and store.written:
-        artifacts["store"] = str(store.root)
+    if frames is not None and frames.written:
+        artifacts["store"] = str(frames.root)
 
     return Produced(
-        video_id=video_id, component="video",        artifacts=artifacts,
+        video_id=video_id, component="video", artifacts=artifacts,
         stats={**manifest.stats,
                "timeline_fingerprint": manifest.timeline_fingerprint,
                "manifest_fingerprint": manifest.fingerprint(),
                "samplers": manifest.sampler_ids(),
                "pruned_frames": len(pruned)},
-        skipped=[] if store is not None else ["store"],
+        skipped=[] if frames is not None else ["store"],
     )
 
 
-#: The uniform name every component also answers to: what a dispatch
-#: table calls and what a form introspects. The same function object.
-#: See `media/driver.py`.
 run = video
 
 
-def load(video_id: str) -> Manifest:
-    return Manifest.from_dict(files.read_json(paths.require(video_id, "manifest")))
+def load(path: str | Path) -> Manifest:
+    """Read a `manifest.json` back, typed."""
+    return read(path, Manifest)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -327,7 +329,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     ap = argparse.ArgumentParser(
         description="Decide which frames are worth describing.")
-    ap.add_argument("video_id")
+    ap.add_argument("media", help="path to media.json")
+    ap.add_argument("timeline", help="path to timeline.json")
+    ap.add_argument("out", help="where to write manifest.json")
+    ap.add_argument("--store", default=None,
+                    help="directory for the kept frames. Omit to keep none")
     ap.add_argument("--sampler", default="uniform",
                     help=f"comma-separated; known: "
                          f"{', '.join(samplers_mod.available())}. Any may carry "
@@ -348,7 +354,6 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "the frame must have changed")
     ap.add_argument("--languages", default=None,
                     help="text: comma-separated EasyOCR codes (default en)")
-    ap.add_argument("--no-frame-store", action="store_true")
     ap.add_argument("--prune-store", action="store_true",
                     help="delete stored frames this manifest does not name. "
                          "A store accumulates across runs; this is the only "
@@ -363,10 +368,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     langs = ([l.strip() for l in args.languages.split(",") if l.strip()]
              if args.languages else None)
     try:
-        produced = run(args.video_id, args.sampler, args.per_second, args.every_n,
+        produced = video(args.media, args.timeline, args.out, args.store,
+                       args.sampler, args.per_second, args.every_n,
                        args.min_interval, args.max_per_chunk, args.threshold,
-                       vocab, args.confidence, langs,
-                       not args.no_frame_store, args.store_scope,
+                       vocab, args.confidence, langs, args.store_scope,
                        args.prune_store)
     except (KeyError, ValueError, FileNotFoundError, UnreadableSource) as exc:
         print(f"error: {exc}")
@@ -377,7 +382,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     s = produced.stats
-    manifest = load(produced.video_id)
+    manifest = load(produced.artifacts['manifest'])
     print(f"{produced.video_id}")
     print(f"  decimated    {s['frames_decimated']}   "
           f"over {s['chunks']} chunks ({s['chunks_with_frames']} with frames)")

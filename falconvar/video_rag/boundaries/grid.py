@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ...shared.contracts.documents import Timeline
+from falconvar.shared.contracts.documents import Timeline
+from falconvar.shared.errors import Refused, UnknownOption
 
 #: Every policy, and which evidence each needs. The dependency, not a branch:
 #: a driver reads this to know what must run first, rather than carrying an
@@ -95,9 +96,9 @@ def uniform(video_id: str, duration_s: float, chunk_s: float = 20.0) -> Timeline
     video.
     """
     if chunk_s <= 0:
-        raise ValueError("chunk_s must be positive")
+        raise Refused("chunk_s must be positive")
     if duration_s <= 0:
-        raise ValueError("duration_s must be positive")
+        raise Refused("duration_s must be positive")
     spans: list[tuple[float, float]] = []
     start = 0.0
     while start < duration_s:
@@ -144,12 +145,12 @@ def build(video_id: str, policy: str, duration_s: float,
     should a chunk be" is one number rather than two that can disagree.
     """
     if policy not in POLICIES:
-        raise KeyError(f"unknown policy {policy!r}; "
+        raise UnknownOption(f"unknown policy {policy!r}; "
                        f"known: {', '.join(POLICIES)}")
     if policy == "uniform":
         return uniform(video_id, duration_s, chunk_s)
     if cuts is None:
-        raise ValueError(
+        raise Refused(
             f"policy {policy!r} needs cuts from "
             f"boundaries.{'scenes' if POLICIES[policy] == 'video' else 'speech'}")
     return from_cuts(video_id, cuts, duration_s, policy, params,

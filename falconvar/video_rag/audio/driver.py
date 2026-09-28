@@ -9,12 +9,12 @@ reported 42 segments and 205 words, and wrote a transcript of
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
-from ..media import load as load_media
-from ...shared import env, logs, paths
-from ...shared.storage import files
-from ...shared.contracts.documents import Media, Produced, RawTranscript
+from falconvar.shared import env, logs
+from falconvar.shared.contracts.documents import Media, Produced, RawTranscript
+from falconvar.shared.storage.files import read, write
 from . import models
 #: Aliased, not renamed. The reader's takes *built* models and this
 #: module's takes setting names, so they are two functions -- and two
@@ -22,6 +22,7 @@ from . import models
 #: `describe` had to be rescued from. See CLAUDE.md.
 from .reader import listen as _pass
 from .source import NoAudio
+from falconvar.shared.errors import Refused
 
 #: Named, not positional. See the module docstring.
 DEFAULT_TRANSCRIBER = "whisper"
@@ -101,7 +102,7 @@ def listen(media: Media,
                | {s for s in VOICE_SETTINGS if VOICE_SETTINGS[s] in voices})
     unreachable = sorted(set(named) - reached)
     if unreachable:
-        raise ValueError(
+        raise Refused(
             f"transcriber {transcriber!r} and diarizer {diarizer!r} take no "
             f"{', '.join(repr(u) for u in unreachable)}")
 
@@ -111,7 +112,7 @@ def listen(media: Media,
                  video_id=media.video_id)
 
 
-def audio(video_id: str,
+def audio(media: str | Path, out: str | Path,
           transcriber: str = DEFAULT_TRANSCRIBER,
           diarizer: str = DEFAULT_DIARIZER,
           model: Optional[str] = None,
@@ -121,33 +122,33 @@ def audio(video_id: str,
           device: Optional[str] = None,
           diarizer_model: Optional[str] = None,
           exclusive: Optional[bool] = None) -> Produced:
-    """Transcribe and diarize the whole file, by id. Writes no chunk ids.
+    """Transcribe and diarize the whole file. Writes no chunk ids.
 
     `listen` plus a read at each end; every check lives down there.
+
+    The file it decodes is `Media.path`, recorded by `media` -- so this takes
+    one path and opens a second it was never handed. That is true of every
+    addressing, and it is the one place the filepath story does not reach.
     """
-    with logs.timed("audio", video_id) as done:
-        raw = listen(load_media(video_id), transcriber, diarizer, model,
+    described = read(media, Media)
+    with logs.timed("audio", described.video_id) as done:
+        raw = listen(described, transcriber, diarizer, model,
                      language, vad_filter, compute_type, device,
                      diarizer_model, exclusive)
-        where = files.write(video_id, "raw_transcript", raw.as_dict())
+        where = write(out, raw)
         done(segments=raw.stats.get("segments"), words=raw.stats.get("words"),
              speakers=raw.stats.get("speakers"), silent=raw.silent)
     return Produced(
-        video_id=video_id, component="audio",        artifacts={"raw_transcript": where},
+        video_id=described.video_id, component="audio",
+        artifacts={"raw_transcript": where},
         stats={**raw.stats, "silent": raw.silent},
         skipped=["transcribe", "diarize"] if raw.silent else [],
     )
 
 
-#: The uniform name every component also answers to: what a dispatch
-#: table calls and what a form introspects. The same function object.
-#: See `media/driver.py` for why the function is named for its component.
-run = audio
-
-
-def load(video_id: str) -> RawTranscript:
-    return RawTranscript.from_dict(
-        files.read_json(paths.require(video_id, "raw_transcript")))
+def load(path: str | Path) -> RawTranscript:
+    """Read a `transcript.raw.json` back, typed."""
+    return read(path, RawTranscript)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -156,7 +157,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     ap = argparse.ArgumentParser(
         description="Transcribe and diarize a whole file. No chunking.")
-    ap.add_argument("video_id")
+    ap.add_argument("media", help="path to media.json")
+    ap.add_argument("out", help="where to write transcript.raw.json")
     ap.add_argument("--transcriber", default=DEFAULT_TRANSCRIBER,
                     choices=sorted(models.TRANSCRIBERS))
     ap.add_argument("--diarizer", default=DEFAULT_DIARIZER,
@@ -184,10 +186,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     try:
-        produced = run(args.video_id, args.transcriber, args.diarizer,
-                       args.model, args.language, args.vad_filter,
-                       args.compute_type, args.device, args.diarizer_model,
-                       args.exclusive)
+        produced = audio(args.media, args.out, args.transcriber,
+                         args.diarizer, args.model, args.language,
+                         args.vad_filter, args.compute_type, args.device,
+                         args.diarizer_model, args.exclusive)
     except (NoAudio, KeyError, ValueError, FileNotFoundError,
             models.ModelUnavailable) as exc:
         print(f"error: {exc}")

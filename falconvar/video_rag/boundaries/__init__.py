@@ -25,9 +25,9 @@ from __future__ import annotations
 #:
 #: `main` is deliberately absent: it is argparse, and `__main__.py` reaches it
 #: as `from .driver import main`. Nothing ever imported it from the package.
-from .driver import (EVIDENCE_SETTINGS, detect, evidence, load,
-                     retune, run, timeline)
+from .driver import (EVIDENCE_SETTINGS, boundaries, detect, evidence, load,
+                     retune, timeline)
 from .grid import POLICIES
 
-__all__ = ["EVIDENCE_SETTINGS", "POLICIES", "detect", "evidence", "load",
-           "retune", "run", "timeline"]
+__all__ = ["EVIDENCE_SETTINGS", "POLICIES", "boundaries", "detect",
+           "evidence", "load", "retune", "timeline"]

@@ -1,25 +1,25 @@
-"""The cut component: `transcript.raw.json` + `timeline.json` -> `transcript.json`."""
+"""The cut component: a grid + a raw transcript -> `transcript.json`."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
-from ..boundaries import load as load_timeline
-from ..audio import load as load_raw
-from ...shared import logs, paths
-from ...shared.storage import files
-from ...shared.contracts.documents import (Produced, RawTranscript,
-                                           Timeline, Transcript)
+from falconvar.shared import logs
+from falconvar.shared.contracts.documents import (Produced, RawTranscript,
+                                                  Timeline, Transcript)
+from falconvar.shared.storage.files import read, write
+from falconvar.shared.contracts.documents import same_video
 from .cutter import stats_for, to_chunks
 
 
 def apply(timeline: Timeline, raw: RawTranscript) -> Transcript:
     """The grid, onto a transcript already in hand. Reads and writes nothing.
 
-    This is the component's whole work, and `run` below is this plus a read
-    at each end. Nothing here needs `configure()` or a data root, so a caller
-    with a `Timeline` and a `RawTranscript` -- from this pipeline, from an
-    earlier run, or built by hand -- can cut one against the other.
+    This is the component's whole work, and `cut` below is this plus a read
+    at each end. Nothing here needs a path at all, so a caller with a
+    `Timeline` and a `RawTranscript` -- from this pipeline, from an earlier
+    run, or built by hand -- can cut one against the other.
 
     The id comes off the transcript rather than being an argument: `cut`
     re-chunks *that* transcript, and a third opinion about which video it is
@@ -35,31 +35,32 @@ def apply(timeline: Timeline, raw: RawTranscript) -> Transcript:
     )
 
 
-def cut(video_id: str) -> Produced:
-    """Apply the grid. Costs no model and can be repeated at will."""
-    with logs.timed("cut", video_id) as done:
-        raw = load_raw(video_id)
-        timeline = load_timeline(video_id)
+def cut(timeline: str | Path, raw_transcript: str | Path,
+        out: str | Path) -> Produced:
+    """Apply the grid at `timeline` to the transcript at `raw_transcript`.
 
-        transcript = apply(timeline, raw)
+    Costs no model and can be repeated at will. `apply` plus a read at each
+    end, with the paths named rather than derived from a video id.
+    """
+    grid = read(timeline, Timeline)
+    raw = read(raw_transcript, RawTranscript)
+    video_id = same_video(timeline=grid, raw_transcript=raw)
+
+    with logs.timed("cut", video_id) as done:
+        transcript = apply(grid, raw)
         stats = transcript.stats
-        where = files.write(video_id, "transcript", transcript.as_dict())
+        where = write(out, transcript)
         done(chunks=stats.get("chunks"), words=stats.get("words"))
     return Produced(
-        video_id=video_id, component="cut",        artifacts={"transcript": where},
+        video_id=video_id, component="cut",
+        artifacts={"transcript": where},
         stats={**stats, "timeline_fingerprint": transcript.timeline_fingerprint},
     )
 
 
-#: The uniform name every component also answers to: what a dispatch
-#: table calls and what a form introspects. The same function object.
-#: See `media/driver.py`.
-run = cut
-
-
-def load(video_id: str) -> Transcript:
-    return Transcript.from_dict(
-        files.read_json(paths.require(video_id, "transcript")))
+def load(path: str | Path) -> Transcript:
+    """Read a `transcript.json` back, typed."""
+    return read(path, Transcript)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -67,12 +68,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     import json
 
     ap = argparse.ArgumentParser(description="Cut a transcript to the grid.")
-    ap.add_argument("video_id")
+    ap.add_argument("timeline", help="path to timeline.json")
+    ap.add_argument("raw_transcript", help="path to transcript.raw.json")
+    ap.add_argument("out", help="where to write transcript.json")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
     try:
-        produced = run(args.video_id)
+        produced = cut(args.timeline, args.raw_transcript, args.out)
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}")
         return 1

@@ -16,11 +16,11 @@ on it, but not on disk: a file is replaced, not merged.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Sequence
 
-from ...shared import paths
-from ...shared.storage import files
-from ...shared.contracts.documents import Embedded
+from falconvar.shared.contracts.documents import Embedded
+from falconvar.shared.storage.files import read, write as _write
 from .units import Unit
 
 
@@ -45,15 +45,14 @@ def build(video_id: str, units: Sequence[Unit], embedder_key: str = "",
     )
 
 
-def write(video_id: str, units: Sequence[Unit], embedder_key: str = "",
-          timeline_fingerprint: str = "") -> str:
+def write(path: str | Path, video_id: str, units: Sequence[Unit],
+          embedder_key: str = "", timeline_fingerprint: str = "") -> str:
     document = build(video_id, units, embedder_key, timeline_fingerprint)
-    return files.write(video_id, "embedded", document.as_dict())
+    return _write(path, document)
 
 
-def load(video_id: str) -> Embedded:
-    return Embedded.from_dict(
-        files.read_json(paths.require(video_id, "embedded")))
+def load(path: str | Path) -> Embedded:
+    return read(path, Embedded)
 
 
 __all__ = ["build", "load", "write"]

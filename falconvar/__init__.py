@@ -20,7 +20,6 @@ import logging
 
 from .shared.errors import FalconvarError, ModelUnavailable, Unavailable
 from .shared.paths import configure
-from .workspace import Workspace
 
 #: A library configures no logging. Without this, a record emitted before the
 #: application has set anything up prints `No handlers could be found`, or --
@@ -46,5 +45,5 @@ def __getattr__(name: str) -> str:
 
 
 __all__ = ["FalconvarError", "ModelUnavailable", "Unavailable",
-           "Workspace", "__version__", "configure"]
+           "__version__", "configure"]
 
