@@ -91,4 +91,22 @@ class NERAggregator:
         }
 
 
-__all__ = ["NERAggregator"]
+def ner(excerpt: Any, out: Any, previous: Any = None, model: Optional[str] = None,
+        labels: tuple[str, ...] = DEFAULT_LABELS, threshold: float = 0.5) -> Any:
+    """Named entities in the excerpt file at `excerpt`, into the answer file
+    `out`. `labels` is the whole configuration of a zero-shot model -- the
+    label set decides what is found -- and it is part of the answer's version,
+    so changing it recomputes rather than reusing `previous`."""
+    from ..driver import run_one
+    return run_one("ner", excerpt, out, previous,
+                   settings={"model": model, "labels": tuple(labels),
+                             "threshold": threshold})
+
+
+def main(argv: Any = None) -> int:
+    from ..driver import component_main
+    return component_main(argv, "Named entities in an excerpt, and which chunks "
+                                "each appears in.", aggregator="ner")
+
+
+__all__ = ["NERAggregator", "main", "ner"]

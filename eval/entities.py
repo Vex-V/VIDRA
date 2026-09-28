@@ -99,14 +99,17 @@ SELECT = "*[actors.actor]"
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    from falconvar.aggregates import context
     from falconvar.aggregates.definitions import Selection
-    from falconvar.aggregates.driver import context_for
     from falconvar.aggregates.inputs import Source, parse
     from falconvar.aggregates.entities.linking import RULES, link, mentions_of
-    from falconvar.video_rag.embed import embedders
-    from falconvar.shared import env
+    from falconvar.shared import env, paths
+    from falconvar.shared.models import embedders
 
     ap = argparse.ArgumentParser(description="Grade entity linking against hand labels.")
+    ap.add_argument("--out", type=Path, default=None,
+                    help="the folder holding one folder per video; default the "
+                         "data root's")
     ap.add_argument("--embedder", action="append", default=None,
                     help="repeatable; default openai and local")
     ap.add_argument("--select", default=SELECT,
@@ -125,10 +128,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     selection = Selection(tuple(Source(s.head) for s in chosen.sources),
                           fields[0].split(".")[0], tuple(f.split(".", 1)[1] for f in fields))
 
+    root = args.out or paths.out_root()
     mentions, vectors = {}, {}
     for vid in videos:
-        context = context_for(vid)
-        mentions[vid] = mentions_of(context, selection)
+        folder = root / vid
+        joined = context(folder / "timeline.json",
+                         descriptions=folder / "descriptions.json",
+                         transcript=folder / "transcript.json")
+        mentions[vid] = mentions_of(joined, selection)
         for name in names:
             built = embedders.build(name)
             vectors[(vid, built.key)] = built.embed([m.signature for m in mentions[vid]])

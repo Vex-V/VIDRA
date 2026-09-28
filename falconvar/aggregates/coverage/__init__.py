@@ -1,5 +1,8 @@
-"""`coverage` -- which chunks have an account, and from which modality."""
+"""`coverage` -- which chunks have an account, and from which modality.
 
-from .driver import CoverageAggregator
+    coverage.coverage(record, out)      a record in, one answer out
+"""
 
-__all__ = ["CoverageAggregator"]
+from .driver import CoverageAggregator, coverage
+
+__all__ = ["CoverageAggregator", "coverage"]

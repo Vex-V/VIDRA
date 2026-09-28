@@ -1,5 +1,8 @@
-"""`stats` -- counts and coverage: chunks, samplers, words, frames."""
+"""`stats` -- counts and coverage: chunks, samplers, words, frames.
 
-from .driver import StatsAggregator
+    stats.stats(record, out)      a record in, one answer out
+"""
 
-__all__ = ["StatsAggregator"]
+from .driver import StatsAggregator, stats
+
+__all__ = ["StatsAggregator", "stats"]

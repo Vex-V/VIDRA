@@ -1,0 +1,9 @@
+{
+  "ladder_worker": ["c0/yolo/people/5", "c0/clip:yolo/people/3", "c1/yolo/people/4", "c1/clip:yolo/people/4", "c2/yolo/people/3"],
+  "white_shirt_beard": ["c0/yolo/people/0", "c0/clip:yolo/people/1"],
+  "cap_black_shorts": ["c0/yolo/people/1", "c0/clip:yolo/people/2", "c1/yolo/people/1", "c1/clip:yolo/people/3"],
+  "dark_clothes_left": ["c0/yolo/people/2", "c0/clip:yolo/people/0", "c1/yolo/people/0", "c1/clip:yolo/people/2"],
+  "bald_glasses": ["c0/yolo/people/3", "c0/clip:yolo/people/5", "c1/yolo/people/2", "c1/clip:yolo/people/0", "c2/yolo/people/1", "c2/clip:yolo/people/1"],
+  "blue_sweater_man": ["c0/yolo/people/4", "c0/clip:yolo/people/4", "c1/yolo/people/3", "c1/clip:yolo/people/1", "c2/yolo/people/0", "c2/clip:yolo/people/0"],
+  "grey_shirt_man": ["c0/yolo/people/6", "c0/clip:yolo/people/6", "c1/yolo/people/5"]
+}

@@ -1,7 +1,7 @@
 """aggregates -- higher-level answers over what video_rag extracted.
 
-The second tier. Reads the documents video_rag wrote, through video_rag's
-driver -- never the video, and never a video_rag component. Answers the
+The second tier. Reads the documents video_rag wrote, by the paths it is
+handed -- never the video, and never a video_rag component. Answers the
 questions embeddings cannot: counts, coverage, who dominated, how much of this
 is speech, what the whole video is about, who is who across chunks.
 
@@ -14,6 +14,21 @@ Two sources of aggregators. Code: `stats`, `speakers`, `coverage`, `ner`,
 `chapters`, `events`, `entities:people` and whatever a user has added -- each run
 by its kind's runner.
 
+**Every aggregator is a component, and there is a pipeline over them**, the
+shape video_rag has. Each takes one input and writes one answer:
+
+    select.select(record, out, "ner", "transcript")    -> an excerpt file
+    ner.ner(excerpt, out)                              -> ner.json
+    stats.stats(record, out)                           -> stats.json
+    prompt.prompt("summary", excerpt, out)             -> summary.json
+    entities.entities("people", sightings, out)        -> entities.people.json
+
+    aggregate(record, out, ner="transcript", sentiment=True)   # only those two
+
+**Several videos are one record first.** `combine` lays their documents end to
+end in the same formats, and every aggregator then runs over that record
+unchanged -- no aggregator knows what a collection is.
+
 **One folder per aggregator, each with a `driver.py`**, as a component of
 video_rag has. A tier is a class attribute rather than a directory, because it
 says what an aggregator *costs*, not what it is made of -- and grouping by cost
@@ -25,13 +40,14 @@ is its only caller. What every aggregator shares is `base` (the protocols and
 from __future__ import annotations
 
 import importlib
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from . import definitions
 from .base import TIERS, Context, missing
 from .coverage import CoverageAggregator
 from .speakers import SpeakersAggregator
 from .stats import StatsAggregator
+from falconvar.shared.errors import Refused
 
 REGISTRY: dict[str, Any] = {
     cls.name: cls for cls in
@@ -65,20 +81,6 @@ def available() -> list[str]:
     """Every aggregator id: code first, then definitions. Read now, so a
     definition added through the API is runnable without a restart."""
     return [*REGISTRY, *_LAZY, *definitions.ids()]
-
-
-def expand(names: Optional[Sequence[str] | str]) -> list[str]:
-    """What `only` names, in run order. `entities` means every link profile."""
-    if names is None:
-        return available()
-    if isinstance(names, str):
-        names = [n.strip() for n in names.split(",") if n.strip()]
-    out: list[str] = []
-    for name in names:
-        found = ([i for i in definitions.ids() if i.startswith(definitions.PROFILE_PREFIX)]
-                 if name == "entities" else [name])
-        out += [n for n in found if n not in out]
-    return out
 
 
 def kind_of(name: str) -> Optional[str]:
@@ -116,22 +118,57 @@ def takes_inputs(name: str) -> bool:
     return name not in REGISTRY
 
 
-def build(name: str, llm: Optional[str] = None, embedder: Optional[str] = None) -> Any:
-    """One aggregator, constructed. Only the llm tier takes a provider, and
-    only a link profile an embedder; local models name their own checkpoints."""
+def settings_of(name: str) -> list[str]:
+    """An aggregator's own settings: its constructor's parameters. `ner` has
+    `model`, `labels` and `threshold`; the free ones and the definitions have
+    none (a definition's words are its data, and `llm` / `embedder` are who
+    answers, not settings of the aggregator). Read off the signature, so a
+    setting added to a constructor is reachable without editing a list."""
+    import inspect
+    if name in _LAZY:
+        cls = _import(_LAZY[name][0])
+        return [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+    return []
+
+
+def build(name: str, llm: Optional[str] = None, embedder: Optional[str] = None,
+          **settings: Any) -> Any:
+    """One aggregator, constructed. Only the llm tier takes a provider, only a
+    link profile an embedder, and only a local model settings of its own --
+    `labels` for `ner`, a checkpoint for either."""
     if name in REGISTRY:
+        if settings:
+            raise Refused(f"{name} takes no settings")
         return REGISTRY[name]()
     if name in _LAZY:
-        return _import(_LAZY[name][0])()
+        return _import(_LAZY[name][0])(**settings)
+    if settings:
+        raise Refused(f"{name} is a definition; its words are its settings")
     kind = kind_of(name)
     runner = _import(RUNNERS[kind])
     return runner(name, llm, embedder) if kind == "link" else runner(name, llm)
 
 
-from .driver import (context_for, definition_rows, index_summary,  # noqa: E402
-                     load, main, run, validate)
+from .driver import (Inapplicable, aggregate, answer, answers,  # noqa: E402
+                     context, definition_rows, index_summary, load, load_all,
+                     load_input, up_to, validate)
 
-__all__ = ["REGISTRY", "RUNNERS", "TIERS", "Context", "about", "available",
-           "build", "context_for", "definition_rows", "expand", "index_summary",
-           "kind_of", "load", "main", "missing", "run", "takes_inputs",
-           "tier_of", "validate"]
+
+def __getattr__(name: str) -> Any:
+    """PEP 562: `combine` and `merge` resolve on first use.
+
+    Imported eagerly, `python -m falconvar.aggregates.combination` found its
+    own module already in `sys.modules` and warned that running it might
+    behave unpredictably. And the module is not called `combine`: a package
+    attribute and a submodule of one name are one slot, so importing the
+    module replaced the function -- `boundaries.grid`'s trap, one tier over.
+    """
+    if name in ("combine", "merge"):
+        return getattr(importlib.import_module(".combination", __name__), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+__all__ = ["REGISTRY", "RUNNERS", "TIERS", "Context", "Inapplicable", "about",
+           "aggregate", "answer", "answers", "available", "build", "combine",
+           "context", "definition_rows", "index_summary", "kind_of", "load",
+           "load_all", "load_input", "merge", "missing", "settings_of",
+           "takes_inputs", "tier_of", "up_to", "validate"]

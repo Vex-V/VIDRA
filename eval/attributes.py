@@ -61,15 +61,17 @@ def use_data(root: Path) -> None:
 class Corpus:
     """One video's people mentions, its labels, and the answers in time order."""
 
-    def __init__(self, video: str = "test1", labels: Path = LABELS):
+    def __init__(self, video: str = "test1", labels: Path = LABELS, data: Path = DATA):
+        from falconvar.aggregates import context
         from falconvar.aggregates.definitions import Selection
-        from falconvar.aggregates.driver import context_for
         from falconvar.aggregates.inputs import Source
         from falconvar.aggregates.entities.linking import mentions_of
 
         self.labels = json.loads(labels.read_text(encoding="utf-8"))
         self.truth = {m: person for person, ms in self.labels.items() for m in ms}
-        self.mentions = mentions_of(context_for(video),
+        folder = Path(data) / "out" / video
+        self.mentions = mentions_of(context(folder / "timeline.json",
+                                            descriptions=folder / "descriptions.json"),
                                     Selection((Source("*"),), "people", ("appearance", "clothing")))
         missing = sorted(set(self.truth) - {m.key for m in self.mentions})
         if missing:
@@ -231,7 +233,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     from falconvar.shared import env
     env.load()
 
-    c = Corpus(args.video, args.labels)
+    c = Corpus(args.video, args.labels, args.data)
     print(f"{c.n} mentions in {len(c.answers)} answers; labelled {len(c.truth)} in "
           f"{len(c.labels)} people, "
           f"{sum(len(g) * (len(g) - 1) // 2 for g in c.labels.values())} same-person pairs")
@@ -240,7 +242,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     sims = {}
     if not args.no_embed:
-        from falconvar.video_rag.embed import embedders
+        from falconvar.shared.models import embedders
         v = np.asarray(embedders.build("openai").embed([m.signature for m in c.mentions]))
         v /= np.linalg.norm(v, axis=1, keepdims=True)
         sims["cosine openai (text)"] = v @ v.T

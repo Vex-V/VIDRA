@@ -48,4 +48,17 @@ class SpeakersAggregator:
         }
 
 
-__all__ = ["SpeakersAggregator"]
+def speakers(source: Any, out: Any, previous: Any = None) -> Any:
+    """Who spoke in the record at `source`, into the answer file `out`. Needs
+    a transcript; a record without one raises `Inapplicable`, saying so."""
+    from ..driver import run_one
+    return run_one("speakers", source, out, previous)
+
+
+def main(argv: Any = None) -> int:
+    from ..driver import component_main
+    return component_main(argv, "Who spoke in a record, for how long, and how "
+                                "often the voice changed.", aggregator="speakers")
+
+
+__all__ = ["SpeakersAggregator", "main", "speakers"]

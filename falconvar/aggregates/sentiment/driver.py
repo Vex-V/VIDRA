@@ -83,4 +83,18 @@ class SentimentAggregator:
         }
 
 
-__all__ = ["SentimentAggregator"]
+def sentiment(excerpt: Any, out: Any, previous: Any = None,
+              model: Optional[str] = None) -> Any:
+    """Tone per chunk of the excerpt file at `excerpt`, and where it turns,
+    into the answer file `out`."""
+    from ..driver import run_one
+    return run_one("sentiment", excerpt, out, previous, settings={"model": model})
+
+
+def main(argv: Any = None) -> int:
+    from ..driver import component_main
+    return component_main(argv, "Tone per chunk of an excerpt, and where it turns.",
+                          aggregator="sentiment")
+
+
+__all__ = ["SentimentAggregator", "main", "sentiment"]
