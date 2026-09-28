@@ -12,11 +12,10 @@ measurements and the traps live here.
 
 ```
 falconvar/
-  __init__.py      configure() · Workspace · __version__ · the error base ·
+  __init__.py      configure() · __version__ · the error base ·
                    the NullHandler. Imports almost nothing
   py.typed         PEP 561: without it a consumer's checker sees no annotations
   workflow.py      the whole run: video_rag's driver, then aggregates'
-  workspace.py     two data roots in one process, as a ContextVar
   shared/          paths · env · errors · logs · progress   both tiers import these
     contracts/     documents · schemas   what components hand each other
                    units (one embeddable thing + render) · fields (the builder)
@@ -45,16 +44,20 @@ falconvar/
     retrieve/        search: a query to ranked moments
                      postgres: the search_embeddings RPC, the one reader
   aggregates/      TIER 2: answers over what video_rag extracted; never the video
-    driver.py        answers up to a tier · the video's summary vector
+    driver.py        answer() · aggregate(), the pipeline · the summary vector
+    record           a record (a video's folder) opened as a Context
     base             the protocols · Context · DefinitionRunner
-    inputs (what an aggregate reads) · rendering (how that reads to one)
+    inputs (the selection grammar) · rendering (how rows read to a model)
     definitions/     prompts and link profiles, as data
       definitions.json  BUILT-IN summary · chapters · events · people · objects · text
-    one folder per aggregator, each with its own driver.py:
-    stats/ speakers/ coverage/        free:  arithmetic, no input
-    ner/ sentiment/                   local: GPU models
-    fold/ spans/ items/               llm:   one runner per kind
-    entities/      driver · linking (who is who, no model)
+    select/          record + selection -> an Excerpt or Sightings file
+    one component per aggregator, each one input -> one answer:
+    stats/ speakers/ coverage/        free:  a record in
+    ner/ sentiment/                   local: an excerpt in
+    prompt/                           llm:   an excerpt in, any prompt by name
+      fold/ spans/ items/               the runner per prompt kind
+    entities/      sightings in · linking (who is who, no model)
+    combination      several videos' documents laid end to end, one record
 api/               main (routes) · service (dispatch) · jobs (one worker)
                    browse (read-only queries over the rows a run wrote)
 web/               the client at /app. No build step: index.html · app.js ·
@@ -86,7 +89,11 @@ python -m falconvar.workflow samples/x.mp4 --tier llm --database supabase
 
 # one tier at a time
 python -m falconvar.video_rag samples/x.mp4 --sampler clip   # extract: media -> embed
-python -m falconvar.aggregates <id> --tier llm     # answers; files only
+python -m falconvar.aggregates data/out/<id> --out data/out/<id>/aggregates \
+    --previous data/out/<id>/aggregates --ner --summary transcript+clip:activity   # only those two
+python -m falconvar.aggregates data/out/<id> --out D --tier llm   # everything up to a cost
+python -m falconvar.aggregates data/out/a data/out/b --out D --stats --entities-people   # combined first
+python -m falconvar.aggregates --list                            # every flag, cost, default data
 
 # one component at a time; per-stage tuning lives on these, not on workflow
 python -m falconvar.video_rag.media samples/x.mp4
@@ -110,13 +117,19 @@ python -m falconvar.video_rag.video <id> --prune-store           # irreversible,
 python -m falconvar.video_rag.cut <id>
 python -m falconvar.video_rag.describe <id> --describer openai --limit 5   # costs money
 python -m falconvar.video_rag.describe <id> --describer ollama/gemma3:4b   # any provider, provider/model
-python -m falconvar.aggregates <id> --tier llm --llm anthropic
+python -m falconvar.aggregates data/out/<id> --out D --summary --llm anthropic
 python -m falconvar.video_rag.embed <id> --embedder local   # no key needed
 python -m falconvar.video_rag.video <id> --sampler uniform:safety   # a custom question
 python -m falconvar.video_rag.retrieve "..." <id> --sampler clip:text   # one pairing
 python -m falconvar.video_rag.retrieve "..." <id> --question text       # across samplers
-python -m falconvar.aggregates <id> --tier llm
-python -m falconvar.aggregates <id> --tier llm --only entities   # who is who, across chunks
+# the aggregates one component at a time: select what to read, then answer it
+python -m falconvar.aggregates.select data/out/<id> in.json ner --selection transcript
+python -m falconvar.aggregates.ner in.json ner.json --labels person,product
+python -m falconvar.aggregates.prompt summary in.json summary.json --llm anthropic
+python -m falconvar.aggregates.select data/out/<id> people.json entities:people
+python -m falconvar.aggregates.entities people people.json entities.people.json
+python -m falconvar.aggregates.stats data/out/<id> stats.json   # a record in, no selection
+python -m falconvar.aggregates.combination data/out/a data/out/b --out data/out/ab   # several videos, one record
 python -m eval.entities                         # grade linking against hand labels
 python -m eval.attributes                       # prototype: people by attributes (test.md)
 python -m eval.tracking --errors 3              # prototype: tracking veto / merge variants
@@ -128,8 +141,10 @@ pip install "falconvar[audio]"   # whisper + pyannote
 pip install "falconvar[all]"
 python -m pip wheel --no-deps -w dist .      # build it
 
-python example.py                # the components, one at a time. So far: media
-python example.py samples/x.mp4
+python example.py                # the whole library, checked: exits 1 on any failure
+python example.py --llm           # + the paid aggregates (a summary, entities)
+python example.py --database supabase   # + export and search -- WRITES to it
+python example.py --keep out/     # keep what it wrote
 
 python -m falconvar.shared.contracts.schemas --check     # CI: are the schemas stale
 python -m falconvar.shared.contracts.reference           # regenerate TYPES.txt
@@ -1102,9 +1117,89 @@ the aggregates the new layout had just written, read **4 of 4 as current** --
 same fingerprints, same `version` hashes, same model keys -- and every id, tier,
 kind, default input and definition entry compares byte-identical.
 
-**A tier is a cost ceiling, and asking for a dear one still runs the cheap
-ones.** Cheapest first, so a run that dies partway has produced the free results
-rather than none.
+**Every aggregator is a component with one input, and there is a pipeline
+over them** -- video_rag's shape. What the input is depends only on what the
+aggregator does:
+
+    stats · coverage · speakers     a record       they count whole documents
+    ner · sentiment · prompt        an Excerpt     the rows a selection took
+    entities                        Sightings      the entries a profile links
+
+A record is a video's folder (or a combination's, or a mapping of document
+paths). `select` is the component that turns a record and one selection into
+an `Excerpt` or `Sightings` file -- choosing what to read is a step of its own,
+which is what lets every aggregator after it take one file. Each input embeds
+its grid, so an aggregator never needs a second file: descriptions and
+transcripts carry chunk ids but no times, and "one file plus one field" per
+aggregator would have broken on exactly that, on the cross-modal default
+`transcript+*`, and on selections like `clip:hazards[severity,hazards]` that no
+single field names. One excerpt feeds any text aggregator: selected for
+`sentiment`, it was read by `ner` too.
+
+`answer(name, data)` is the one verb: a `Context`, an `Excerpt` or `Sightings`
+in, an `Aggregate` out, anything else refused by name (`ner reads an excerpt,
+not a record: select one from the record first`). Each component --
+`stats.stats`, `ner.ner`, `prompt.prompt(name, ...)`, `entities.entities(profile,
+...)` -- is that verb with a read at each end, and its own CLI. An
+aggregator's settings are its constructor's parameters, read off the signature
+(`settings_of`): `ner`'s `labels`, `threshold` and `model` were unreachable
+while `build()` always constructed defaults, and are flags now.
+
+**The pipeline runs what it is handed data for, and nothing else.**
+`aggregate(record, out, ner="transcript", sentiment=True)` runs those two:
+`True` is the default selection, a string a selection (`a,b` makes two
+answers), a `.json` path an input file written earlier, a dict
+`{"data": ..., **settings}`. Keywords spell `entities:people` as
+`entities_people`. There is no tier to reach any more -- `--only summary`
+with the default `--tier free` used to run nothing and say nothing, and naming
+is now the whole decision; `up_to(tier)` builds the everything-up-to-a-cost
+mapping `workflow` still offers. Handing nothing is refused, as is a selection
+for an aggregator that counts the record. Selected inputs are kept in
+`<out>/inputs/`, so what an answer read can be looked at.
+
+**`previous=` is the resume, and it is an argument** -- a folder of earlier
+answers for the pipeline, one answer's file for a component. It used to be the
+output folder itself, read whenever it existed, with `force` to override. A
+reused answer is still written: recompute and write are different questions.
+
+**Nothing below the driver changed.** `answer` rebuilds the `Read` or
+`Mentions` an aggregator always took from the file, so the fingerprint an
+answer is stored under is the one it always was. Verified: pointed at answers
+the old id-addressed driver wrote on three folders -- free tier, and
+`entities:people` at `--tier llm`, round-tripped through a sightings file --
+the pipeline **reused 7 of 7 and every payload compared identical**. `ner` and
+`sentiment` gave identical answers as components and through the pipeline;
+`previous=` reused a component's answer; `prompt` answered a real summary
+(258 words); two sources combined to an 18-chunk record first; a workflow
+re-run reused 2 of 2; `11/11 schemas current`, `TYPES.txt current`.
+
+**Several videos are one record first, and no aggregator knows it.**
+`combination.combine([folder, ...], out)` lays the videos' timelines,
+descriptions, transcripts and manifests end to end in the same dataclasses and
+filenames -- chunks renumbered after the previous video's, times shifted onto
+one clock -- and the aggregates run over that folder unchanged. Provenance is
+`Timeline.params["combined"]`, once, and part of the grid's fingerprint;
+`combination.origin(timeline, chunk_id)` turns a combined chunk back into a
+video, a chunk and a local time. Speakers are prefixed with their video,
+because `SPEAKER_00` in two recordings is two people. One video combined
+alone answers `coverage` identically and `stats` differing only in
+`derived_from: combined`.
+
+Linking over a combination pools every mention, and it links lookalikes across
+videos as readily as across chunks: test + test2 share nobody, and
+`entities:people` still made 4 entities spanning both -- the red-cap man
+merged with test2's man in a black cap and black shorts. Measured before this
+existed, a two-stage link (each video alone, then entities matched one-to-one
+across videos) made 0-2 wrong links on those pairs.
+
+The module is `combination` and not `combine` for `boundaries.grid`'s reason:
+a package attribute and a submodule of one name are one slot, and the first
+version recursed forever in `__getattr__`.
+
+**A tier is a cost, and the pipeline runs cheapest first.** A tier no longer
+selects anything -- naming an aggregator does -- but whatever was named runs
+free, then local, then llm, so a run that dies partway has produced the free
+results rather than none. `up_to(tier)` is where a tier is still a ceiling.
 
 **`depends_on` drops rather than fails.** `speakers` on silent CCTV is not an
 error, it is a question that does not apply, and it is reported as skipped
@@ -1244,6 +1339,74 @@ The default holds precision 1.00 on both videos under both embedders. `q95` is
 better on bge and makes wrong merges on OpenAI, and the default has to hold
 under whatever embedder a deployment runs. v0's genericness filter, tried as an
 outlier test on mean similarity, changed no result anywhere and was dropped.
+
+**That table is `actors`, and it does not transfer to `people`.** On the
+`people` shape -- test re-described as `yolo,clip:yolo` under `data/eval/people`,
+12 people and 125 of 128 mentions labelled by *watching the video*
+(`eval/people_labels_test.json`) -- one cosine over `appearance; clothing` under
+`max` found **71 groups for 12 people**: B-cubed 0.35 on OpenAI, 0.19 on bge.
+The two cashiers both read "grey top, hair in a bun, dark pants", so the most
+alike provably-different pair outscored most same-person pairs and nothing
+cleared the bar. On test1 the `max` is set instead by an answer listing one
+person twice. Either way one pair decides it.
+
+So `people` measures more than one embedding, as profile data -- `weights`
+(each identity key embedded apart), `attributes` + `near` (agreement over the
+shape's closed vocabularies), `shared` (a shared accessory or shared
+distinguishing words) -- each a z-score against the provably different pairs,
+averaged, under `q95`. `link()`'s rules are unchanged. Worst case over test and
+test1 under both embedders, `python -m eval.linkers`:
+
+| B-cubed / precision, worst of 4 | |
+|---|---|
+| one cosine, `max` (before) | 0.19 / 0.84 |
+| + `q95` | 0.52 / 0.76 |
+| + identity keys embedded apart | 0.82 / 0.84 |
+| + attributes, untuned | 0.82 / 0.86 |
+| **+ attributes as tuned on test1 (shipped)** | **0.87 / 0.91** |
+
+The attribute weights and near pairs are `eval/attributes.py`'s, set on test1
+before test was labelled. Only `people` sets the new keys, and they are absent
+rather than defaulted, so `objects`, `text` and `actors` hash exactly as before
+-- verified against HEAD -- and nothing they stored went stale.
+
+Tried and not shipped, all in the bench: average and complete link; Hungarian
+tracking + merge (worst B3 0.88 but precision 0.90); **pairing a chunk's two
+answers first** (precision 1.00 on both videos, but only with place words read
+from `action`, which helped OpenAI and hurt bge); a lower second bar for
+stragglers; and **a model merging whole rule-built groups**
+(`eval/llm_merge.py`), which moved B3 -0.02 to +0.02 run to run and proposed
+4-9 merges per run between people it had been told were on screen together.
+
+**test2 was not part of the choice, and it is the weakest of the three.** 60 s,
+7 people, 31 of 32 mentions labelled (`eval/people_labels_test2.json`). The
+shipped profile scores B3 0.76 / 0.69 (OpenAI / bge) against 0.41 / 0.40
+before, with one wrong pair -- but recall is 0.56 / 0.39, because most of what
+is missed is a partial view at the frame edge ("only a sliver of the body is
+visible"), and two people split into four singletons each. Over all three
+videos the same similarity under Hungarian tracking + merge + straggler attach
+holds worst B3 0.75 at precision 0.90 against the shipped 0.69 at 0.91: the
+straggler pass is what those edge views need. Not switched: that grouping is
+new code in `linking`, and 31 mentions is a direction, not a result.
+
+**The describer moves the score as much as the linker does.** `test3.mp4` is a
+byte-identical copy of test2, so describing it again is a second draw over the
+same frames: shipped B3 went 0.76 -> **0.60** on OpenAI (precision 0.97 ->
+0.65) and 0.69 -> 0.74 on bge. The bar held (z 1.05 vs 1.03); what changed is
+that 7 cross-answer pairs of different people cleared it instead of 4 --
+three of the seven people wear all black, and this draw said so more vaguely
+-- and greedy single link chained them into one group of four people. No
+config tried rescues that draw (best worst case over four videos: 0.66). On a
+video this small, ~0.15 of B3 is describer noise, which is the argument for
+more readings per chunk or for identity from pixels rather than a better rule.
+
+What is left is not a similarity problem. The right cashier is "grey T-shirt,
+printed back" from behind and "white shirt, dark apron" from the front, and a
+customer beside her reads like the first: end to end, 9 of 10 narrated
+entities are one person, and the tenth is those two. The check found that
+split -- it flagged all 8 customer mentions -- and also flagged 10 of 26
+mentions of the *correctly* linked left cashier, on `role` alone, because the
+describer called her a customer in those chunks.
 
 **The check flags; it never drops.** A model check inside the account call --
 "which of these observations is not the same subject" -- was measured as a
@@ -1600,6 +1763,36 @@ so `except ModelUnavailable` silently covered half of what it looked like it
 covered (now one class in `shared/errors.py`), and `Protected` is now
 `ProtectedDefinition` and `ProtectedPrompt`.
 
+**The rule was asserted, not held, until `example.py` checked it.** Its first
+run found seven of the refusals a caller meets first -- a setting no backend
+takes, a floor above the ceiling, `limit=0`, `batch=0`, an unknown question --
+raising a bare `ValueError`, and a sweep found 63 deliberate builtin raises
+across the package (49 `ValueError`, 9 `KeyError`, 2 `TypeError`, 2
+`RuntimeError`, 1 `FileNotFoundError`).
+`shared.errors.Refused(FalconvarError, ValueError)` is a request refused as
+given; `UnknownOption` now carries **both** builtin bases, `ValueError` and
+`KeyError`, because the registries (policies, samplers, audio backends) raised
+`KeyError` for the same mistake the rest raised `ValueError` for -- and it
+renders as a sentence rather than a quoted key. Deployment faults are
+`Unavailable` and keep `RuntimeError` (`paths.NotACheckout`,
+`db.SchemaOutOfDate`). `documents.py` now imports `shared.errors`: a leaf that
+imports nothing, so the no-edges reason for the rule holds. What stays a
+builtin is protocol, not refusal: `KeyError` from a `__getitem__`,
+`AttributeError` from a PEP 562 `__getattr__`, `OSError` from a failed disk
+write.
+
+**A `try` that drops a bad input silently hid a broken function for every
+input.** `library.compile_shape` called `_compile_field`, which does not exist,
+and `load()` compiles each custom shape inside `except Exception: continue` --
+so all nine custom shapes in `data/prompts.json` were dropped at every load
+and each of their questions answered in the fallback `scene` shape, reporting
+nothing. Found by pyflakes (undefined name), not by any run. It calls
+`compile_fields` now, a dropped shape logs a WARNING with the reason, and
+`example.py` adds a custom question and checks its schema. Found the same
+way: `fields.check_fields` still checked an `identity` key nothing defines,
+a leftover from when identity lived on shapes -- a `NameError` for any custom
+field with `of`.
+
 **A component has two ways in, and one of them needs no filesystem.** Every
 component was addressable only by video id, so "use one component" and "adopt
 this pipeline's directory layout" were the same decision -- and the second is
@@ -1682,25 +1875,23 @@ and `MemoryFrames` is sized, so an empty one is falsy -- and it is always empty
 at the line that records `frame_store` in the manifest config. Truthiness wrote
 `frame_store: null` into every in-memory manifest. `is not None` throughout.
 
-**Two data roots in one process is a `ContextVar`, not a global.** `configure()`
-is process-wide, which is right for an application that owns its deployment and
-wrong for anything serving more than one. `Workspace` sets a `ContextVar` that
-`paths._resolve` reads first, so precedence becomes workspace, then
-`configure()`, then the variables, then the checkout, then `~/.falconvar`. A
-`ContextVar` because it is already per-thread and per-task -- a plain global
-would be a data race the moment `describe` gathers -- and because `reset(token)`
-unwinds nesting exactly rather than restoring whatever was seen on the way in.
-None of the 72 `paths.*` call sites changed.
+**There is no per-thread data root any more, and that is deliberate.** A
+`Workspace` -- a `ContextVar` that outranked `configure()` -- was written when
+every component found its files by video id under the data root, so "two
+tenants in one process" needed two roots. Addressing by path took that away:
+every component writes where it is told, and its headline spelling,
+`ws.media.run("talk.mp4")`, stopped existing along with `media.run`. What still
+reads the root is deployment configuration -- `prompts.json`,
+`aggregates.json`, `providers.json`, the weights cache -- and `workflow`'s
+default `into`. Nothing served two of those from one process, and API keys were
+never isolated per workspace anyway (one process, one `os.environ`). Removed:
+precedence is `configure()`, then the variables, then the checkout, then
+`~/.falconvar`. If per-tenant vocabularies are ever wanted, the path-addressed
+answer is to pass the vocabulary files, not to hide a root in thread state.
 
-The part that was easy to get wrong is the caches. `describe/library.py` and
+The caches stay keyed by the data root: `describe/library.py` and
 `aggregates/definitions/` both cache a merged vocabulary whose custom half lives
-*under the data root*, in one slot each -- so a second workspace was served the
-first one's questions. Both are keyed by that root now, which is what the
-two-workspace test actually catches.
-
-Not solved, and documented rather than papered over: **API keys are
-process-global.** `env_file=` reads a file, but keys land in `os.environ`, and
-one process has one of those.
+under it, and `configure()` can still move it mid-process.
 
 **Progress is a callback, not a generator.** `describe` gathers under the
 provider's concurrency -- 5.9x on the measured case -- so a synchronous
@@ -1778,7 +1969,7 @@ encoding and addressing; these two are for the factoring:
                   root that must still be empty afterwards.
 
 Both pass, along with 299/299 frames identical between disk and memory, the
-two-workspace isolation test across threads, `9/9 schemas current`,
+`9/9 schemas current`,
 `recovery.recreate 299/299`, all 110 modules importing and every CLI running.
 
 **Heavy dependencies are extras, and that does not weaken "a requirement is
