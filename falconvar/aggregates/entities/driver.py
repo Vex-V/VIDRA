@@ -1,7 +1,8 @@
 """The `link` kind: the same person or thing across chunks, and an account of each.
 
-A link profile says which field, which keys identify an entry of it, and what
-to write. Identity is decided by `linking` -- embeddings under rules, no model.
+A link profile says which field, which keys identify an entry of it, how alike
+two entries are measured, and what to write. Identity is decided by `linking`
+-- embeddings and closed-vocabulary attributes under rules, no model.
 The model is asked only afterwards, once per linked entity and concurrently, to
 write the profile's account from that entity's observations. This is v0's
 flow, cluster then narrate, with v0's fixed threshold replaced by the rules.
@@ -26,15 +27,12 @@ from itertools import combinations
 from typing import Any, Optional
 
 from .. import definitions, inputs
-from .linking import Mentions, link, mentions_of
+from .linking import Mentions, link_similar, mentions_of, similarity
 from ..rendering import resolve_span
 from ..base import DefinitionRunner, listing, schema
 
 
 class EntitiesAggregator(DefinitionRunner):
-    #: Takes an embedder as well as an llm; the driver passes both.
-    embeds = True
-
     def __init__(self, definition_id: str, llm: Optional[str] = None,
                  embedder: Optional[str] = None) -> None:
         super().__init__(definition_id, llm)
@@ -67,9 +65,11 @@ class EntitiesAggregator(DefinitionRunner):
                     "doubted": 0, "together": [], "linking": linking,
                     "note": "one mention; nothing to link"}
 
-        vectors = self.embedder.embed([m.signature for m in mentions])
-        linked = link(mentions, vectors, entry["rule"], entry["mutual"],
-                      entry.get("threshold"))
+        sim, standardised = similarity(mentions, self.embedder, entry)
+        linked = link_similar(mentions, sim, entry["rule"], entry["mutual"],
+                              entry.get("threshold"))
+        # A z-score threshold beside a cosine one would read as the same number.
+        linking["measure"] = "z-blend" if standardised else "cosine"
 
         entities = []
         for group in linked.groups:
@@ -168,4 +168,28 @@ class EntitiesAggregator(DefinitionRunner):
         return {"account": account, "doubts": doubts}
 
 
-__all__ = ["EntitiesAggregator"]
+def profile_id(profile: str) -> str:
+    """`people` or `entities:people`, as the aggregator id."""
+    return (profile if profile.startswith(definitions.PROFILE_PREFIX)
+            else definitions.PROFILE_PREFIX + profile)
+
+
+def entities(profile: str, sightings: Any, out: Any, previous: Any = None,
+             llm: Optional[str] = None, embedder: Optional[str] = None) -> Any:
+    """Link the sightings file at `sightings` under `profile` (`people`, or
+    `entities:people`), and write each entity's account, into `out`.
+
+    Who is who is decided by `linking` -- no model. `llm` writes the accounts;
+    `embedder` measures identity, and is the space the answer is reused in."""
+    from ..driver import run_one
+    return run_one(profile_id(profile), sightings, out, previous, llm, embedder)
+
+
+def main(argv: Any = None) -> int:
+    from ..driver import component_main
+    return component_main(argv, "Who is who across chunks, from a sightings file, "
+                                "and an account of each.",
+                          named="the link profile, e.g. people")
+
+
+__all__ = ["EntitiesAggregator", "entities", "main", "profile_id"]

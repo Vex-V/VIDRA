@@ -32,6 +32,38 @@ Only the keys a link profile names as identity are read (`clothing`,
 prose or the transcript yields one mention per answer, so nothing is provably
 different from anything else -- and the profile has to give a `threshold`.
 
+**A profile may measure more than one embedding, and `people` does.** Measured
+on test (12 people, 125 labelled mentions, overhead checkout CCTV) the single
+cosine over `appearance; clothing` under `max` found 71 groups for 12 people:
+B-cubed 0.35 on OpenAI, 0.19 on bge. The two cashiers both read "grey top, hair
+in a bun, dark pants", so the most alike provably-different pair outscored most
+same-person pairs and nothing cleared the bar. Three optional profile keys, and
+one rule, fix it -- `eval/linkers.py` is the bench, worst case over test and
+test1 under both embedders:
+
+    weights      each identity key embedded apart, weighted. A long
+                 `appearance` no longer drowns the garments        B3 0.52 -> 0.82
+    attributes   agreement over the shape's closed-vocabulary fields,
+      near       weighted; a near value (navy / black) costs half
+      shared     a shared accessory, or shared words in a free-text
+                 field, counts for                                 B3 0.82 -> 0.87
+    rule q95     the bar at the 95th percentile of provably
+                 different pairs, not their maximum                (first step)
+
+Text and attributes are on different scales, so each is a z-score against this
+video's provably different pairs and the blend is their mean. The threshold is
+then a z-score too, and the rules below are unchanged. A profile without
+`weights` or `attributes` measures exactly what it did, so its version and
+everything it stored stay current.
+
+Tried and not kept, all in `eval/linkers.py` / `eval/llm_merge.py`: average and
+complete link, Hungarian tracking over time, pairing a chunk's two answers
+first (precision 1.00, but only with place words read from `action`, which
+helped one embedder and hurt the other), a lower second bar for stragglers,
+and a model merging whole rule-built groups -- which moved B-cubed -0.02 to
++0.02 between runs and tried to merge people it was told were on screen
+together.
+
 v0's genericness filter -- a description resembling everything stays unlinked
 -- was tried as an outlier test on mean similarity and changed no result on
 either labelled video, under either embedder, so it is not here.
@@ -159,25 +191,138 @@ def mentions_of(context: "Context", selection: Any) -> list[Mention]:
     return out
 
 
+#: Attribute values that say nothing either way: the describer could not see.
+UNKNOWN = frozenset({"", "unclear", "covered"})
+#: Words too common to count as shared detail in a free-text field.
+STOP = frozenset({"a", "an", "the", "and", "with", "of", "on", "in", "none", "nothing", "no"})
+#: Shared words in a free-text field count once their overlap reaches this.
+OVERLAP = 0.3
+
+
+def _unit(vectors: Any) -> Any:
+    import numpy as np
+
+    matrix = np.asarray(vectors, dtype=float)
+    return matrix / np.clip(np.linalg.norm(matrix, axis=1, keepdims=True), 1e-12, None)
+
+
+def _different(mentions: Sequence[Mention]) -> Any:
+    """Mask of provably different pairs: two entries of one answer."""
+    import numpy as np
+
+    answers = [m.answer for m in mentions]
+    return np.array([[i != j and answers[i] == answers[j] for j in range(len(answers))]
+                     for i in range(len(answers))])
+
+
+def _standardised(sim: Any, different: Any) -> Any:
+    """A z-score against the provably different pairs, so two measures on
+    different scales can be averaged without inventing a weight between them."""
+    pool = sim[different]
+    return (sim - pool.mean()) / (pool.std() or 1.0)
+
+
+def _words(value: Any) -> set[str]:
+    import re
+    return set(re.findall(r"[a-z]+", str(value or "").lower())) - STOP
+
+
+def attribute_similarity(mentions: Sequence[Mention], profile: dict[str, Any]) -> Any:
+    """How far apart two entries' closed-vocabulary answers are, negated.
+
+    Each field in `attributes` costs its weight when both entries answered and
+    disagree, half that for a pair listed in `near`, nothing when either could
+    not see. Each field in `shared` takes its weight off per value two lists
+    share, or once for a text field whose words overlap enough -- a matching
+    printed back or a red cap is evidence no vocabulary has a slot for.
+    """
+    import numpy as np
+
+    weights = profile.get("attributes") or {}
+    shared = profile.get("shared") or {}
+    near = {frozenset(pair) for pair in profile.get("near") or []}
+    entries = [m.entry for m in mentions]
+    words = {k: [_words(e.get(k)) for e in entries] for k, _ in shared.items()}
+    count = len(entries)
+    sim = np.zeros((count, count))
+    for i in range(count):
+        for j in range(i + 1, count):
+            x, y, cost = entries[i], entries[j], 0.0
+            for key, weight in weights.items():
+                a, b = str(x.get(key) or ""), str(y.get(key) or "")
+                if a in UNKNOWN or b in UNKNOWN or a == b:
+                    continue
+                cost += weight * (0.5 if frozenset((a, b)) in near else 1.0)
+            for key, weight in shared.items():
+                a, b = x.get(key), y.get(key)
+                if isinstance(a, list) and isinstance(b, list):
+                    cost -= weight * len({str(v) for v in a} & {str(v) for v in b})
+                elif (wa := words[key][i]) and (wb := words[key][j]) \
+                        and len(wa & wb) / len(wa | wb) >= OVERLAP:
+                    cost -= weight
+            sim[i, j] = sim[j, i] = -cost
+    return sim
+
+
+def similarity(mentions: Sequence[Mention], embedder: Any,
+               profile: dict[str, Any]) -> tuple[Any, bool]:
+    """The profile's measure of how alike two mentions are, and whether it is
+    standardised. A profile with neither `weights` nor `attributes` is
+    today's cosine over the signature, raw, exactly as it always was."""
+    import numpy as np
+
+    weights, attributes = profile.get("weights") or {}, profile.get("attributes")
+    if weights:
+        # One call per key: the vectors of different keys never meet.
+        text = np.zeros((len(mentions), len(mentions)))
+        for key, weight in weights.items():
+            unit = _unit(embedder.embed([str(m.entry.get(key) or "").strip() or "unknown"
+                                         for m in mentions]))
+            text += weight * (unit @ unit.T)
+        text /= sum(weights.values())
+    else:
+        unit = _unit(embedder.embed([m.signature for m in mentions]))
+        text = unit @ unit.T
+    if not weights and not attributes:
+        return text, False
+    different = _different(mentions)
+    if not different.any():
+        # Nothing to standardise against; `link` will not link either.
+        return text, False
+    measures = [_standardised(text, different)]
+    if attributes:
+        measures.append(_standardised(attribute_similarity(mentions, profile), different))
+    return sum(measures) / len(measures), True
+
+
 def link(mentions: Sequence[Mention], vectors: Sequence[Sequence[float]],
          rule: str = "max", mutual: bool = True,
          threshold: Optional[float] = None) -> Linked:
-    """Group mentions of the same subject. Indices into `mentions`.
+    """Group mentions of the same subject by the cosine of their vectors.
+    Indices into `mentions`. See `link_similar` for the rules."""
+    if len(mentions) == 0:
+        return link_similar(mentions, [], rule, mutual, threshold)
+    unit = _unit(vectors)
+    return link_similar(mentions, unit @ unit.T, rule, mutual, threshold)
+
+
+def link_similar(mentions: Sequence[Mention], sim: Any, rule: str = "max",
+                 mutual: bool = True, threshold: Optional[float] = None) -> Linked:
+    """Group mentions of the same subject, given how alike each pair is.
 
     `threshold` fixes the bar instead of reading it off the video, for whole
-    values where nothing is provably different.
+    values where nothing is provably different. It is on `sim`'s scale.
     """
     import numpy as np
 
     if rule not in RULES:
-        raise ValueError(f"rule must be one of {', '.join(RULES)}")
+        from ...shared.errors import UnknownOption
+        raise UnknownOption(f"rule must be one of {', '.join(RULES)}")
     count = len(mentions)
     if count == 0:
         return Linked([], threshold, 0, 0)
 
-    matrix = np.asarray(vectors, dtype=float)
-    matrix = matrix / np.clip(np.linalg.norm(matrix, axis=1, keepdims=True), 1e-12, None)
-    sim = matrix @ matrix.T
+    sim = np.asarray(sim, dtype=float)
     answers = [m.answer for m in mentions]
 
     # Calibration: pooled over the whole video and every field, because a
@@ -229,4 +374,5 @@ def link(mentions: Sequence[Mention], vectors: Sequence[Sequence[float]],
     return Linked(groups, float(threshold), len(different), len(pairs))
 
 
-__all__ = ["Linked", "Mention", "Mentions", "RULES", "link", "mentions_of"]
+__all__ = ["Linked", "Mention", "Mentions", "RULES", "attribute_similarity", "link",
+           "link_similar", "mentions_of", "similarity"]

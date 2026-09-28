@@ -80,7 +80,13 @@ PROFILE_DEFAULTS: dict[str, Any] = {
     "threshold": None, "rule": "max", "mutual": True, "check": "flag",
     "min_appearances": 2, "max_narratives": 12,
 }
-PROFILE_KEYS = frozenset({"about", "field", "instruction", "fields", *PROFILE_DEFAULTS})
+#: How alike two entries are, beyond one cosine over the signature. Optional
+#: and absent by default -- not in PROFILE_DEFAULTS -- so a profile that sets
+#: none of them hashes exactly as it did and nothing it stored goes stale.
+#: `linking.similarity` says what each does.
+PROFILE_MEASURES = ("weights", "attributes", "near", "shared")
+PROFILE_KEYS = frozenset({"about", "field", "instruction", "fields", *PROFILE_DEFAULTS,
+                          *PROFILE_MEASURES})
 
 _lock = threading.Lock()
 #: Keyed by data root; see `describe/library.py` for why.
@@ -327,6 +333,45 @@ def check_prompt(name: str, entry: dict[str, Any],
     return problems
 
 
+def _weights(value: Any, what: str) -> list[str]:
+    if not isinstance(value, dict) or not value or not all(
+            isinstance(k, str) and FIELD_NAME.match(k) and isinstance(w, (int, float))
+            and not isinstance(w, bool) and w > 0 for k, w in value.items()):
+        return [f"`{what}` maps entry keys to positive weights"]
+    return []
+
+
+def _check_measures(entry: dict[str, Any], identity: list[str]) -> list[str]:
+    """`weights`, `attributes`, `near`, `shared`: all optional, all about entries."""
+    present = [k for k in PROFILE_MEASURES if k in entry]
+    if not present:
+        return []
+    if not identity:
+        return [f"{', '.join(f'`{k}`' for k in present)} measure entries, so they need "
+                f"`identity`"]
+    problems = []
+    if entry.get("threshold") is not None:
+        problems.append("`threshold` is a cosine, and with "
+                        f"{', '.join(f'`{k}`' for k in present)} the measure is a "
+                        "z-score read off the video -- drop `threshold`")
+    if "weights" in entry:
+        problems += _weights(entry["weights"], "weights")
+        if isinstance(entry["weights"], dict) and set(entry["weights"]) - set(identity):
+            problems.append("`weights` weighs identity keys only")
+    for key in ("attributes", "shared"):
+        if key in entry:
+            problems += _weights(entry[key], key)
+    if "near" in entry:
+        near = entry["near"]
+        if not isinstance(near, list) or not all(
+                isinstance(p, list) and len(p) == 2 and all(isinstance(v, str) for v in p)
+                for p in near):
+            problems.append("`near` is a list of value pairs, e.g. [[\"dark_blue\", \"black\"]]")
+        if "attributes" not in entry:
+            problems.append("`near` softens `attributes`, so it needs them")
+    return problems
+
+
 def check_profile(name: str, entry: dict[str, Any],
                   vocabulary: Optional[dict[str, Any]] = None) -> list[str]:
     """Everything wrong with a proposed link profile (defaults applied)."""
@@ -360,6 +405,7 @@ def check_profile(name: str, entry: dict[str, Any],
             "a profile without `identity` links whole values, and nothing in one "
             "answer is provably different from anything else, so no threshold "
             "can be read off the video -- give `threshold`")
+    problems += _check_measures(entry, identity)
     from ..entities.linking import RULES
     if entry.get("rule") not in RULES:
         problems.append(f"`rule` must be one of {', '.join(RULES)}")
@@ -381,7 +427,8 @@ def check_profile(name: str, entry: dict[str, Any],
     if vocabulary is not None and field not in (inputs_mod.PROSE, "transcript"):
         shapes = list(vocabulary["questions"].values())
         if identity:
-            wanted = set(identity) | set(story)
+            wanted = (set(identity) | set(story) | set(entry.get("attributes") or {})
+                      | set(entry.get("shared") or {}))
             if not any(isinstance(s.get(field), list) and wanted <= set(s[field])
                        for s in shapes):
                 problems.append(f"no question's shape has a `{field}` list whose "
