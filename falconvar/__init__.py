@@ -1,38 +1,39 @@
 """FalCONvar -- video in, searchable moments and higher-level answers out.
 
-Two tiers, each with one driver over the components in its folder:
-
-    video_rag/   extraction and search. The picture and the soundtrack read onto
-                 one chunk grid, described, embedded, and queryable -- a
-                 complete RAG engine on its own.
+    video_rag/   extraction and search: picture and soundtrack read onto one
+                 chunk grid, described, embedded and searchable
     aggregates/  answers over what video_rag extracted: counts, speakers,
-                 summaries, chapters, events, entities. Never reads the video.
-    shared/      what both tiers need: paths, env, document contracts, storage,
-                 model providers.
+                 summaries, chapters, events, entities
+    shared/      what both tiers use: config, reporting, document contracts,
+                 storage, model providers
 
-`workflow.py` runs video_rag's driver, then aggregates'. Components exchange
-files rather than objects, and every one is `run(video_id, ...) -> Produced`.
+`workflow.py` runs video_rag's driver, then aggregates'.
 """
 
 from __future__ import annotations
 
 import logging
 
-from .shared.errors import FalconvarError, ModelUnavailable, Unavailable
-from .shared.paths import configure
+from .shared.reporting.errors import FalconvarError, ModelUnavailable, Unavailable
+from .shared.config.settings import configure
 
-#: A library configures no logging. Without this, a record emitted before the
-#: application has set anything up prints `No handlers could be found`, or --
-#: worse on modern Python -- goes to a `lastResort` handler at WARNING that
-#: the application never asked for. See `shared/logs.py`.
+#: A library configures no logging; see `shared/reporting/logs.py`.
 logging.getLogger("falconvar").addHandler(logging.NullHandler())
 
-#: Read from the installed metadata rather than restated, so it cannot drift
-#: from `pyproject.toml` -- but resolved on first access, not at import.
-#: `importlib.metadata.version` scans the environment's distributions, which
-#: measured **~120 ms** on this machine: a tenth of a second added to every
-#: `import falconvar` to compute a string almost nobody reads.
-def __getattr__(name: str) -> str:
+#: Resolved on first access: `__version__` from the installed metadata, and the
+#: values a caller builds once (`Models`, `Database`, `Supabase`, `Folder`).
+_LAZY = {"Models": "falconvar.shared.models.roles",
+         "Database": "falconvar.shared.storage.database",
+         "Supabase": "falconvar.shared.storage.supabase",
+         "Folder": "falconvar.shared.storage.folder"}
+
+
+def __getattr__(name: str):
+    if name in _LAZY:
+        import importlib
+        value = getattr(importlib.import_module(_LAZY[name]), name)
+        globals()[name] = value
+        return value
     if name == "__version__":
         from importlib.metadata import PackageNotFoundError, version
         try:
@@ -44,6 +45,6 @@ def __getattr__(name: str) -> str:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["FalconvarError", "ModelUnavailable", "Unavailable",
-           "__version__", "configure"]
+__all__ = ["Database", "FalconvarError", "Folder", "ModelUnavailable", "Models", "Supabase",
+           "Unavailable", "__version__", "configure"]
 

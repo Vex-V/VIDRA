@@ -1,23 +1,9 @@
 """The Embedder protocol, and resolving a name to one.
 
-**One vector space per embedder, never per sampler.** A space is defined by the
-model, not by which prompt produced the text, so everything one embedder writes
-is directly comparable. The sampler is payload and querying one is a *filter*;
-separate spaces per sampler would partition one space while making
-cross-sampler queries impossible.
-
-Different embedders *do* get separate spaces, and the key carries
-`provider:model:dims` -- which is what stops 768-wide vectors being ranked
-against 1536-wide ones. A mismatch across widths fails loudly; a mismatch
-between two models of the same width returns a well-formed ranking that means
-nothing, which is the reason the key is in the collection name at all.
-
-**A query and a document are embedded differently where the model says so.**
-e5, nomic and bge were trained with a prefix on one side or both, and embedding
-a query as a document costs them recall with no error anywhere. The prefixes
-are a property of the model, so they are looked up rather than configured, and
-a prefix set by hand changes the key -- the vectors it makes are not
-comparable to the defaults'.
+One vector space per embedder: its key is `provider:model:dims`, and vectors
+from different keys are never compared. A query and a document are embedded
+with the prefixes the model was trained with (e5, nomic, bge, mxbai); a
+prefix set by hand changes the key.
 """
 
 from __future__ import annotations
@@ -25,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import math
 from typing import Any, Optional, Protocol, Sequence
-from ...errors import Unavailable
+from ...reporting.errors import Unavailable
 
 
 class EmbedderUnavailable(Unavailable):
@@ -48,8 +34,7 @@ def query_vector(embedder: Any, text: str) -> list[float]:
 
 _BGE = "Represent this sentence for searching relevant passages: "
 
-#: model id fragment -> (query prefix, document prefix). Matched lowercase,
-#: first hit wins. From each family's model card.
+#: Model id fragment -> (query prefix, document prefix). First match wins.
 PREFIXES: tuple[tuple[str, str, str], ...] = (
     ("multilingual-e5", "query: ", "passage: "),
     ("e5-", "query: ", "passage: "),
@@ -71,8 +56,7 @@ def prefixes_for(model: str) -> tuple[str, str]:
 
 def key_for(name: str, model: str, dims: int,
             query_prefix: str, document_prefix: str) -> str:
-    """`name:model:dims`, plus a suffix only when the prefixes are not the
-    model's own -- so every key written before prefixes existed is unchanged."""
+    """`name:model:dims`, plus a suffix when the prefixes are not the model's own."""
     key = f"{name}:{model}:{dims}"
     if (query_prefix, document_prefix) != prefixes_for(model):
         digest = hashlib.sha1(f"{query_prefix}\0{document_prefix}".encode()).hexdigest()
@@ -81,12 +65,8 @@ def key_for(name: str, model: str, dims: int,
 
 
 class HashEmbedder:
-    """Deterministic vectors from a hash. No model, no network.
-
-    Not a semantic embedder and never pretends to be: it exists so the index,
-    the ranking and the retrieval path can be exercised without a key. Its
-    `key` says `hash`, so vectors it wrote can never be searched by a real
-    embedder's query -- the collection name keeps them apart.
+    """Deterministic vectors from a hash. No model, no network: for exercising the
+    pipeline without a key. Its key says `hash`.
     """
 
     name = "hash"
@@ -118,11 +98,8 @@ class HashEmbedder:
 
 
 def build(name: Optional[str] = None, **kwargs) -> Embedder:
-    """A provider name, `provider/model`, `hash`, or None for the default.
-
-    Every provider resolves through `shared.models.providers`, so `embed` and
-    `retrieve` reading the same environment cannot disagree about which space
-    a search belongs to.
+    """An embedder from a provider name, `provider/model`, `hash`, or None for the
+    default.
     """
     from .. import providers
 

@@ -1,12 +1,7 @@
-"""Speaker turns over a whole track, via pyannote.
+"""Speaker turns over a whole track, via pyannote (4.x).
 
-Imported only when `--diarizer pyannote` is asked for.
-
-**pyannote 4.x returns `DiarizeOutput`, not `Annotation`.** The 3.x recipe
-`pipeline(audio).itertracks(yield_label=True)` raises `AttributeError`. The
-annotation is `.speaker_diarization`; `.exclusive_speaker_diarization` is the
-same with overlaps resolved, and that is what this uses -- a word cannot belong
-to two speakers, and chunk boundaries derived from turns must not overlap.
+Uses `.exclusive_speaker_diarization`, with overlapping speech resolved so
+each word has one speaker, unless `exclusive=False`.
 """
 
 from __future__ import annotations
@@ -22,9 +17,13 @@ TOKEN_VARS = ("HF_TOKEN", "HUGGINGFACE_TOKEN", "HUGGING_FACE_HUB_TOKEN")
 
 
 def _token(explicit: Optional[str] = None) -> Optional[str]:
-    if explicit:
-        return explicit
-    return next((os.environ[v] for v in TOKEN_VARS if os.environ.get(v)), None)
+    """The token to download with: given here, then
+    `falconvar.configure(hf_token=...)`, then the variables, else None (Hugging
+    Face's own lookup).
+    """
+    from falconvar.shared.config import settings
+    return (explicit or settings.hf_token()
+            or next((os.environ[v] for v in TOKEN_VARS if os.environ.get(v)), None))
 
 
 class PyannoteDiarizer:
@@ -46,25 +45,29 @@ class PyannoteDiarizer:
         import torch
         from pyannote.audio import Pipeline
 
+        # No token is required to load a model already in the Hugging Face cache.
         key = _token(token)
-        if not key:
-            raise ModelUnavailable(
-                "no Hugging Face token: set " + " or ".join(TOKEN_VARS) +
-                f" and accept the terms for {model} on huggingface.co")
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         try:
             self._pipeline = Pipeline.from_pretrained(model, token=key)
+            if self._pipeline is None:
+                # pyannote returns None for a refused download.
+                raise RuntimeError("the download was refused")
             self._pipeline.to(torch.device(self.device))
         except Exception as exc:                         # noqa: BLE001
+            from huggingface_hub import get_token
+            how = ("" if key or get_token() else
+                   " No Hugging Face token was found: pass "
+                   "falconvar.configure(hf_token=...), set HF_TOKEN, or run "
+                   "`hf auth login`.")
             raise ModelUnavailable(
-                f"could not load {model!r}: {exc}\nThe model is gated -- accept "
-                "its terms on huggingface.co with the account this token "
-                "belongs to.") from None
+                f"could not load {model!r}: {exc}.{how} It is gated: the first "
+                f"download needs a token from an account that accepted its "
+                f"terms on huggingface.co. After that it loads from the cache "
+                f"without one.") from None
 
     def diarize(self, track: Track) -> Diarization:
-        # `reader.listen` already returns early on a silent track, so this is
-        # belt and braces for a direct caller. pyannote finds zero speakers in
-        # 0.1 s anyway; the point is that "no speech" stays a reported fact.
+        # A silent track has no speakers.
         if track.silent:
             return Diarization([])
 

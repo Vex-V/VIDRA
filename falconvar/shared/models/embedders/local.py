@@ -1,16 +1,8 @@
-"""Vectors from a Hugging Face model loaded into this process.
+"""Vectors from a Hugging Face model loaded into this process, with
+`sentence-transformers`.
 
-No key, no server, and nothing leaves the machine after the download. Weights
-land in `weights/embedders/`, beside the detector checkpoints, rather than
-wherever a library decides.
-
-`sentence-transformers` runs the model, because it applies the model's whole
-module list -- the pooling it declares (bge is CLS, not mean) and any Dense
-layer after it. A second implementation over bare `transformers` would be a
-second function that has to agree with the first under the same key.
-
-Loaded once per (model, device) per process: `/search` is answered in the
-server process, and reloading a model per query costs seconds.
+No key, no server. Weights land in `weights/embedders/`. A model is loaded
+once per (model, device) per process.
 """
 
 from __future__ import annotations
@@ -19,13 +11,12 @@ import threading
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from ... import env, paths
+from ...config import paths, settings
 from .. import providers
 from . import EmbedderUnavailable, key_for, prefixes_for
 
 def cache_dir() -> Path:
-    """Where sentence-transformers caches a checkpoint. Resolved per call,
-    so `paths.configure()` still moves it."""
+    """Where sentence-transformers caches a checkpoint."""
     return paths.weights_root() / "embedders"
 
 _MODELS: dict[tuple[str, str], Any] = {}
@@ -38,8 +29,11 @@ def _load(model: str, device: str) -> Any:
     with _LOCK:
         if (model, device) not in _MODELS:
             try:
+                # The configured Hugging Face token, if any (only a gated model's first download
+                # needs one).
                 _MODELS[(model, device)] = SentenceTransformer(
-                    model, device=device, cache_folder=str(cache_dir()))
+                    model, device=device, cache_folder=str(cache_dir()),
+                    token=settings.hf_token())
             except Exception as exc:                     # noqa: BLE001
                 raise EmbedderUnavailable(f"could not load {model!r}: {exc}") from None
         return _MODELS[(model, device)]
@@ -54,7 +48,6 @@ class LocalEmbedder:
                  document_prefix: Optional[str] = None) -> None:
         import torch
 
-        env.load()                       # HF_TOKEN, for a gated model
         self.model = model or providers.get("local").embed_model or ""
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.batch = batch

@@ -1,32 +1,17 @@
 """Which model answers a call, and how to reach it.
 
-Three stages ask a model for something: `describe` sends frames and wants a
-structured answer, `aggregate` sends text and wants one, and `embed` and
-`retrieve` want vectors. This is the one place that knows who can serve those,
-so a stage names a provider and a model and nothing else.
+A provider is a name and a protocol (the wire format):
 
-A provider is a name and a **protocol** -- the wire format, which is the only
-thing that really differs between them:
-
-    openai     OpenAI's own API: Responses for answers, /embeddings for vectors
+    openai     OpenAI's API: Responses for answers, /embeddings for vectors
     chat       anything serving OpenAI's Chat Completions and /embeddings --
                Ollama, LM Studio, llama.cpp, vLLM, Gemini, Mistral, Groq,
                OpenRouter, Together, DeepSeek, xAI, Voyage
-    anthropic  the Messages API. Answers only: Anthropic serves no vectors
-    local      a Hugging Face model loaded into this process. Vectors only
+    anthropic  the Messages API; answers only
+    local      a Hugging Face model in this process; vectors only
 
-Built-ins are declared below. `data/providers.json` adds an endpoint -- a vLLM
-box, a company gateway -- or overrides a built-in's fields. Keys never live in
-that file: it names the environment variables to read them from.
-
-**A default is resolved when a call is made, never at import.** `.env` is read
-at the top of an entry point, later than module constants resolve, so a default
-captured in a constant would depend on import order. Each role reads its
-variable at the moment it needs it.
-
-**A choice is one string.** `ollama/gemma3:4b` names the provider and the model
-together -- in a flag, a form field or `.env` alike -- so no surface carries a
-second field for the model, and nothing has to decide which of two fields wins.
+Built-ins are declared below; `data/providers.json` adds or overrides
+endpoints and names the variables keys are read from. A choice is one string,
+`provider` or `provider/model`, resolved when the call is made.
 """
 
 from __future__ import annotations
@@ -34,17 +19,19 @@ from __future__ import annotations
 import json
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, fields, replace
-from typing import Any, Optional
+from typing import Any, Iterator, Mapping, Optional
 
-from .. import env, paths
-from ..errors import FalconvarError, Unavailable
+from ..config import paths
+from ..reporting.errors import FalconvarError, Unavailable
 
 PROTOCOLS = ("openai", "chat", "anthropic", "local")
 ROLES = ("describe", "llm", "embed")
 
-#: How a `chat` provider is asked for a shape. `json_schema` is enforced by the
-#: server; the other two put the schema in the prompt and parse what comes back.
+#: How a `chat` provider is asked for a shape: enforced by the server
+#: (`json_schema`) or put in the prompt and parsed.
 STRUCTURED = ("json_schema", "json_object", "prompt")
 
 #: What a role uses when neither the call nor the environment names a provider.
@@ -57,8 +44,7 @@ ENV: dict[str, str] = {
     "embed": "FALCONVAR_EMBEDDER",
 }
 
-#: Names that answer a role without being a provider: they load nothing and
-#: call nothing, so they have no model and need no key.
+#: Names that serve a role offline: no model, no key.
 OFFLINE: dict[str, str] = {"describe": "stub", "embed": "hash"}
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
@@ -84,20 +70,16 @@ class Provider:
     can_chat: bool = True
     can_embed: bool = True
     structured: str = "json_schema"
-    #: Accepts `dimensions` on /embeddings, so a width can be asked for rather
-    #: than only checked.
+    #: Accepts `dimensions` on /embeddings.
     dimensions: bool = False
     #: Wants `input_type: query | document` on /embeddings (Voyage).
     input_type: bool = False
-    #: `max_tokens` or `max_completion_tokens`. OpenAI's reasoning models
-    #: refuse the first and older servers do not know the second, so a refusal
-    #: naming the field is retried once with the other.
+    #: `max_tokens` or `max_completion_tokens`; a refusal naming one is retried
+    #: with the other.
     token_field: str = "max_tokens"
-    #: Calls in flight at once. A cloud API takes many; a server on this
-    #: machine usually answers one at a time, and a queue there only adds
-    #: timeouts.
+    #: Calls in flight at once.
     concurrency: int = 8
-    #: Runs on this machine: no key required, and nothing leaves it.
+    #: Runs on this machine: no key required.
     local: bool = False
     about: str = ""
     builtin: bool = True
@@ -161,8 +143,7 @@ _BUILTIN: tuple[Provider, ...] = (
              about="a Hugging Face embedding model loaded into this process"),
 )
 
-#: Fields `data/providers.json` may set. `name` is the entry's key and
-#: `builtin` is not the file's to claim.
+#: Fields `data/providers.json` may set.
 _FILE_FIELDS = tuple(f.name for f in fields(Provider)
                      if f.name not in ("name", "builtin"))
 
@@ -175,8 +156,7 @@ def _check(name: str, entry: Any, existing: Optional[Provider]) -> list[str]:
         return ["must be an object of fields"]
     problems = []
     if not NAME.match(name):
-        # No `/`: `ollama/gemma3:4b` splits on the first one, so a provider name
-        # carrying one could never be addressed.
+        # `provider/model` splits on the first slash, so a name may not contain one.
         problems.append("name must be lowercase letters, digits, `_`, `.` or `-`")
     if name in OFFLINE.values():
         problems.append(f"{name!r} is reserved: it loads no model")
@@ -206,11 +186,8 @@ def _check(name: str, entry: Any, existing: Optional[Provider]) -> list[str]:
 
 
 def load() -> tuple[dict[str, Provider], list[str]]:
-    """Every provider, and why any `providers.json` entry was left out.
-
-    A bad entry is dropped and reported rather than raised: the file is
-    hand-edited, and one typo taking down `/capabilities` -- and with it every
-    form built from it -- would be a large failure for a small mistake.
+    """Every provider, and why any `providers.json` entry was left out (a bad
+    entry is dropped and reported, not raised).
     """
     found = {p.name: p for p in _BUILTIN}
     problems: list[str] = []
@@ -256,12 +233,8 @@ def names(role: str) -> list[str]:
 # --------------------------------------------------------------- resolving
 
 def split(spec: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    """`ollama/gemma3:4b` -> (`ollama`, `gemma3:4b`). A bare name has no model.
-
-    On the FIRST slash, because model ids carry their own:
-    `local/BAAI/bge-small-en-v1.5` is the `local` provider and a Hugging Face
-    id. A head that is not a provider leaves the spec whole, so the error names
-    what was typed rather than half of it.
+    """`ollama/gemma3:4b` -> (`ollama`, `gemma3:4b`). Splits on the first slash only
+    when the head is a provider; a bare name has no model.
     """
     if not spec or not spec.strip():
         return None, None
@@ -273,15 +246,11 @@ def split(spec: Optional[str]) -> tuple[Optional[str], Optional[str]]:
 
 
 def choose(role: str, spec: Optional[str] = None) -> tuple[str, Optional[str]]:
-    """The provider and model a call should use.
-
-    `spec` wins, then the role's variable, then `FALLBACK` -- each a provider
-    or `provider/model`. The model comes back `None` only for an offline name,
-    which has none.
+    """The provider and model a call should use: `spec`, then the role's variable,
+    then `FALLBACK`. The model is None only for an offline name.
     """
     if role not in ROLES:
         raise ProviderError(f"unknown role {role!r}; known: {', '.join(ROLES)}")
-    env.load()
     chosen, model = split(spec)
     if chosen is None:
         chosen, model = split(os.environ.get(ENV[role]))
@@ -307,33 +276,58 @@ def choose(role: str, spec: Optional[str] = None) -> tuple[str, Optional[str]]:
 
 
 def base_url(provider: Provider) -> Optional[str]:
-    """`<NAME>_BASE_URL` if set, else the declared one. `OLLAMA_BASE_URL` points
-    the built-in at another machine without touching the file."""
-    env.load()
+    """`<NAME>_BASE_URL` if set, else the declared one."""
     variable = re.sub(r"[^A-Z0-9]", "_", provider.name.upper()) + "_BASE_URL"
     return os.environ.get(variable) or provider.base_url
 
 
+# ------------------------------------------------------------------- keys
+#
+# Keys given in code (`Models(keys={"openai": ...})`) outrank the environment.
+# A pipeline sets them in a context variable for the length of its call;
+# `api_key` reads them from there.
+
+_KEYS: ContextVar[Mapping[str, str]] = ContextVar("falconvar_keys", default={})
+
+
+def use_keys(given: Optional[Mapping[str, str]]) -> Token:
+    """Make `given` the keys every call below sees, until `release`."""
+    return _KEYS.set({**_KEYS.get(), **(given or {})})
+
+
+def release(token: Token) -> None:
+    _KEYS.reset(token)
+
+
+@contextmanager
+def keys(given: Optional[Mapping[str, str]]) -> Iterator[None]:
+    """`use_keys` for the length of a `with` block."""
+    token = use_keys(given)
+    try:
+        yield
+    finally:
+        release(token)
+
+
 def api_key(provider: Provider) -> Optional[str]:
-    """The key, None where none is needed, or a message naming where to put it."""
-    env.load()
+    """The key: one given in code, else the environment; None where none is
+    needed. Raises naming both ways to give one.
+    """
+    given = _KEYS.get().get(provider.name)
+    if given:
+        return given
     for variable in provider.key_vars:
         if os.environ.get(variable):
             return os.environ[variable]
     if provider.local or not provider.key_vars:
         return None
     raise ProviderUnavailable(
-        f"no key for {provider.name}: set {' or '.join(provider.key_vars)} in "
-        ".env (it is gitignored) or in the environment")
+        f"no key for {provider.name}: pass Models(keys={{{provider.name!r}: ...}}) "
+        f"or set {' or '.join(provider.key_vars)} in the environment")
 
 
 def problems(role: str, spec: Optional[str] = None) -> list[str]:
-    """What stops a role running, found before anything is queued.
-
-    Unknown names and missing keys only. Whether a local server is up, or a
-    model id exists, is the provider's to answer -- and asking would make
-    validation a network call.
-    """
+    """What stops a role running, as messages: unknown names and missing keys."""
     try:
         chosen, _ = choose(role, spec)
     except ProviderError as exc:
@@ -348,18 +342,7 @@ def problems(role: str, spec: Optional[str] = None) -> list[str]:
 
 
 def require(role: str, spec: Optional[str] = None) -> None:
-    """The same check, raising -- for a component called on its own.
-
-    `validate` returns a list because a request is checked all at once and a
-    caller wants every problem, not the first. A component has one role to
-    check and nowhere to put a list, so it raises.
-
-    It has to be on the components and not only on `workflow.validate`: a
-    caller driving them itself never passes through `validate`, and neither
-    does `POST /videos/{id}/run/{component}`. `describe` finding no key *after*
-    the frames are read is the late failure the check exists to prevent, and it
-    was reachable from both of the library's public levels but guarded on one.
-    """
+    """`problems`, raising the first: for a component called on its own."""
     found = problems(role, spec)
     if found:
         raise ProviderUnavailable(found[0])
@@ -409,6 +392,5 @@ def catalog() -> dict[str, Any]:
 
 __all__ = ["ENV", "FALLBACK", "OFFLINE", "PROTOCOLS", "Provider", "ProviderError",
            "ProviderUnavailable", "ROLES", "api_key", "base_url", "catalog",
-           "choose", "defaults", "get", "load", "names", "problems", "providers",
-           "require",
-           "split"]
+           "choose", "defaults", "get", "keys", "load", "names", "problems",
+           "providers", "release", "require", "split", "use_keys"]

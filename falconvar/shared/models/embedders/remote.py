@@ -1,15 +1,9 @@
 """Vectors from an API: OpenAI, or anything serving OpenAI's /embeddings.
 
-Ollama, LM Studio, llama.cpp, vLLM, Gemini, Mistral, Together and Voyage all
-answer the same request, so one class covers them and a provider differs only
-in its base URL, its key, and two flags -- whether it takes `dimensions`, and
-whether it wants `input_type`.
-
-**The width is part of the key, so it has to be known before the index is
-opened.** OpenAI's are known; anything else is found by embedding one short
-string, once per process. Every later batch is checked against it, because a
-server swapping the model behind a name would otherwise write vectors of a new
-width into a space keyed by the old one.
+One class for every such provider; they differ in base URL, key, and whether
+they take `dimensions` or `input_type`. A model's width is known (OpenAI's)
+or probed once per process with a short string, and every batch is checked
+against it.
 """
 
 from __future__ import annotations
@@ -40,7 +34,7 @@ class RemoteEmbedder:
         auto_query, auto_document = prefixes_for(self.model)
         self.query_prefix = auto_query if query_prefix is None else query_prefix
         self.document_prefix = auto_document if document_prefix is None else document_prefix
-        #: Asked for, where the provider can make it; otherwise only checked.
+        #: The width asked for, where the provider supports it; otherwise checked.
         self.requested = int(dims) if dims else None
         self._dims = self.requested or (KNOWN_DIMS.get(self.model)
                                         if self.provider.protocol == "openai" else None)

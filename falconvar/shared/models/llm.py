@@ -1,36 +1,17 @@
 """Asking a model for text or a strict JSON shape, whoever serves it.
 
-Owned by no stage and imported by two. `describe` sends frames; `aggregate`
-sends text. Both want an answer in a fixed shape, and both reach it through
-`Model` -- so a provider is added once, here, rather than once per stage.
-
-What differs between providers is the wire format, and that is all this owns:
+`describe` sends frames and `aggregate` sends text; both go through `Model`.
+What differs between providers is the wire format:
 
     openai     Responses API, `text.format` json_schema with `strict`
-    chat       Chat Completions. `response_format` json_schema by default;
-               json_object, or the schema in the prompt, where a server has no
-               schema support (`Provider.structured`)
+    chat       Chat Completions: `response_format` json_schema by default;
+               json_object, or the schema in the prompt, where a server has
+               no schema support (`Provider.structured`)
     anthropic  Messages API, the schema as the input of a forced tool
 
-**Async, because the calls are independent and the wait is the network.**
-`generate` is a coroutine. A stage with many calls gathers them, and
-`Provider.concurrency` caps how many are in flight at once -- per model, per
-event loop. A stage with one call awaits it under `asyncio.run`.
-
-**A client per call, not per model.** An async client's connections belong to
-the event loop that opened them, and each stage runs its own loop: a client
-kept on the model outlives the first loop and fails when the second reuses it.
-A fresh client's handshake is small beside a call that takes seconds.
-
-**The OpenAI request is byte-for-byte the one this module sent before it knew
-any other provider.** Resume in `describe` is keyed on the describer's config,
-and every description already paid for was made on this path -- so the
-native request stayed native rather than being folded into Chat Completions,
-which would have been one code path and a reason to re-describe everything.
-
-Truncation is asked of the response rather than inferred from a JSON error
-further down: a cut-off answer is a valid response whose text happens to stop
-mid-string, and the structured schemas are verbose on busy frames.
+`generate` is a coroutine; `Provider.concurrency` caps calls in flight per
+model and event loop. A client is opened per call. A truncated answer is
+detected from the response itself.
 """
 
 from __future__ import annotations
@@ -43,11 +24,9 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Optional, Sequence
 
 from . import providers as providers_mod
-from ..errors import Unavailable
+from ..reporting.errors import Unavailable
 
-#: Retries on the Anthropic path for a rate limit or an overloaded server. The
-#: OpenAI SDK already retries these inside a call; the Messages path is plain
-#: httpx, and concurrent calls are exactly what meets a 429.
+#: Retries on the Anthropic path for a rate limit or an overloaded server.
 RETRIES = 2
 RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
 
@@ -71,9 +50,7 @@ def _data_uri(part: dict[str, Any]) -> str:
 
 
 def parse_json(raw: str) -> Any:
-    """JSON out of a model's text, tolerating the fences a prompt-only answer
-    tends to arrive in. Under a server-enforced schema the first `loads` is the
-    only one that ever runs."""
+    """JSON out of a model's text, tolerating code fences."""
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -105,11 +82,8 @@ def _retry_after(response: Any, attempt: int) -> float:
 
 
 class Model:
-    """One provider and one model: the thing a stage asks.
-
-    Resolved on construction, so an unknown provider fails before any work.
-    The key is read on the first call, so an aggregator that turns out to be
-    skipped never needed one.
+    """One provider and one model. Resolved on construction; the key is read on the
+    first call.
     """
 
     def __init__(self, spec: Optional[str] = None, role: str = "llm",
@@ -167,8 +141,7 @@ class Model:
 
     # -- shared --------------------------------------------------------------
     def _gate(self) -> asyncio.Semaphore:
-        """This loop's cap on calls in flight. One per loop, because a
-        semaphore belongs to the loop that first waits on it."""
+        """This loop's cap on calls in flight (a semaphore belongs to one loop)."""
         loop = asyncio.get_running_loop()
         if loop not in self._gates:
             self._gates[loop] = asyncio.Semaphore(max(1, self.concurrency))
@@ -182,7 +155,7 @@ class Model:
         from openai import AsyncOpenAI
         key = providers_mod.api_key(self.provider)
         options: dict[str, Any] = {
-            # The SDK refuses an empty key even for a server that ignores it.
+            # The SDK needs a key string even for a server that ignores it.
             "api_key": key or "not-needed"}
         url = providers_mod.base_url(self.provider)
         if url:
@@ -227,7 +200,7 @@ class Model:
     # -- openai: Responses ---------------------------------------------------
     async def _responses(self, parts, schema, system, limit) -> Any:
         if len(parts) == 1 and parts[0]["type"] == "text":
-            # A bare string, as a text-only request has always been sent.
+            # A text-only request is sent as a bare string.
             content: Any = parts[0]["text"]
         else:
             content = [{"type": "input_text", "text": p["text"]} if p["type"] == "text"
@@ -316,8 +289,7 @@ class Model:
         if system:
             body["system"] = system
         if schema is not None:
-            # A forced tool whose input IS the schema. The model has to call it,
-            # and its arguments come back as an object -- no prose to parse.
+            # A forced tool whose input is the schema; its arguments are the answer.
             body["tools"] = [{"name": schema["name"],
                               "description": "Record the answer in exactly this shape.",
                               "input_schema": schema["schema"]}]
