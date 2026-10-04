@@ -8,8 +8,7 @@
       "fold_about": "What this stretch of the video covers, in at least 80 words, in order."
     },
     "spans": {
-      "cite": "The spans must be contiguous and cover every chunk. Give each span's first and last chunk id, taken from the input.",
-      "cite_parts": "The spans must be contiguous and cover every part. Give each span's first and last part id, taken from the input."
+      "name": "The division is already made: this is part {number} of {total}, chunks {first} to {last}, and below is everything in it. Fill the fields for this part alone, from what is below."
     },
     "items": {
       "cite": "Each must cite the chunk id it happened in, taken from the input."

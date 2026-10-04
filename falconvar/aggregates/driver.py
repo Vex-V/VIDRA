@@ -3,47 +3,25 @@
     answer(name, data)                -> Aggregate   the work, on objects
     aggregate(source, out, **named)   -> Produced    the pipeline over components
 
-**Every aggregator is a component with one input**, and what that input is
-depends only on what the aggregator does:
+What each aggregator reads:
 
-    stats · coverage · speakers     a record      they count whole documents
+    stats · coverage · speakers     a record      a video's (or combination's) folder
     ner · sentiment · prompts       an Excerpt    the rows a selection took
     entities:<profile>              Sightings     the entries a profile links
 
-A record is a video's folder, or a combination's. An `Excerpt` or `Sightings`
-is what `select` writes from one. So every component runs alone -- `select`,
-then `ner.ner(excerpt, out)` -- and every input is a file a person can read,
-keep, or hand to an aggregator in another run.
-
-**The pipeline runs what it is handed data for, and nothing else.**
+`select` writes an Excerpt or Sightings file from a record. The pipeline runs
+only the aggregators it is handed data for:
 
     aggregate("data/out/test", "data/out/test/aggregates",
               stats=True, ner="transcript", sentiment=True,
               summary="transcript+clip:activity", entities_people=True)
 
-`True` is the aggregator's own default data; a string is a selection in the
-`inputs` grammar (`a,b` makes two answers); a path ending `.json` is an excerpt
-or sightings file written earlier; a dict is `{"data": ..., **settings}` for an
-aggregator with settings of its own (`ner`'s `labels`, an `llm` for one
-prompt). An aggregator not named does not run. There is no tier to reach any
-more: naming an aggregator is the decision, and `up_to(tier)` builds the
-everything-up-to-a-cost mapping `workflow` still offers. Several sources are
-combined first (`combination.combine`) into a record folder kept beside the
-answers: every chunk id in them is a combined id, and that folder is the only
-way back to a video.
-
-**`previous=` is the resume, and it is an argument** -- a folder of earlier
-answers for the pipeline, an earlier answer's file for a component. An answer
-is reused when it read the same text under the same version and model, and a
-reused answer is still written: recompute and write are different questions.
-
-**Nothing below this changed.** Every aggregator reads a `Context` and, if it
-takes one, a `Read` or `Mentions`. `answer` rebuilds exactly those from the
-file, so the fingerprint an answer is stored under is the one it always was.
-
-A link profile's id carries a colon, `entities:people`; on disk it is
-`entities.people.json`, as a keyword `entities_people`, as a flag
-`--entities-people`.
+`True` is the aggregator's default data; a string is a selection (`a,b` makes
+two answers); a `.json` path is an input file written earlier; a dict is
+`{"data": ..., **settings}`. Several sources are combined first into one
+record. `previous=` is a folder of earlier answers, reused while current.
+`entities:people` is `entities.people.json` on disk, `entities_people` as a
+keyword and `--entities-people` as a flag.
 """
 
 from __future__ import annotations
@@ -52,39 +30,39 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Union
 
-from ..shared import logs
+from ..shared.reporting import logs
 from ..shared.contracts.documents import (Aggregate, Excerpt, Produced, Sightings,
                                           Timeline, Transcript, fingerprint_of)
-from ..shared.errors import FalconvarError
+from ..shared.reporting.errors import FalconvarError
+from ..shared.models.roles import Models, keys_of, unpack
 from ..shared.storage import files
-from . import available, build, definitions, kind_of, settings_of, takes_inputs, tier_of
-from .base import TIERS, Context, missing
-from .inputs import (Input, InputError, Read, Row, answer_id, answer_of_file,
-                     check, filename, labels, parse)
-from .inputs import DEFAULT as DEFAULT_INPUT
-from .record import Source, context, open_record
+from . import (available, build, definitions, kind_of, settings_of, takes_inputs,
+               tier_of, uses_embedder)
+from .core.base import TIERS, Context, missing
+from .core.inputs import (Input, InputError, Read, Row, answer_id, answer_of_file,
+                          check, filename, labels, parse)
+from .core.inputs import DEFAULT as DEFAULT_INPUT
+from .core.record import Source, context, open_record
 
 #: What an aggregator may be handed by the pipeline.
 Data = Union[bool, str, Path, Mapping[str, Any], None]
 
 
 class AggregateError(FalconvarError, ValueError):
-    """An aggregator handed the wrong kind of input, or a pipeline asked for
-    something that does not exist."""
+    """An aggregator handed the wrong kind of input, or asked for something that
+    does not exist.
+    """
 
 
 class Inapplicable(FalconvarError, ValueError):
-    """Nothing to answer here: `speakers` on a silent video, a selection that
-    found nothing. A reason, not a failure -- the pipeline reports it as
-    skipped, and a component run alone raises it so the caller hears why."""
+    """Nothing to answer here (`speakers` on a silent video, a selection that found
+    nothing). The pipeline reports it as skipped.
+    """
 
 
 # ------------------------------------------------------------------ the verb
 
-#: Who made an `llm` aggregate that does not say. Before providers existed
-#: every one came from OpenAI's default, so reading a missing field as this is
-#: a fact, not a guess -- and what stops the first run after that change paying
-#: to rebuild every summary.
+#: The model assumed for an `llm` aggregate that does not record one.
 LEGACY_MODEL = "openai:gpt-5.4-mini"
 
 
@@ -109,8 +87,7 @@ def answer_id_of(name: str, one: Input) -> str:
 
 
 def _read_of(excerpt: Excerpt) -> tuple[Input, Read]:
-    """The `Read` an excerpt was written from, rebuilt exactly -- the rows,
-    their parts, the answers -- so its fingerprint is the original's."""
+    """The `Read` an excerpt was written from, rebuilt exactly."""
     one = parse(excerpt.selection)[0]
     rows = [Row(r["chunk_id"], r["start_ts"], r["end_ts"],
                 [tuple(part) for part in r["parts"]]) for r in excerpt.rows]
@@ -120,7 +97,7 @@ def _read_of(excerpt: Excerpt) -> tuple[Input, Read]:
 def _mentions_of(sightings: Sightings) -> tuple[Input, Any]:
     """The `Mentions` sightings were written from, rebuilt exactly."""
     from .entities.linking import Mention, Mentions
-    from .inputs import Source as InputSource
+    from .core.inputs import Source as InputSource
 
     one = parse(sightings.selection)[0]
     chosen = definitions.Selection(tuple(InputSource(s.head) for s in one.sources),
@@ -139,17 +116,28 @@ def wants(name: str) -> str:
 def answer(name: str, data: Any, answer_id: Optional[str] = None,
            llm: Optional[str] = None, embedder: Optional[str] = None,
            previous: Optional[Aggregate] = None,
-           settings: Optional[Mapping[str, Any]] = None) -> Aggregate:
+           settings: Optional[Mapping[str, Any]] = None,
+           models: Optional[Models] = None) -> Aggregate:
     """One aggregator over one input. Reads and writes nothing.
 
     `data` is a `Context` for an aggregator that counts a whole record, an
-    `Excerpt` for one that reads text, `Sightings` for a link profile -- and
-    anything else is refused by name, never coerced. `previous` is an earlier
-    answer, handed back as it is when it read the same text under the same
-    version and model. `settings` reach the aggregator's own constructor, and
-    may override `llm` and `embedder` for this one. Raises `Inapplicable`
+    `Excerpt` for one that reads text, `Sightings` for a link profile. `previous`
+    is an earlier answer, returned unchanged when it read the same text under the
+    same version and model. `settings` go to the aggregator's constructor and may
+    override `llm` / `embedder`. `models` carries the llm, the embedder and their
+    keys; a role set there and as a keyword is refused. Raises `Inapplicable`
     when there is nothing to answer.
     """
+    roles = unpack(models, llm=llm, embedder=embedder)
+    with keys_of(models):
+        return _answer(name, data, answer_id, roles["llm"], roles["embedder"],
+                       previous, settings)
+
+
+def _answer(name: str, data: Any, answer_id: Optional[str],
+            llm: Optional[str], embedder: Optional[str],
+            previous: Optional[Aggregate],
+            settings: Optional[Mapping[str, Any]]) -> Aggregate:
     if name not in available():
         raise AggregateError(f"unknown aggregator {name!r}; "
                              f"known: {', '.join(available())}")
@@ -194,9 +182,7 @@ def answer(name: str, data: Any, answer_id: Optional[str] = None,
     if read is not None and read.empty:
         raise Inapplicable(f"{identity}: {read.why_empty}")
 
-    # Built only once the input is known to be the right one and not empty:
-    # a link profile's constructor builds its embedder, and a local aggregator
-    # is the one that loads torch.
+    # Built only once the input is known to be right and not empty.
     aggregator = build(name, llm, embedder, **own)
     if read is None:
         why = missing(aggregator, joined)
@@ -204,15 +190,12 @@ def answer(name: str, data: Any, answer_id: Optional[str] = None,
             raise Inapplicable(f"{name} {why}")
         expected = joined.inputs_fingerprint()
     else:
-        # What was read and what it was asked with -- never what was merely
-        # available, so a summary of the transcript is not rebuilt because a
-        # description changed.
+        # A hash of what was read and the definition version.
         expected = fingerprint_of({"timeline": joined.timeline.fingerprint(),
                                    "read": read.fingerprint(),
                                    "version": aggregator.version})
 
-    # The model is part of "current": same text, different model is a
-    # different answer the caller asked for.
+    # A different model makes a different answer.
     author = getattr(aggregator, "model_key", None)
     if (previous is not None and previous.inputs_fingerprint == expected
             and made_by(previous) == author):
@@ -259,8 +242,7 @@ def load_input(path: str | Path) -> Union[Excerpt, Sightings]:
         raise files.MissingArtifact(f"no input at {where} -- `aggregates.select` "
                                     f"writes excerpts and sightings")
     if where.is_dir():
-        # The likeliest mistake: a video's folder handed to a text aggregator,
-        # which reads what was selected from it rather than the whole record.
+        # A video's folder handed to an aggregator that reads a selection.
         raise AggregateError(f"{where} is a folder -- a record. This aggregator "
                              f"reads an excerpt or sightings file: `select` one "
                              f"from the record first")
@@ -276,18 +258,19 @@ def load_input(path: str | Path) -> Union[Excerpt, Sightings]:
 def run_one(name: str, data: Union[Source, str, Path], out: str | Path,
             previous: Optional[str | Path] = None,
             llm: Optional[str] = None, embedder: Optional[str] = None,
-            settings: Optional[Mapping[str, Any]] = None) -> Produced:
+            settings: Optional[Mapping[str, Any]] = None,
+            models: Optional[Models] = None) -> Produced:
     """`answer` with a read at each end: what every component function is.
 
-    `data` is a record (folder or mapping) for an aggregator that counts one,
-    otherwise the path of an excerpt or sightings file. `previous` is an
-    earlier answer's file to reuse if it is still current. Writes to `out`.
+    `data` is a record for an aggregator that counts one, otherwise the path of
+    an excerpt or sightings file. `previous` is an earlier answer's file to reuse
+    if still current. Writes to `out`. `models` is as `answer` takes it.
     """
     given = open_record(data) if wants(name) == "a record" else load_input(data)
     earlier = files.maybe(previous, Aggregate)
     with logs.timed(name, getattr(given, "video_id", None)) as done:
         document = answer(name, given, llm=llm, embedder=embedder,
-                          previous=earlier, settings=settings)
+                          previous=earlier, settings=settings, models=models)
         where = str(files.write_json(Path(out), document.as_dict()))
         reused = earlier is not None and document is earlier
         done(reused=reused)
@@ -317,9 +300,9 @@ class Planned:
 
 
 def name_of(key: str) -> Optional[str]:
-    """A keyword as an aggregator id, or None. A keyword cannot hold a colon or
-    a hyphen, so `entities_people` is `entities:people` and `my_prompt` is
-    `my-prompt` when only that one exists."""
+    """A keyword as an aggregator id, or None: `entities_people` is
+    `entities:people`.
+    """
     known = set(available())
     candidates = [key, key.replace("_", "-")]
     if key.startswith("entities_"):
@@ -329,8 +312,9 @@ def name_of(key: str) -> Optional[str]:
 
 def plan(aggregators: Optional[Mapping[str, Data]] = None,
          **named: Data) -> tuple[list[Planned], list[str]]:
-    """What the pipeline was handed, cheapest first, and every problem with the
-    handing itself. `None` and `False` mean "do not run"."""
+    """What the pipeline was handed, cheapest first, and every problem with it.
+    None and False mean "do not run".
+    """
     wanted: list[Planned] = []
     problems: list[str] = []
     for key, value in {**dict(aggregators or {}), **named}.items():
@@ -358,7 +342,7 @@ def _problems(planned: Planned, vocabulary_of: Any) -> list[str]:
     name, data = planned.name, planned.data
     out: list[str] = []
     allowed = set(settings_of(name)) | ({"llm"} if tier_of(name) == "llm" else set()) \
-        | ({"embedder"} if kind_of(name) == "link" else set())
+        | ({"embedder"} if uses_embedder(name) else set())
     for key in planned.settings:
         if key not in allowed:
             out.append(f"{name} has no setting {key!r}; it takes "
@@ -390,13 +374,12 @@ def _problems(planned: Planned, vocabulary_of: Any) -> list[str]:
 def validate(aggregators: Optional[Mapping[str, Data]] = None,
              llm: Optional[str] = None, embedder: Optional[str] = None,
              **named: Data) -> list[str]:
-    """What stops a pipeline before it starts, as messages -- every problem at
-    once, so a CLI prints them all and a caller can show them together."""
+    """Everything that stops a pipeline before it starts, as messages."""
     wanted, problems = plan(aggregators, **named)
     vocabulary: dict[str, Any] = {}
 
     def vocabulary_of() -> dict[str, Any]:
-        # Asked of the other tier once, and only when a selection needs it.
+        # Asked of video_rag once, only when a selection needs it.
         if not vocabulary:
             from ..video_rag import driver as video_rag
             vocabulary.update(video_rag.vocabulary())
@@ -414,14 +397,13 @@ def validate(aggregators: Optional[Mapping[str, Data]] = None,
                         if tier_of(p.name) == "llm"}):
         problems += providers.problems("llm", spec or None)
     for spec in sorted({p.settings.get("embedder", embedder) or "" for p in wanted
-                        if kind_of(p.name) == "link"}):
+                        if uses_embedder(p.name)}):
         problems += providers.problems("embed", spec or None)
     return problems
 
 
 def up_to(tier: str) -> dict[str, bool]:
-    """Every aggregator whose cost is at most `tier`, each on its own default
-    data: what "run the aggregates" meant before an aggregator had to be named."""
+    """Every aggregator whose cost is at most `tier`, each on its default data."""
     if tier not in TIERS:
         raise AggregateError(f"tier must be one of {', '.join(TIERS)}")
     return {name: True for name in available()
@@ -434,18 +416,36 @@ def aggregate(source: Union[Source, Sequence[Union[str, Path]], None],
               combined: Optional[str | Path] = None,
               llm: Optional[str] = None, embedder: Optional[str] = None,
               aggregators: Optional[Mapping[str, Data]] = None,
+              models: Optional[Models] = None,
+              database: Optional[Any] = None,
               **named: Data) -> Produced:
     """Run the aggregators handed data, and only those.
 
     `source` is a record -- a video's folder, a combination's, or a mapping of
-    documents -- or a list of folders, combined first into `combined`
-    (default `<out>/record`). It may be None when every aggregator is handed
-    an input file. Each answer is a file in `out`, and the excerpts and
-    sightings selected on the way are kept in `<out>/inputs`, so what an
-    answer read can be looked at. `previous` is a folder of earlier answers.
-    Aggregators are named as keywords, or in `aggregators` for ids no keyword
-    can spell.
+    documents -- or a list of folders, combined first into `combined` (default
+    `<out>/record`); None when every aggregator is handed an input file. Each
+    answer is a file in `out`; the inputs selected are kept in `<out>/inputs`.
+    `previous` is a folder of earlier answers. Aggregators are named as keywords,
+    or in `aggregators`. `models` carries the llm, the embedder and their keys.
+
+    `database` (a name or a built `Database`) also gets a copy: the source, every
+    answer, its items, and the embedded summary, chapters and entities. Failed
+    writes are listed in `stats["problems"]`.
     """
+    with keys_of(models):
+        return _aggregate(source, out, previous, combined, llm, embedder,
+                          aggregators, models, database, **named)
+
+
+def _aggregate(source: Union[Source, Sequence[Union[str, Path]], None],
+               out: str | Path, previous: Optional[str | Path],
+               combined: Optional[str | Path], llm: Optional[str],
+               embedder: Optional[str],
+               aggregators: Optional[Mapping[str, Data]],
+               models: Optional[Models], database: Optional[Any] = None,
+               **named: Data) -> Produced:
+    roles = unpack(models, llm=llm, embedder=embedder)
+    llm, embedder = roles["llm"], roles["embedder"]
     problems = validate(aggregators, llm, embedder, **named)
     if problems:
         raise AggregateError("; ".join(problems))
@@ -466,7 +466,10 @@ def aggregate(source: Union[Source, Sequence[Union[str, Path]], None],
                 source = source[0]
         record = open_record(source)
 
+    from ..shared.storage.database import as_database
+    target = as_database(database)      # built before any work: a bad name fails here
     earlier = load_all(previous)
+    grid: Optional[Timeline] = record.timeline if record is not None else None
     written: dict[str, str] = {}
     selected: dict[str, str] = {}
     skipped: dict[str, str] = {}
@@ -483,6 +486,7 @@ def aggregate(source: Union[Source, Sequence[Union[str, Path]], None],
             elif planned.from_file:
                 given = load_input(planned.data)
                 jobs.append((answer_id_of(name, parse(given.selection)[0]), given))
+                grid = grid or Timeline.from_dict(given.timeline)
             else:
                 from .select import pick
                 selection = (default_selection(name) if planned.data is True
@@ -514,58 +518,27 @@ def aggregate(source: Union[Source, Sequence[Union[str, Path]], None],
 
     video_id = (record.video_id if record is not None
                 else next((load(p).video_id for p in written.values()), ""))
+    problems: list[str] = []
+    units = 0
+    if target is not None and written and grid is not None:
+        from .database.export import export
+        problems, units = export(video_id, grid, written, used, target, embedder)
     return Produced(
         video_id=video_id, component="aggregate", artifacts=written,
         stats={"ran": len(written), "current": len(reused),
                "computed": len(written) - len(reused),
                "aggregates": list(written), "models": sorted(models),
                "skipped": skipped, "definitions": used,
-               "inputs": selected, "out": str(directory)},
+               "inputs": selected, "out": str(directory),
+               **({"exported_units": units, "problems": problems}
+                  if target is not None else {})},
         skipped=sorted(skipped))
 
 
 # ------------------------------------------------------------- for workflow
 
-def index_summary(video_id: str, payload: dict[str, Any],
-                  embedder: Optional[str] = None) -> int:
-    """Store the whole video as one vector in `video_embeddings`. Postgres only.
-
-    **Its own table, never beside the moments.** `embeddings` answers *which
-    twenty seconds*; a summary answers *which video*, and a video is not a
-    moment you can play -- so the two never share a ranking, and `/search`
-    reaches this one only as `level=video`. `chunk_id = -1` marks it as
-    not-a-chunk; nothing keyed by chunk ever sees it.
-
-    Only the final summary, never the intermediate layers: indexing those would
-    return the same moment two or three times under different wordings.
-    Best-effort: a video-level vector that fails to write must not fail the
-    aggregates that already succeeded.
-    """
-    from ..shared.contracts.units import Unit, render
-    from ..shared.models import embedders
-    from ..shared.storage import supabase
-    try:
-        summary = (payload.get("summary") or "").strip()
-        if not summary:
-            return 0
-        structured = {key: payload[key]
-                      for key in ("topics", "setting", "notable")
-                      if payload.get(key)}
-        unit = Unit(video_id, -1, "summary", render(summary, structured),
-                    structured, sampler="summary", question="summary")
-        built = embedders.build(embedder)
-        unit.vector = built.embed([unit.content])[0]
-        return supabase.write_video_unit(unit, built.key)
-    except Exception:                                    # noqa: BLE001
-        return 0
-
-
 def definition_rows(used: dict[str, str]) -> list[dict[str, Any]]:
-    """Provenance for Postgres: what each definition said at the version used.
-
-    Built here because the vocabulary is this tier's; written by whoever names
-    a database.
-    """
+    """What each definition said at the version used, as rows for a database."""
     entries = []
     for name, version in sorted(used.items()):
         section, definition = definitions.locate(name)
@@ -601,9 +574,7 @@ def flag_of(name: str) -> str:
 
 
 def _typed(annotation: str, text: str) -> Any:
-    """A CLI string as the constructor's annotation asks. Annotations are
-    strings here (`from __future__ import annotations`), so they are read as
-    words rather than evaluated."""
+    """A CLI string converted to the constructor's annotation (read as text)."""
     if any(word in annotation for word in ("tuple", "list", "Sequence")):
         return tuple(part.strip() for part in text.split(",") if part.strip())
     if "float" in annotation:
@@ -618,13 +589,22 @@ def component_main(argv: Optional[list[str]], description: str,
                    ) -> int:
     """The CLI of one aggregator component.
 
-    `aggregator` fixes which one (`ner`); `named` instead takes it as the first
-    argument, for the components that run a definition by name (`prompt`,
-    `entities`) -- whose help names what it must be. Every setting the
-    aggregator's constructor takes becomes a flag, read off its signature.
+    `aggregator` fixes which one (`ner`); `named` takes it as the first argument
+    instead (`prompt`, `entities`). Every constructor setting becomes a flag.
     """
     import argparse
     import inspect
+
+    if named and aggregator is None:
+        # Read the definition name first: which flags exist depends on it.
+        peek = argparse.ArgumentParser(add_help=False)
+        peek.add_argument("name", nargs="?")
+        given = peek.parse_known_args(argv)[0].name
+        if given:
+            candidate = (given if given in available()
+                         else f"{definitions.PROFILE_PREFIX}{given}" if "profile" in named
+                         else given)
+            aggregator = candidate if candidate in available() else None
 
     ap = argparse.ArgumentParser(description=description)
     if named:
@@ -639,9 +619,12 @@ def component_main(argv: Optional[list[str]], description: str,
                     help="an earlier answer's file; reused if it is still current")
     annotations: dict[str, str] = {}
     if aggregator:
-        from . import _LAZY, _import
-        if aggregator in _LAZY:
-            signature = inspect.signature(_import(_LAZY[aggregator][0]).__init__)
+        from . import _LAZY, RUNNERS, _import
+        target = (_LAZY[aggregator][0] if aggregator in _LAZY
+                  else RUNNERS.get(kind_of(aggregator) or "") if aggregator in available()
+                  else None)
+        if target:
+            signature = inspect.signature(_import(target).__init__)
             for setting in settings_of(aggregator):
                 annotations[setting] = str(signature.parameters[setting].annotation)
                 ap.add_argument(f"--{setting.replace('_', '-')}", dest=setting,
@@ -650,7 +633,8 @@ def component_main(argv: Optional[list[str]], description: str,
         ap.add_argument("--llm", default=None,
                         help="a provider or provider/model; default FALCONVAR_LLM, "
                              "then openai")
-    if named and "profile" in named:
+    if (named and "profile" in named) or (aggregator and aggregator in available()
+                                          and uses_embedder(aggregator)):
         ap.add_argument("--embedder", default=None,
                         help="a provider or provider/model; default "
                              "FALCONVAR_EMBEDDER, then openai")
@@ -676,6 +660,8 @@ def component_main(argv: Optional[list[str]], description: str,
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     import argparse
 
     ap = argparse.ArgumentParser(
@@ -745,7 +731,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 __all__ = ["AggregateError", "Data", "Inapplicable", "Planned", "aggregate",
            "answer", "answers", "component_main", "context", "default_selection",
            "definition_rows",
-           "flag_of", "index_summary", "load", "load_all", "load_input", "made_by",
+           "flag_of", "load", "load_all", "load_input", "made_by",
            "name_of", "plan", "report", "run_one", "up_to", "validate", "wants"]
 
 

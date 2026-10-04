@@ -1,9 +1,7 @@
 """The `fold` kind: batch the chunks, summarise each batch, summarise the result.
 
-`summary` is one. Every fold is recorded, not just the last: a leaf summary
-covers a real span and is the only description at that granularity, between
-one chunk and the whole file -- so `layers` keeps them, each with its chunk ids
-and the span resolved from the grid.
+`summary` is one. Every intermediate layer is kept in `layers`, each part
+with its chunk ids and span.
 """
 
 from __future__ import annotations
@@ -13,18 +11,16 @@ from typing import Any
 
 from ...shared.models.llm import Model
 from .. import definitions
-from ..rendering import batched, resolve_span
-from ..base import BATCH, DefinitionRunner, schema
+from ..core.rendering import batched, resolve_span
+from ..core.base import BATCH, DefinitionRunner, schema
 
 
 async def fold(context: Any, llm: Model, parts: list[tuple[list[int], str]],
                until: int, batch: int = BATCH, instruction: str = "",
                ) -> tuple[list[tuple[list[int], str]], list[dict[str, Any]]]:
-    """Fold `(chunk_ids, text)` parts in batches until at most `until` remain.
-
-    The folds of one layer are independent, so they are asked at once; the
-    next layer waits for all of them. Ids travel with the text, so a merged
-    part covers the union of what it merged.
+    """Fold `(chunk_ids, text)` parts in batches until at most `until` remain. A
+    layer's folds run concurrently; a merged part covers the union of its chunk
+    ids.
     """
     text = definitions.kind_text("fold")
     ask = instruction or text["fold_instruction"]
@@ -61,9 +57,7 @@ class FoldAggregator(DefinitionRunner):
         payload = {
             **final,
             "chunks_read": len(rows),
-            # How much paraphrase sits between the descriptions and this text.
-            # `[]` says truthfully that no intermediate summary existed, rather
-            # than that one was discarded.
+            # How many fold layers sit between the descriptions and the summary.
             "reduction_levels": len(layers),
             "layers": layers,
         }

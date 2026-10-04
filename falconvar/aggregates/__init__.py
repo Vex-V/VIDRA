@@ -1,21 +1,13 @@
 """aggregates -- higher-level answers over what video_rag extracted.
 
-The second tier. Reads the documents video_rag wrote, by the paths it is
-handed -- never the video, and never a video_rag component. Answers the
-questions embeddings cannot: counts, coverage, who dominated, how much of this
-is speech, what the whole video is about, who is who across chunks.
+Reads the documents video_rag wrote, never the video. Tiers, cheapest first:
+`free` (arithmetic), `local` (local models), `llm` (model calls); the
+model-backed ones are imported only when used.
 
-Three tiers, cheapest first. `free` is arithmetic, `local` adds GPU models,
-`llm` adds paid calls. Both dear tiers are registered lazily, so importing this
-pulls in neither torch nor an API client and needs no key.
-
-Two sources of aggregators. Code: `stats`, `speakers`, `coverage`, `ner`,
-`sentiment`. Data: every prompt and link profile in `definitions` -- `summary`,
-`chapters`, `events`, `entities:people` and whatever a user has added -- each run
-by its kind's runner.
-
-**Every aggregator is a component, and there is a pipeline over them**, the
-shape video_rag has. Each takes one input and writes one answer:
+Aggregators written as code: `stats`, `speakers`, `coverage`, `ner`,
+`sentiment`. From data: every prompt and link profile in `definitions`
+(`summary`, `chapters`, `events`, `entities:people`, and custom ones). Each is
+a component with one input and one answer:
 
     select.select(record, out, "ner", "transcript")    -> an excerpt file
     ner.ner(excerpt, out)                              -> ner.json
@@ -25,16 +17,11 @@ shape video_rag has. Each takes one input and writes one answer:
 
     aggregate(record, out, ner="transcript", sentiment=True)   # only those two
 
-**Several videos are one record first.** `combine` lays their documents end to
-end in the same formats, and every aggregator then runs over that record
-unchanged -- no aggregator knows what a collection is.
+`add_prompt` and `add_profile` add definitions of your own (`remove_prompt`,
+`remove_profile`, `definition` beside them); they run like the built-ins.
 
-**One folder per aggregator, each with a `driver.py`**, as a component of
-video_rag has. A tier is a class attribute rather than a directory, because it
-says what an aggregator *costs*, not what it is made of -- and grouping by cost
-put `linking`, which is 230 lines of its own, three levels from the runner that
-is its only caller. What every aggregator shares is `base` (the protocols and
-`DefinitionRunner`), `inputs` (what it reads) and `rendering` (how that reads).
+`combine` lays several videos end to end as one record. `core/` holds what
+every aggregator shares; `database/` the export and `search`.
 """
 
 from __future__ import annotations
@@ -43,19 +30,20 @@ import importlib
 from typing import Any, Optional
 
 from . import definitions
-from .base import TIERS, Context, missing
+from .definitions import (DefinitionError, ProtectedDefinition, add_profile,
+                          add_prompt, definition, remove_profile, remove_prompt)
+from .core.base import TIERS, Context, missing
 from .coverage import CoverageAggregator
 from .speakers import SpeakersAggregator
 from .stats import StatsAggregator
-from falconvar.shared.errors import Refused
+from falconvar.shared.reporting.errors import Refused
 
 REGISTRY: dict[str, Any] = {
     cls.name: cls for cls in
     (StatsAggregator, SpeakersAggregator, CoverageAggregator)
 }
 
-#: name -> ("module:Class", tier, about). Resolved on first use, so a `--tier
-#: free` run never imports torch.
+#: name -> ("module:Class", tier, about), imported on first use.
 _LAZY: dict[str, tuple[str, str, str]] = {
     "ner": ("ner:NERAggregator", "local",
             "named entities, and which chunks each appears in"),
@@ -78,8 +66,7 @@ def _import(target: str) -> Any:
 
 
 def available() -> list[str]:
-    """Every aggregator id: code first, then definitions. Read now, so a
-    definition added through the API is runnable without a restart."""
+    """Every aggregator id: code first, then definitions."""
     return [*REGISTRY, *_LAZY, *definitions.ids()]
 
 
@@ -102,7 +89,7 @@ def tier_of(name: str) -> str:
 
 def about(name: str) -> str:
     """What an aggregator -- or an answer id, `summary~severity` -- is about."""
-    from .inputs import definition_of
+    from .core.inputs import definition_of
     name = definition_of(name)
     if name in REGISTRY:
         return REGISTRY[name].about
@@ -118,57 +105,74 @@ def takes_inputs(name: str) -> bool:
     return name not in REGISTRY
 
 
-def settings_of(name: str) -> list[str]:
-    """An aggregator's own settings: its constructor's parameters. `ner` has
-    `model`, `labels` and `threshold`; the free ones and the definitions have
-    none (a definition's words are its data, and `llm` / `embedder` are who
-    answers, not settings of the aggregator). Read off the signature, so a
-    setting added to a constructor is reachable without editing a list."""
+#: A runner's parameters that name who answers, not settings.
+_WHO = ("self", "definition_id", "llm", "embedder")
+
+
+def _runner_params(name: str) -> list[str]:
     import inspect
+    return list(inspect.signature(_import(RUNNERS[kind_of(name)]).__init__).parameters)
+
+
+def settings_of(name: str) -> list[str]:
+    """An aggregator's own settings: its constructor's parameters (`labels` for
+    `ner`, `max_spans` / `min_span_s` for a `spans` definition).
+    """
+    import inspect
+    if name in REGISTRY:
+        return []
     if name in _LAZY:
         cls = _import(_LAZY[name][0])
         return [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
-    return []
+    return [p for p in _runner_params(name) if p not in _WHO]
+
+
+def uses_embedder(name: str) -> bool:
+    """Whether an aggregator takes an embedder: a link profile or a `spans`
+    definition.
+    """
+    if name in REGISTRY or name in _LAZY:
+        return False
+    return "embedder" in _runner_params(name)
 
 
 def build(name: str, llm: Optional[str] = None, embedder: Optional[str] = None,
           **settings: Any) -> Any:
-    """One aggregator, constructed. Only the llm tier takes a provider, only a
-    link profile an embedder, and only a local model settings of its own --
-    `labels` for `ner`, a checkpoint for either."""
+    """One aggregator, constructed with its llm, its embedder (if it takes one) and
+    its settings.
+    """
     if name in REGISTRY:
         if settings:
             raise Refused(f"{name} takes no settings")
         return REGISTRY[name]()
     if name in _LAZY:
         return _import(_LAZY[name][0])(**settings)
-    if settings:
-        raise Refused(f"{name} is a definition; its words are its settings")
-    kind = kind_of(name)
-    runner = _import(RUNNERS[kind])
-    return runner(name, llm, embedder) if kind == "link" else runner(name, llm)
+    unknown = set(settings) - set(settings_of(name))
+    if unknown:
+        raise Refused(f"{name} has no setting {', '.join(sorted(unknown))}; "
+                      f"it takes {', '.join(settings_of(name)) or 'none'}")
+    runner = _import(RUNNERS[kind_of(name)])
+    who = {"embedder": embedder} if uses_embedder(name) else {}
+    return runner(name, llm, **who, **settings)
 
 
 from .driver import (Inapplicable, aggregate, answer, answers,  # noqa: E402
-                     context, definition_rows, index_summary, load, load_all,
+                     context, definition_rows, load, load_all,
                      load_input, up_to, validate)
 
 
 def __getattr__(name: str) -> Any:
-    """PEP 562: `combine` and `merge` resolve on first use.
-
-    Imported eagerly, `python -m falconvar.aggregates.combination` found its
-    own module already in `sys.modules` and warned that running it might
-    behave unpredictably. And the module is not called `combine`: a package
-    attribute and a submodule of one name are one slot, so importing the
-    module replaced the function -- `boundaries.grid`'s trap, one tier over.
-    """
+    """PEP 562: `combine`, `merge` and `search` resolve on first use."""
     if name in ("combine", "merge"):
         return getattr(importlib.import_module(".combination", __name__), name)
+    if name == "search":
+        return importlib.import_module(".database.search", __name__).search
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__all__ = ["REGISTRY", "RUNNERS", "TIERS", "Context", "Inapplicable", "about",
-           "aggregate", "answer", "answers", "available", "build", "combine",
-           "context", "definition_rows", "index_summary", "kind_of", "load",
-           "load_all", "load_input", "merge", "missing", "settings_of",
-           "takes_inputs", "tier_of", "up_to", "validate"]
+__all__ = ["REGISTRY", "RUNNERS", "TIERS", "Context", "DefinitionError", "Inapplicable",
+           "ProtectedDefinition", "about", "add_profile", "add_prompt", "aggregate",
+           "answer", "answers", "available", "build", "combine", "context",
+           "definition", "definition_rows", "kind_of", "load", "load_all",
+           "load_input", "merge", "missing", "remove_profile", "remove_prompt",
+           "settings_of", "search", "takes_inputs", "tier_of", "up_to",
+           "uses_embedder", "validate"]

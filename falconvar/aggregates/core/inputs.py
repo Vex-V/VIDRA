@@ -1,7 +1,5 @@
 """What an aggregate reads: a selection over what video_rag extracted.
 
-Three operators, and nothing else:
-
     ,        separate inputs -- each is its own answer
     +        sources joined into one input
     [a,b]    fields of one answer joined into one input
@@ -19,25 +17,13 @@ and brackets say which part of each answer:
     clip:activity                     the prose alone
     clip:hazards[severity,hazards]    only those fields
     clip:activity[summary,actors]     the prose, and a field
-    *[summary,*]                      the prose and every field: what search embeds
+    *[summary,*]                      the prose and every field
     yolo[people.clothing]             keys inside a list's entries
 
-So `clip:hazards[severity,hazards]` is one answer over both fields and
-`clip:hazards[severity],clip:hazards[hazards]` is two. `sev=clip:hazards[severity]`
-labels an input; its answer is stored as `<aggregate>~sev`. Two or more inputs
-are always labelled -- from their fields when no label is given.
-
-**A bare name is a question, never a sampler.** `text` is both, the OCR sampler
-and the question that reads the screen, and "the text on screen" is what a
-person means by it. A sampler's whole output is `text:*`.
-
-**`+` joins sources, so `clip:text+scene` is not the sampler spec here.** It
-reads `clip:text` and the question `scene` wherever it was asked. A sampler
-spec's `+` lists questions for one pass over the frames; an input's joins what
-is read.
-
-Structured fields are rendered by the function that renders them for the
-search index, so a field reads to an aggregate exactly as it reads to a search.
+`sev=clip:hazards[severity]` labels an input; its answer is stored as
+`<aggregate>~sev`. Two or more inputs are always labelled. A bare name is a
+question, never a sampler (`text:*` is the text sampler's output). Fields are
+rendered as the search index renders them.
 """
 
 from __future__ import annotations
@@ -46,20 +32,16 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
-from ..shared.contracts.documents import fingerprint_of
-from ..shared.errors import FalconvarError
+from ...shared.contracts.documents import fingerprint_of
+from ...shared.reporting.errors import FalconvarError
 
 if TYPE_CHECKING:
     from .base import Context
 
-#: What a text aggregate reads unless told otherwise: what was said, then every
-#: account of the picture. Every account rather than a best-ranked one -- a run
-#: that picked stub `clip` text over 428 words of real narration produced a
-#: summary correctly reporting that it had been given nothing.
+#: What a text aggregate reads unless told otherwise.
 DEFAULT = "transcript+*"
 
-#: The prose half of an answer, as a field name. It is what the describe
-#: schema calls it, so no shape can have a field of that name.
+#: The prose half of an answer, as a field name.
 PROSE = "summary"
 
 _NAME = r"[a-z][a-z0-9_-]{0,31}"
@@ -171,12 +153,7 @@ def parse(selection: str) -> list[Input]:
 
 
 def check(inputs: Sequence[Input], vocabulary: dict[str, Any]) -> list[str]:
-    """Everything a selection names that does not exist, as messages.
-
-    Against the vocabulary rather than a video: a typo is a 422 before a run is
-    queued. Whether *this* video was asked a question is a run-time answer, and
-    an input that finds nothing is skipped with the reason.
-    """
+    """Everything a selection names that does not exist, as messages."""
     questions: dict[str, dict[str, Any]] = vocabulary["questions"]
     samplers = set(vocabulary["samplers"])
     problems: list[str] = []
@@ -230,7 +207,7 @@ class Row:
 
     @property
     def line(self) -> str:
-        """The chunk id travels with the text, so a model can cite it."""
+        """The row as one line, starting with its chunk id."""
         return f"[{self.chunk_id}] {self.start:.0f}-{self.end:.0f}s  {self.text}"
 
 
@@ -256,11 +233,7 @@ class Read:
         return f"this video has nothing for `{self.input.selector}`"
 
     def fingerprint(self) -> str:
-        """A hash of the text actually read -- never of what was available.
-
-        Hashing every source's text rebuilt a summary that reads only the
-        transcript whenever a description changed.
-        """
+        """A hash of the text actually read."""
         return fingerprint_of({"rows": [[r.chunk_id, [list(p) for p in r.parts]]
                                         for r in self.rows]})
 
@@ -294,13 +267,8 @@ def render(block: dict[str, Any], fields: Sequence[str],
 
 
 def read(context: "Context", one: Input) -> Read:
-    """Every chunk's text for one input. Chunks with nothing are left out.
-
-    A field renders through the index's own renderer, so the text a summary is
-    built from is the text that was embedded -- one string, not two that look
-    alike.
-    """
-    from ..shared.contracts.units import render as render_unit
+    """Every chunk's text for one input; chunks with nothing are left out."""
+    from ...shared.contracts.units import render as render_unit
 
     chunks = {c["chunk_id"]: c for c in
               (context.descriptions.chunks if context.descriptions else [])}
@@ -332,11 +300,8 @@ def read(context: "Context", one: Input) -> Read:
 # ----------------------------------------------------------------- answer ids
 
 def labels(inputs: Sequence[Input]) -> list[Optional[str]]:
-    """The label each input's answer is stored under.
-
-    A lone input keeps the aggregate's own id unless it was labelled, so
-    `--input summary=transcript` replaces `summary` rather than adding beside
-    it. Two or more are always labelled, from their fields when not by hand.
+    """The label each input's answer is stored under: none for a lone unlabelled
+    input, otherwise from its label or its fields.
     """
     if len(inputs) == 1:
         return [inputs[0].label]
@@ -367,8 +332,7 @@ def definition_of(answer: str) -> str:
 
 
 def filename(answer: str) -> str:
-    """Windows forbids `:` in a filename. No definition name or label contains
-    a `.`, so the mapping is reversible."""
+    """The answer id as a filename: `:` becomes `.`."""
     return answer.replace(":", ".") + ".json"
 
 

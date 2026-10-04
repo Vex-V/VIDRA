@@ -1,50 +1,14 @@
 """Several videos' documents -> one record in the same format, to aggregate over.
 
     combine(["data/out/monday", "data/out/tuesday"], "data/out/week")
-    aggregate("data/out/week/timeline.json", "data/out/week/aggregates",
-              descriptions="data/out/week/descriptions.json", ...)
 
-**No aggregator learns what a collection is.** Every one of them reads a
-`Context` -- a grid plus the documents cut on it -- and answers about the chunk
-ids it finds there. So rather than teaching fourteen aggregators to hold a list
-of videos, this builds one more record that looks exactly like a video's: a
-`Timeline`, `Descriptions`, `Transcript` and `Manifest`, each the same
-dataclass, written under the same filenames. The aggregates then run over it
-unchanged -- a summary of the week, entities across both days, stats totalled.
-
-**The grid is laid end to end.** Source `i`'s chunks keep their order and are
-renumbered after source `i-1`'s; their times are shifted by the durations
-before them. So the combined record has one clock, a chunk id means one thing
-in every document, and `span_of` stays arithmetic. The clock is a *virtual*
-one: second 312 of the combination is second 12 of the second video, and
-`origin` is how a reader turns one into the other.
-
-**Provenance lives in the grid, once.** `Timeline.params["combined"]` lists
-each source -- its video id, where its chunks start, how many, where its clock
-starts, and the fingerprint of the grid it came from. `params` is part of
-`Timeline.fingerprint`, so the provenance is part of the grid's identity: two
-combinations of different videos can never share a fingerprint, and every
-document cut on the combination records it as usual. Nothing is copied onto
-each chunk, because a second copy of "which video" is one that can disagree.
-
-**A speaker is not the same person in two recordings.** Diarization labels are
-per recording -- `SPEAKER_00` in one file bears no relation to `SPEAKER_00` in
-the next -- so every label is prefixed with its video (`monday:SPEAKER_00`).
-Otherwise `speakers` would add two strangers' talk time together and count no
-handover between them.
-
-**Entities over a combination link people across the videos**, because the
-linker sees every mention at once and the cannot-link rule is per answer, which
-a combination keeps. Measured on test + test2 and test + test1 -- videos with
-no one in common -- pooling every mention made 2-6 cross-video groups each
-(100-311 wrong pairs), and on test2 + test3, the same footage described twice,
-it found most of the true cross-video matches with 4-12 wrong pairs. It links
-lookalikes across videos as readily as across chunks.
-
-**Refused rather than guessed:** one video named twice (every count would be
-doubled), a document that is not its own grid's video, and a combination whose
-sources carry none of a document -- `transcript` is simply absent then, as it
-is for a silent video.
+Writes a `Timeline`, `Descriptions`, `Transcript` and `Manifest` under the
+usual filenames, so every aggregator reads it as it reads a video. Grids are
+laid end to end: chunks renumbered after the previous video's, times shifted
+onto one clock. `Timeline.params["combined"]` lists each source (its id,
+first chunk, chunk count and clock offset); `origin` maps a combined chunk
+back. Speakers are prefixed with their video (`monday:SPEAKER_00`). One video
+named twice is refused.
 """
 
 from __future__ import annotations
@@ -54,16 +18,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from ..shared import logs, paths
-from ..shared.contracts.documents import (Descriptions, Manifest, Produced,
-                                          Timeline, Transcript, fingerprint_of,
-                                          same_video)
-from ..shared.errors import FalconvarError
-from ..shared.storage import files
-#: The documents a combination carries: a record's four, the ones an
-#: aggregator reads. `media`, `cuts`, `store` and `embedded` describe a file or
-#: feed a search, and a combination is neither.
-from .record import KINDS, documents_of
+from ...shared.reporting import logs
+from ...shared.config import paths
+from ...shared.contracts.documents import (Descriptions, Manifest, Produced, Timeline,
+                                           Transcript, fingerprint_of, same_video)
+from ...shared.reporting.errors import FalconvarError
+from ...shared.storage import files
+#: The documents a combination carries.
+from ..core.record import KINDS, documents_of
 
 #: Manifest stats that are counts, and so add up across videos.
 _COUNTS = ("frames_decimated", "frames_sampled", "chunks", "chunks_with_frames",
@@ -71,7 +33,7 @@ _COUNTS = ("frames_decimated", "frames_sampled", "chunks", "chunks_with_frames",
 
 
 class CombineError(FalconvarError, ValueError):
-    """Sources that cannot be laid end to end honestly."""
+    """Sources that cannot be laid end to end."""
 
 
 @dataclass
@@ -103,16 +65,15 @@ class Combined:
 
 
 def default_id(video_ids: Sequence[str]) -> str:
-    """A name no single video has: stable for the same sources in the same
-    order, and inside `paths.check_id`'s alphabet."""
+    """An id derived from the sources: the same videos in the same order give the
+    same id.
+    """
     return "combined-" + fingerprint_of({"videos": list(video_ids)})[:8]
 
 
 def merge(parts: Sequence[Part], video_id: Optional[str] = None) -> Combined:
-    """Lay the parts end to end. Reads and writes nothing.
-
-    `video_id` names the combination; by default one derived from the sources,
-    so the same videos in the same order always combine to the same id.
+    """Lay the parts end to end. Reads and writes nothing. `video_id` names the
+    combination; by default `default_id` of the sources.
     """
     if not parts:
         raise CombineError("nothing to combine: name at least one video")
@@ -158,14 +119,12 @@ def merge(parts: Sequence[Part], video_id: Optional[str] = None) -> Combined:
         return out
 
     def by_source(kind: str) -> dict[str, Any]:
-        """What each source said about itself, keyed by video: a combination's
-        `model` and `stats` are not one model's or one run's."""
+        """Each source's own `model` and `stats`, keyed by video."""
         return {p.video_id: {"model": getattr(getattr(p, kind), "model", None),
                              "stats": getattr(p, kind).stats}
                 for p in parts if getattr(p, kind) is not None}
 
-    # 2 · descriptions: renumbered, answers untouched. The sampler ids stay as
-    #     they were, so an input naming `yolo` reads every video's yolo.
+    # 2 · descriptions: renumbered; sampler ids unchanged.
     described = [(i, p) for i, p in enumerate(parts) if p.descriptions is not None]
     descriptions = None
     if described:
@@ -180,9 +139,8 @@ def merge(parts: Sequence[Part], video_id: Optional[str] = None) -> Combined:
                    "described": sum(p.descriptions.stats.get("described", 0)
                                     for _, p in described)})
 
-    # 3 · transcript: every chunk of the grid, as a transcript always has, so
-    #     a video with no soundtrack contributes silent chunks rather than a
-    #     hole. Times move onto the combined clock; speakers get their video.
+    # 3 · transcript: every chunk of the grid, on the combined clock, speakers
+    # prefixed with their video.
     heard = [p for p in parts if p.transcript is not None]
     transcript = None
     if heard:
@@ -214,8 +172,7 @@ def merge(parts: Sequence[Part], video_id: Optional[str] = None) -> Combined:
                    "speakers": sum(p.transcript.stats.get("speakers", 0) for p in heard),
                    "combined": {v: s["stats"] for v, s in by_source("transcript").items()}})
 
-    # 4 · manifest: chunks renumbered, counts added. Each frame still names
-    #     its own video's store by read index, which is why its source is kept.
+    # 4 · manifest: chunks renumbered, counts added; each frame keeps its source.
     ingested = [(i, p) for i, p in enumerate(parts) if p.manifest is not None]
     manifest = None
     if ingested:
@@ -251,12 +208,9 @@ def origin(timeline: Timeline, chunk_id: int) -> Optional[dict[str, Any]]:
 
 def combine(sources: Sequence[str | Path | Mapping[str, str | Path]],
             out: str | Path, video_id: Optional[str] = None) -> Produced:
-    """`merge` with a read at each end.
-
-    Each source is a video's folder -- the documents found there by their usual
-    names -- or `{"timeline": ..., "descriptions": ..., ...}` naming them.
-    `out` is the folder the combination is written to, under the same
-    filenames, so `aggregate` reads it exactly as it reads a video.
+    """`merge` with a read at each end. Each source is a video's folder or a
+    `{"timeline": ..., "descriptions": ..., ...}` mapping; `out` gets the
+    combination under the usual filenames.
     """
     parts = []
     for source in sources:
@@ -284,6 +238,8 @@ def combine(sources: Sequence[str | Path | Mapping[str, str | Path]],
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     import argparse
     import json
 

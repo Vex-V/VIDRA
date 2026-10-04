@@ -1,8 +1,4 @@
-"""Named entities, and which chunks each appears in.
-
-GLiNER is zero-shot, so the label set IS the configuration -- the same lesson
-as the open-vocabulary detector, where a mismatched vocabulary found 2.4
-detections per frame and a matched one 5.1."""
+"""Named entities (GLiNER, zero-shot), and which chunks each appears in."""
 
 from __future__ import annotations
 
@@ -10,13 +6,11 @@ from collections import Counter
 from typing import Any, Optional
 
 from ...shared.contracts.documents import fingerprint_of
-from ..base import Context, ModelUnavailable
-from ..inputs import Input, Read, read
-from ..rendering import pieces, plain
+from ..core.base import Context, ModelUnavailable
+from ..core.inputs import Input, Read, read
+from ..core.rendering import pieces, plain
 
-#: What to look for. GLiNER is zero-shot, so the label set *is* the
-#: configuration -- the same lesson as the open-vocabulary detector, where a
-#: mismatched vocabulary found 2.4 detections per frame and a matched one 5.1.
+#: What to look for: the label set is the configuration.
 DEFAULT_LABELS = ("person", "organisation", "location", "product",
                   "event", "date")
 
@@ -61,9 +55,7 @@ class NERAggregator:
     def run(self, context: Context, read: Read) -> dict[str, Any]:
         model = self._model()
 
-        # (text, label) -> chunks. Grouped by surface form, because "which
-        # chunks does this name appear in" is the question an aggregate can
-        # answer that retrieval cannot.
+        # (text, label) -> chunks.
         found: dict[tuple[str, str], set[int]] = {}
         cut = 0
         for row in read.rows:
@@ -93,10 +85,9 @@ class NERAggregator:
 
 def ner(excerpt: Any, out: Any, previous: Any = None, model: Optional[str] = None,
         labels: tuple[str, ...] = DEFAULT_LABELS, threshold: float = 0.5) -> Any:
-    """Named entities in the excerpt file at `excerpt`, into the answer file
-    `out`. `labels` is the whole configuration of a zero-shot model -- the
-    label set decides what is found -- and it is part of the answer's version,
-    so changing it recomputes rather than reusing `previous`."""
+    """Named entities in the excerpt file at `excerpt`, into `out`. `labels` is part
+    of the answer's version, so changing it recomputes.
+    """
     from ..driver import run_one
     return run_one("ner", excerpt, out, previous,
                    settings={"model": model, "labels": tuple(labels),
@@ -104,6 +95,8 @@ def ner(excerpt: Any, out: Any, previous: Any = None, model: Optional[str] = Non
 
 
 def main(argv: Any = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     from ..driver import component_main
     return component_main(argv, "Named entities in an excerpt, and which chunks "
                                 "each appears in.", aggregator="ner")

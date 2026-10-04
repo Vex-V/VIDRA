@@ -3,22 +3,15 @@
     select("data/out/test", "in/ner.json", "ner", "transcript")
     ner.ner("in/ner.json", "answers/ner.json")
 
-**Choosing what to read is a step of its own**, so every aggregator after it is
-a component with one file in. The selection is the `inputs` grammar; what comes
-out depends on the aggregator it is for:
+What comes out depends on the aggregator it is for:
 
     a text aggregator     an `Excerpt`: per chunk, what each source said,
-                          with the times already resolved from the grid
+                          with times from the grid
     a link profile        `Sightings`: every entry the profile identifies,
-                          with the answer it came from, so the cannot-link
-                          rule survives the file
+                          with the answer it came from
 
-A count over the whole record (`stats`, `coverage`, `speakers`) reads no
-selection, and asking for one is refused rather than ignored.
-
-**One input per file.** `a,b` is two inputs and two answers -- the pipeline
-selects each on its own -- so a selection naming more than one is refused here
-rather than silently cut to its first.
+The counting aggregators (`stats`, `coverage`, `speakers`) read no selection.
+A selection naming more than one input is refused.
 """
 
 from __future__ import annotations
@@ -26,15 +19,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Union
 
-from ...shared import logs
+from ...shared.reporting import logs
 from ...shared.contracts.documents import Excerpt, Produced, Sightings
 from ...shared.storage import files
 from .. import definitions, kind_of, takes_inputs
-from ..base import Context
-from ..inputs import Input, parse, read
-from ..record import Source, open_record
-#: Refusals are the tier's own `FalconvarError`, never a bare `ValueError`:
-#: "anything the library refused" has to stay one `except`.
+from ..core.base import Context
+from ..core.inputs import Input, parse, read
+from ..core.record import Source, open_record
+#: The tier's own error.
 from ..driver import AggregateError
 
 
@@ -74,8 +66,8 @@ def pick(record: Context, aggregator: str,
     chosen = definitions.selection(profile, one)
     mentions = mentions_of(record, chosen)
     heard: dict[str, str] = {}
-    # Only when the profile's account reads what was said, and only for the
-    # chunks someone was seen in: the file carries what the run needs.
+    # The transcript, only when the profile's account reads it and only for the
+    # chunks someone was seen in.
     if definitions.get("profiles", profile).get("transcript") and record.transcript:
         for chunk_id in sorted({m.chunk_id for m in mentions}):
             said = (record.transcript.text_of(chunk_id) or "").strip()
@@ -115,6 +107,8 @@ def load(path: str | Path) -> Union[Excerpt, Sightings]:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     import argparse
     from ..driver import report
 

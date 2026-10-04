@@ -1,13 +1,10 @@
-"""Which chunks have an account, and from which modality.
-
-A chunk nothing described is a hole in the index, and worth naming rather
-than inferring from a count."""
+"""Which chunks have an account, and from which modality."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..base import Context
+from ..core.base import Context
 
 class CoverageAggregator:
     name = "coverage"
@@ -37,8 +34,7 @@ class CoverageAggregator:
         return {
             "both": both, "picture_only": picture_only,
             "sound_only": sound_only, "neither": neither,
-            # A chunk nothing described is a hole in the index, and it is worth
-            # naming rather than inferring from a count.
+            # Chunks nothing described.
             "silent_chunks": [r["chunk_id"] for r in rows if not r["sources"]],
             "chunks": rows,
         }
@@ -52,6 +48,8 @@ def coverage(source: Any, out: Any, previous: Any = None) -> Any:
 
 
 def main(argv: Any = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     from ..driver import component_main
     return component_main(argv, "Which chunks of a record have an account, and "
                                 "from which modality.", aggregator="coverage")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..base import Context
+from ..core.base import Context
 
 class StatsAggregator:
     name = "stats"
@@ -57,6 +57,8 @@ def stats(source: Any, out: Any, previous: Any = None) -> Any:
 
 
 def main(argv: Any = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     from ..driver import component_main
     return component_main(argv, "Counts over a record: chunks, samplers, words, "
                                 "frames.", aggregator="stats")

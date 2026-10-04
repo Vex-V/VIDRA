@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..base import Context
+from ..core.base import Context
 
 class SpeakersAggregator:
     name = "speakers"
@@ -36,8 +36,7 @@ class SpeakersAggregator:
             "speakers": len(held),
             "turns": turn_count,
             "handovers": handovers,
-            # True for one voice with no handovers. A fact, not a judgement:
-            # it is what a single-narrator documentary looks like from here.
+            # One voice and no handovers.
             "monologue": len(held) <= 1 and handovers == 0,
             "speech_s": round(speech, 3),
             "speech_ratio": round(speech / duration, 4) if duration else 0.0,
@@ -56,6 +55,8 @@ def speakers(source: Any, out: Any, previous: Any = None) -> Any:
 
 
 def main(argv: Any = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     from ..driver import component_main
     return component_main(argv, "Who spoke in a record, for how long, and how "
                                 "often the voice changed.", aggregator="speakers")

@@ -1,42 +1,19 @@
-"""Aggregate definitions, as data: prompts, and link profiles.
+"""Aggregate definitions, as data: prompts and link profiles.
 
-    falconvar/aggregates/definitions/definitions.json   built in, shipped, read-only at runtime
-    data/aggregates.json                    custom, written by the API
+    falconvar/aggregates/definitions/definitions.json   built in, read-only
+    data/aggregates.json                                custom
 
-The split `describe` makes for its questions, for the same reason: a custom
-entry may not shadow a built-in, so every deployment's `summary` means what the
-repo says it means.
-
-**A prompt** is what an llm aggregate asks; its kind is how it is asked:
+A custom entry may not shadow a built-in. A prompt's kind is how it is asked:
 
     fold    batch the chunks, summarise each batch, summarise the summaries
-    spans   contiguous ranges over the whole video, each citing chunk ids
+    spans   contiguous ranges, placed by embeddings and named by the model
     items   discrete things, each citing the chunk it happened in
 
-The kinds are the only code. `summary`, `chapters` and `events` are one entry
-of each, and a custom prompt is another entry rather than another class. There
-is no free-form kind: an answer with no citations is a fold.
-
-**A link profile** names a field, the keys that identify an entry of it, and
-what to write about each entity once linked. Who is who is decided by
-`linking` -- embeddings under rules -- and the model only writes the account.
-With `check: flag` it also names observations that contradict the rest; those
-stay in the entity, flagged, and the account is written without them. Dropping
-them was measured and lost true links on both labelled videos.
-
-**Identity lives here, not in the describe shapes.** It used to sit beside a
-shape; a profile owning it means the same `people` answers can be linked by
-clothing in one profile and by appearance in another, without touching what
-was asked.
-
-**An answer is built, never accepted.** `fields` is describe's builder and the
-schema is generated from it, because a raw schema over HTTP could express
-something a strict API refuses, failing with the call about to be paid for. The
-keys a kind writes itself -- `chunk_id`, `first_chunk`, `last_chunk`, `doubts`
--- cannot be declared.
-
-Everything a model is told is in the JSON, the kinds' own wording included, so
-`version_of` covers all of it and editing any of it rebuilds what it wrote.
+A link profile names a field, the keys that identify an entry of it, how
+entries are compared, and what to write about each entity once linked
+(`check: flag` marks observations that contradict the rest). An answer's
+`fields` use describe's builder; the keys a kind writes itself cannot be
+declared. `version_of` hashes everything a model is told.
 """
 
 from __future__ import annotations
@@ -49,9 +26,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from ...shared import paths
-from .. import inputs as inputs_mod
-from ...shared.errors import FalconvarError
+from ...shared.config import paths
+from ..core import inputs as inputs_mod
+from ...shared.reporting.errors import FalconvarError
 
 BUILTIN_PATH = Path(__file__).with_name("definitions.json")
 SECTIONS = ("prompts", "profiles")
@@ -61,13 +38,12 @@ PROFILE_PREFIX = "entities:"
 NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 KINDS = ("fold", "spans", "items")
-#: Names a definition cannot take: the aggregators written as code, and the
-#: prefix every profile id carries.
+#: Names a definition cannot take.
 RESERVED = frozenset({"stats", "speakers", "coverage", "ner", "sentiment", "entities"})
 #: Keys a kind writes into an answer itself.
 OWNED: dict[str, frozenset[str]] = {
-    "fold": frozenset(), "spans": frozenset({"first_chunk", "last_chunk"}),
-    "items": frozenset({"chunk_id"}), "link": frozenset({"doubts"}),
+    "fold": frozenset(), "spans": frozenset({"chunk_ids", "start_ts", "end_ts"}),
+    "items": frozenset({"chunk_id", "start_ts", "end_ts"}), "link": frozenset({"doubts"}),
 }
 CHECKS = ("flag", "off")
 MAX_INSTRUCTION = 4000
@@ -80,24 +56,20 @@ PROFILE_DEFAULTS: dict[str, Any] = {
     "threshold": None, "rule": "max", "mutual": True, "check": "flag",
     "min_appearances": 2, "max_narratives": 12,
 }
-#: How alike two entries are, beyond one cosine over the signature. Optional
-#: and absent by default -- not in PROFILE_DEFAULTS -- so a profile that sets
-#: none of them hashes exactly as it did and nothing it stored goes stale.
+#: Optional profile keys for comparing entries beyond one cosine;
 #: `linking.similarity` says what each does.
 PROFILE_MEASURES = ("weights", "attributes", "near", "shared")
 PROFILE_KEYS = frozenset({"about", "field", "instruction", "fields", *PROFILE_DEFAULTS,
                           *PROFILE_MEASURES})
 
 _lock = threading.Lock()
-#: Keyed by data root; see `describe/library.py` for why.
+#: Keyed by data root.
 _cache: dict[str, dict[str, Any]] = {}
 
 
 class DefinitionError(FalconvarError, ValueError):
-    """A definition that will not be accepted, or does not exist.
-
-    Carries the problems as a list, because a message may itself contain the
-    separator a joined string would be split on.
+    """A definition that will not be accepted, or does not exist. Carries the
+    problems as a list.
     """
 
     def __init__(self, message: str, problems: Optional[list[str]] = None) -> None:
@@ -123,11 +95,9 @@ def _with_defaults(section: str, entry: dict[str, Any]) -> dict[str, Any]:
 
 
 def load(refresh: bool = False) -> dict[str, Any]:
-    """Built-ins, then custom layered on top. Cached; `refresh` after a write.
-
-    A custom entry that shadows a built-in or fails its check is dropped and
-    listed under `problems` rather than raised: the file is hand-editable, and
-    one typo taking down `/capabilities` takes every generated form with it.
+    """Built-ins, then custom on top. Cached; `refresh` re-reads. A custom entry
+    that shadows a built-in or fails its check is dropped and listed under
+    `problems`.
     """
     key = str(paths.AGGREGATE_DEFINITIONS)
     with _lock:
@@ -234,11 +204,9 @@ class Selection:
 
 
 def selection(name: str, override: Optional[inputs_mod.Input] = None) -> Selection:
-    """A profile's selection, narrowed by an input if one is given.
-
-    `yolo[people.clothing]` against `people` reads only yolo's answers and
-    links on clothing alone. An input may narrow the identity keys, never
-    widen them: a key the profile does not name is a different profile.
+    """A profile's selection, narrowed by an input if given: `yolo[people.clothing]`
+    reads only yolo's answers and links on clothing. An input may narrow the
+    identity keys, never widen them.
     """
     entry = get("profiles", name)
     field = entry["field"]
@@ -477,6 +445,105 @@ def remove(section: str, name: str) -> None:
     load(refresh=True)
 
 
+def add_prompt(name: str, instruction: str, fields: dict[str, Any], *,
+               kind: str = "fold", inputs: Optional[str] = None,
+               key: Optional[str] = None, fold_instruction: Optional[str] = None,
+               about: str = "") -> dict[str, Any]:
+    """Add an aggregate prompt of your own, or replace one you added. Returns
+    `definition(name)`.
+
+        aggregates.add_prompt(
+            "incident_report",
+            "Write an incident report for this video.",
+            fields={
+                "report":   {"type": "text", "about": "what happened, in order"},
+                "severity": {"type": "text", "about": "how serious",
+                             "one_of": ["none", "minor", "major"]},
+            },
+            inputs="clip:hazards[severity,hazards]")
+        aggregate(record, out, incident_report=True)
+
+    `kind` is how it is asked:
+
+        fold    one answer over the whole video (as `summary`)
+        spans   contiguous chapters, each answering `fields` (as `chapters`)
+        items   discrete things, each citing its chunk (as `events`)
+
+    `fields` uses describe's builder: `type` is `text` or `list`, `about` is what
+    the model is told to put there, `one_of` fixes the values, `of` makes a
+    list's entries objects. `inputs` is the default selection (`transcript+*`
+    when None); `key` names the list a spans or items answer is under (the kind
+    when None); `fold_instruction` is how a fold merges partial summaries.
+    Saved in `aggregates.json` under the data root. A built-in's name raises
+    `ProtectedDefinition`; anything else wrong raises `DefinitionError`.
+    """
+    add("prompts", name, {"kind": kind, "about": about, "instruction": instruction,
+                          "fields": fields, "inputs": inputs, "key": key,
+                          "fold_instruction": fold_instruction})
+    return definition(name)
+
+
+def add_profile(name: str, field: str, instruction: str, fields: dict[str, Any], *,
+                identity: Optional[list[str]] = None, story: Optional[list[str]] = None,
+                inputs: Optional[str] = None, transcript: Optional[bool] = None,
+                threshold: Optional[float] = None, rule: Optional[str] = None,
+                mutual: Optional[bool] = None, check: Optional[str] = None,
+                min_appearances: Optional[int] = None,
+                max_narratives: Optional[int] = None,
+                weights: Optional[dict[str, float]] = None,
+                attributes: Optional[dict[str, float]] = None,
+                near: Optional[list[list[str]]] = None,
+                shared: Optional[dict[str, float]] = None,
+                about: str = "") -> dict[str, Any]:
+    """Add a link profile of your own, or replace one you added. Runs as
+    `entities:<name>`. Returns `definition("entities:<name>")`.
+
+        aggregates.add_profile(
+            "tools", "objects",
+            "Below are observations of what may be the same object, in time "
+            "order. Say what it is and who used it for what.",
+            fields={"use": {"type": "text", "about": "who used it, for what"}},
+            identity=["object", "appearance"], story=["context"])
+        aggregate(record, out, entities_tools=True)
+
+    `field` is the answer field whose entries are linked; `identity` the entry
+    keys that say who is who, `story` the keys the account reads besides.
+    `inputs` picks which answers are read (`*` when None). `instruction` and
+    `fields` describe the account written for each linked entity. The rest
+    tune linking and default as the built-in profiles do: `threshold` (needed
+    without `identity`), `rule` (`max`, `q95`), `mutual`, `check` (`flag`,
+    `off`), `min_appearances`, `max_narratives`, `transcript`, and the
+    measures `weights`, `attributes`, `near`, `shared`.
+    """
+    add("profiles", name, {
+        "about": about, "field": field, "instruction": instruction, "fields": fields,
+        "identity": identity, "story": story, "from": inputs, "transcript": transcript,
+        "threshold": threshold, "rule": rule, "mutual": mutual, "check": check,
+        "min_appearances": min_appearances, "max_narratives": max_narratives,
+        "weights": weights, "attributes": attributes, "near": near, "shared": shared})
+    return definition(PROFILE_PREFIX + name)
+
+
+def remove_prompt(name: str) -> None:
+    """Remove a prompt you added. Answers it already wrote are kept."""
+    remove("prompts", name)
+
+
+def remove_profile(name: str) -> None:
+    """Remove a link profile you added. Answers it already wrote are kept."""
+    remove("profiles", name)
+
+
+def definition(name: str) -> dict[str, Any]:
+    """One prompt or profile by aggregate id (`summary`, `entities:people`): its
+    entry, with `name`, `kind` (`link` for a profile) and `builtin`.
+    """
+    section, short = locate(name)
+    entry = {k: v for k, v in get(section, short).items() if k != "builtin"}
+    return {"name": name, "kind": entry.pop("kind", "link"),
+            "builtin": bool(get(section, short).get("builtin")), **entry}
+
+
 def _write(doc: dict[str, Any]) -> None:
     target = paths.AGGREGATE_DEFINITIONS
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -486,6 +553,7 @@ def _write(doc: dict[str, Any]) -> None:
 
 
 __all__ = ["CHECKS", "DefinitionError", "KINDS", "PROFILE_PREFIX", "ProtectedDefinition",
-           "Selection", "add", "check_profile", "check_prompt", "default_selection",
-           "get", "ids", "kind_text", "load", "locate", "profiles", "prompts",
-           "remove", "selection", "system", "version_of"]
+           "Selection", "add", "add_profile", "add_prompt", "check_profile",
+           "check_prompt", "default_selection", "definition", "get", "ids",
+           "kind_text", "load", "locate", "profiles", "prompts", "remove",
+           "remove_profile", "remove_prompt", "selection", "system", "version_of"]

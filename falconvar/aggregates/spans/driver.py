@@ -1,65 +1,128 @@
 """The `spans` kind: contiguous ranges over the whole video. `chapters` is one.
 
-Spans are resolved through the timeline, never trusted from the model. It is
-asked for chunk ids, which it can copy; times it would invent.
-
-**A video too long for one call is divided by parts, not windows.** Dividing
-each window separately would force a chapter break at every window edge. So
-the chunks are folded first -- as `summary` folds them -- until the parts fit,
-and the model cites part ids, each resolved to the chunks it covers.
+Every chunk the input read is embedded, and `segment` puts a boundary where
+similarity between neighbouring chunks dips well below the dips around it.
+`min_span_s` (30 s) is the floor: a shorter span joins its more alike
+neighbour. `max_spans` caps the count: while there are more, the two most
+alike neighbouring spans merge. The model then names each span, one call per
+span, with the definition's fields (`title`, `summary` for chapters). Spans
+cover every chunk of the grid; boundaries are recorded with their similarity
+and depth.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from typing import Any, Optional
 
 from .. import definitions
-from ..rendering import resolve_span
-from ..base import WINDOW, DefinitionRunner, listing, schema
+from ..core.base import WINDOW, DefinitionRunner, schema
 from ..fold import fold
+from ..core.rendering import resolve_span
+from .segment import segment
+
+#: Texts per embedding request, as `embed` sends them.
+BATCH = 64
 
 
 class SpansAggregator(DefinitionRunner):
+    def __init__(self, definition_id: str, llm: Optional[str] = None,
+                 embedder: Optional[str] = None,
+                 max_spans: Optional[int] = None,
+                 min_span_s: float = 30.0) -> None:
+        super().__init__(definition_id, llm)
+        if max_spans is not None and (type(max_spans) is not int or max_spans < 1):
+            from ...shared.reporting.errors import Refused
+            raise Refused(f"max_spans must be a whole number, 1 or more; "
+                          f"got {max_spans!r}")
+        if not isinstance(min_span_s, (int, float)) or min_span_s < 0:
+            from ...shared.reporting.errors import Refused
+            raise Refused(f"min_span_s must be 0 or more seconds; got {min_span_s!r}")
+        from ...shared.models import embedders
+        self.embedder = embedders.build(embedder)
+        self.max_spans = max_spans
+        self.min_span_s = float(min_span_s)
+
+    @property
+    def model_key(self) -> str:
+        """The llm, the embedder and both caps: each changes the answer."""
+        return (f"{self.llm.key}|{self.embedder.key}|"
+                f"max={self.max_spans if self.max_spans is not None else 'none'}|"
+                f"min={self.min_span_s:g}s")
+
+    def _vectors(self, rows: list[Any]) -> list[list[float]]:
+        """One vector per row: the mean of its parts, each embedded separately."""
+        texts = [said for row in rows for _, said in row.parts]
+        vectors = [v for at in range(0, len(texts), BATCH)
+                   for v in self.embedder.embed(texts[at:at + BATCH])]
+        out, at = [], 0
+        for row in rows:
+            mine = vectors[at:at + len(row.parts)]
+            at += len(row.parts)
+            out.append([sum(column) / len(mine) for column in zip(*mine)])
+        return out
+
+    async def _name(self, context: Any, rows: list[Any], index: int, total: int,
+                    chunk_ids: list[int]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """One span's fields, from that span's rows alone."""
+        units = [([r.chunk_id], r.line) for r in rows]
+        layers: list[dict[str, Any]] = []
+        if len(units) > WINDOW:
+            # A span too long for one call is folded within itself.
+            units, layers = await fold(context, self.llm, units, until=WINDOW)
+        ask = definitions.kind_text("spans")["name"].format(
+            number=index + 1, total=total, first=chunk_ids[0], last=chunk_ids[-1])
+        answer = await self.llm.complete(
+            f"{self.entry['instruction']} {ask}\n\n"
+            + "\n".join(said for _, said in units),
+            schema(self.name, self.properties()), definitions.system())
+        return answer, layers
+
     async def _run(self, context: Any, read: Any) -> dict[str, Any]:
-        text = definitions.kind_text("spans")
         key = self.entry.get("key") or "spans"
         fields = list(self.entry["fields"])
-        units = [([r.chunk_id], r.line) for r in read.rows]
-        layers: list[dict[str, Any]] = []
-        by_parts = len(units) > WINDOW
-        if by_parts:
-            units, layers = await fold(context, self.llm, units, until=WINDOW)
-            lines = []
-            for number, (ids, said) in enumerate(units):
-                start, end = resolve_span(context, ids)
-                lines.append(f"[{number}] {start:.0f}-{end:.0f}s  {said}")
-        else:
-            lines = [said for _, said in units]
+        rows = read.rows
+        found = segment(self._vectors(rows), self.max_spans,
+                        durations=[r.end - r.start for r in rows],
+                        shortest=self.min_span_s)
 
-        item = {"first_chunk": {"type": "integer"}, "last_chunk": {"type": "integer"},
-                **self.properties()}
-        answer = await self.llm.complete(
-            f"{self.entry['instruction']} {text['cite_parts' if by_parts else 'cite']}"
-            "\n\n" + "\n".join(lines),
-            schema(self.name, listing(key, item)), definitions.system())
+        # Row positions -> chunk ids: each span runs from its first row's chunk to the
+        # chunk before the next span's.
+        grid = context.chunk_ids()
+        starts = [rows[group[0]].chunk_id for group in found.groups]
+        starts[0] = grid[0]
+        bounds = starts[1:] + [grid[-1] + 1]
+        spans_ids = [[c for c in grid if start <= c < end]
+                     for start, end in zip(starts, bounds)]
 
-        spans = []
-        for span in answer[key]:
-            first, last = int(span["first_chunk"]), int(span["last_chunk"])
-            ids = (sorted({c for ids, _ in units[max(first, 0):last + 1] for c in ids})
-                   if by_parts else list(range(first, last + 1)))
+        named = await asyncio.gather(*(
+            self._name(context, [rows[i] for i in group], index, len(found.groups), ids)
+            for index, (group, ids) in enumerate(zip(found.groups, spans_ids))))
+
+        spans, layers = [], []
+        for ids, (answer, folded) in zip(spans_ids, named):
             start, end = resolve_span(context, ids)
-            spans.append({**{f: span.get(f) for f in fields}, "chunk_ids": ids,
+            spans.append({**{f: answer.get(f) for f in fields}, "chunk_ids": ids,
                           "start_ts": round(start, 3), "end_ts": round(end, 3)})
+            layers += folded
         covered = {c for span in spans for c in span["chunk_ids"]}
         return {key: spans,
                 "count": len(spans),
-                # Reported rather than repaired: a gap means the model did not do
-                # what it was asked, and hiding that would make the next reader
-                # trust a table of contents that skips a minute.
-                "covers_all_chunks": covered >= set(context.chunk_ids()),
-                "uncovered": sorted(set(context.chunk_ids()) - covered),
-                "divided": "parts" if by_parts else "chunks",
+                "covers_all_chunks": covered >= set(grid),
+                "uncovered": sorted(set(grid) - covered),
+                "divided": "embeddings",
+                "segmentation": {
+                    "embedder": self.embedder.key,
+                    "max_spans": self.max_spans,
+                    "min_span_s": self.min_span_s,
+                    "first_pass": found.first_pass,
+                    "floored": found.floored,
+                    "merged": found.merged,
+                    # The first pass's boundaries: the chunk a span starts at, the similarity
+                    # across the gap, and its depth.
+                    "boundaries": [{"chunk_id": rows[b["row"]].chunk_id,
+                                    "similarity": b["similarity"], "depth": b["depth"]}
+                                   for b in found.boundaries]},
                 **({"layers": layers} if layers else {})}
 
 

@@ -1,23 +1,21 @@
 """Tone per chunk, and where it turns.
 
-Signed, so a mean over the video is meaningful: two chunks at 0.9 positive and
-0.9 negative should average to nothing, not to 0.9 confident-about-something.
-
-A chunk is scored over every piece of its text, weighted by length -- never by
-its first 480 characters."""
+Signed, so a mean over the video is meaningful. Each chunk is scored over
+every piece of its text, weighted by length.
+"""
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
 from ...shared.contracts.documents import fingerprint_of
-from ..base import Context, ModelUnavailable
-from ..inputs import Input, Read, read
-from ..rendering import pieces, plain
+from ..core.base import Context, ModelUnavailable
+from ..core.inputs import Input, Read, read
+from ..core.rendering import pieces, plain
 
 DEFAULT_SENTIMENT_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
 
-#: The longest piece a sentiment model is handed. Trained on single sentences.
+#: The longest piece a sentiment model is handed.
 MAX_CHARS = 480
 
 
@@ -75,8 +73,7 @@ class SentimentAggregator:
             "mean": round(sum(signs) / len(signs), 4) if signs else 0.0,
             "positive_chunks": sum(1 for s in signs if s > 0),
             "negative_chunks": sum(1 for s in signs if s < 0),
-            # Where the tone flips. The interesting moments in a narrative are
-            # usually next to one of these.
+            # Where the tone flips sign.
             "turning_points": turns,
             "chunks_read": len(read.rows),
             "model": self.model_name,
@@ -92,6 +89,8 @@ def sentiment(excerpt: Any, out: Any, previous: Any = None,
 
 
 def main(argv: Any = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     from ..driver import component_main
     return component_main(argv, "Tone per chunk of an excerpt, and where it turns.",
                           aggregator="sentiment")

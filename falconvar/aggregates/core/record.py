@@ -1,17 +1,14 @@
 """A record: the documents an aggregate is taken from, opened as a `Context`.
 
-A record is what `video_rag` wrote for one video, or what `combination`
-wrote for several -- the same four documents under the same names either way:
+What `video_rag` wrote for one video, or `combination` for several:
 
-    timeline      required: a chunk id means nothing without the grid
+    timeline      required
     descriptions  what the picture was said to hold, per chunk and sampler
     transcript    what was said, per chunk
     manifest      which frames were kept (only `stats` reads it)
 
-It is handed over as a **folder**, read with the library's own filenames, or as
-a **mapping** naming each document outright -- which is how a caller whose
-files are not laid out like this project's still uses it. Everything that
-reads a record goes through `open_record`, so the two spellings cannot drift.
+Handed over as a folder (the library's filenames) or a mapping naming each
+document.
 """
 
 from __future__ import annotations
@@ -19,11 +16,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping, Optional, Union
 
-from ..shared import paths
-from ..shared.contracts.documents import (Descriptions, Manifest, Timeline,
-                                          Transcript, same_video)
-from ..shared.errors import FalconvarError
-from ..shared.storage import files
+from ...shared.config import paths
+from ...shared.contracts.documents import (Descriptions, Manifest, Timeline,
+                                           Transcript, same_video)
+from ...shared.reporting.errors import FalconvarError
+from ...shared.storage import files
 from .base import Context
 
 #: The documents a record may hold, and the type each is read as.
@@ -59,12 +56,8 @@ def context(timeline: str | Path,
             descriptions: Optional[str | Path] = None,
             transcript: Optional[str | Path] = None,
             manifest: Optional[str | Path] = None) -> Context:
-    """The documents at these paths, joined by `chunk_id`.
-
-    The grid is required; the rest are optional -- an audio-only video has no
-    descriptions, a silent one no transcript -- and an aggregator that needs
-    one it was not given says so when asked to run. Documents from two
-    different videos are refused by name (`documents.same_video`).
+    """The documents at these paths, joined by `chunk_id`. The grid is required;
+    the rest are optional. Documents from two different videos are refused.
     """
     grid = files.read(timeline, Timeline)
     read = {"descriptions": files.maybe(descriptions, Descriptions),

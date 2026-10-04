@@ -1,23 +1,11 @@
 """The `link` kind: the same person or thing across chunks, and an account of each.
 
-A link profile says which field, which keys identify an entry of it, how alike
-two entries are measured, and what to write. Identity is decided by `linking`
--- embeddings and closed-vocabulary attributes under rules, no model.
-The model is asked only afterwards, once per linked entity and concurrently, to
-write the profile's account from that entity's observations. This is v0's
-flow, cluster then narrate, with v0's fixed threshold replaced by the rules.
-
-**The check flags; it never drops.** With `check: flag` the same call names
-observations that contradict the rest. They stay in the entity, marked with the
-reason, and the account is written from the others. Measured as a filter that
-removed them, the check caught the known bad merge (dark puffy coat against a
-cream coat) but also rejected true matches, treating a detail absent from one
-observation as a contradiction: F1 fell 0.03 to 0.13, and the same prompt
-rejected three observations on one run and four on the next. Flagged, a doubt
-cannot corrupt the account and cannot cost a true link either.
-
-Also answered here, because they fall out of the linking for free: how long
-each entity was in shot, and which entities were in shot together.
+Who is who is decided by `linking` (no model). Then one call per linked
+entity, concurrently, writes the profile's account from its observations.
+With `check: flag` the same call names observations that contradict the
+rest: they stay in the entity, marked, and the account is written from the
+others. Also reported: how long each entity was in shot, and which were in
+shot together.
 """
 
 from __future__ import annotations
@@ -26,26 +14,24 @@ import asyncio
 from itertools import combinations
 from typing import Any, Optional
 
-from .. import definitions, inputs
+from .. import definitions
+from ..core import inputs
 from .linking import Mentions, link_similar, mentions_of, similarity
-from ..rendering import resolve_span
-from ..base import DefinitionRunner, listing, schema
+from ..core.rendering import resolve_span
+from ..core.base import DefinitionRunner, listing, schema
 
 
 class EntitiesAggregator(DefinitionRunner):
     def __init__(self, definition_id: str, llm: Optional[str] = None,
                  embedder: Optional[str] = None) -> None:
         super().__init__(definition_id, llm)
-        # The same resolution `embed` uses, because identity must be
-        # measured in the space the index was built in. Both reach the one
-        # embedder registry in `shared/models`.
+        # The same embedder resolution `embed` uses.
         from ...shared.models import embedders
         self.embedder = embedders.build(embedder)
 
     @property
     def model_key(self) -> str:
-        """Who writes the accounts, and which space identity is measured in.
-        The rules are the profile's, and its version covers them."""
+        """Who writes the accounts, which space identity is measured in, and the rule."""
         return (f"{self.llm.key}|{self.embedder.key}|{self.entry['rule']}/"
                 f"{'mutual' if self.entry['mutual'] else 'any'}")
 
@@ -68,7 +54,7 @@ class EntitiesAggregator(DefinitionRunner):
         sim, standardised = similarity(mentions, self.embedder, entry)
         linked = link_similar(mentions, sim, entry["rule"], entry["mutual"],
                               entry.get("threshold"))
-        # A z-score threshold beside a cosine one would read as the same number.
+        # Which scale the threshold is on.
         linking["measure"] = "z-blend" if standardised else "cosine"
 
         entities = []
@@ -145,7 +131,7 @@ class EntitiesAggregator(DefinitionRunner):
 
         properties = self.properties()
         if flag:
-            # First, so the model decides what does not belong before it writes.
+            # Doubts first, so the account is written without them.
             properties = {**listing("doubts", {"observation": {"type": "integer"},
                                                "reason": {"type": "string"}}),
                           **properties}
@@ -162,8 +148,7 @@ class EntitiesAggregator(DefinitionRunner):
                     doubts.append({"key": mention["key"], "reason": mention["doubt"]})
         account = {f: answer.get(f) for f in entry["fields"]}
         if doubts and len(doubts) == len(entity["mentions"]):
-            # Every observation disputed: there is nothing undisputed to write
-            # from, and an account of nobody is worse than none.
+            # Every observation disputed: no account.
             account = {f: None for f in entry["fields"]}
         return {"account": account, "doubts": doubts}
 
@@ -175,17 +160,20 @@ def profile_id(profile: str) -> str:
 
 
 def entities(profile: str, sightings: Any, out: Any, previous: Any = None,
-             llm: Optional[str] = None, embedder: Optional[str] = None) -> Any:
-    """Link the sightings file at `sightings` under `profile` (`people`, or
-    `entities:people`), and write each entity's account, into `out`.
-
-    Who is who is decided by `linking` -- no model. `llm` writes the accounts;
-    `embedder` measures identity, and is the space the answer is reused in."""
+             llm: Optional[str] = None, embedder: Optional[str] = None,
+             models: Optional[Any] = None) -> Any:
+    """Link the sightings file under `profile` (`people` or `entities:people`) and
+    write each entity's account into `out`. `llm` writes the accounts, `embedder`
+    measures identity; `models` carries both and their keys.
+    """
     from ..driver import run_one
-    return run_one(profile_id(profile), sightings, out, previous, llm, embedder)
+    return run_one(profile_id(profile), sightings, out, previous, llm, embedder,
+                   models=models)
 
 
 def main(argv: Any = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     from ..driver import component_main
     return component_main(argv, "Who is who across chunks, from a sightings file, "
                                 "and an account of each.",
