@@ -1,8 +1,5 @@
-"""The ingest component: `media.json` + `timeline.json` -> `manifest.json`, `store/`.
-
-Two artifacts, which is why `Produced` lists what was written rather than
-returning one path: a run with no `store` produces a manifest and no store,
-and a caller should learn that from the result rather than by looking.
+"""The ingest component: `media.json` + `timeline.json` -> `manifest.json` and
+the frame store.
 """
 
 from __future__ import annotations
@@ -10,28 +7,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Sequence
 
-from falconvar.shared import logs, progress
+from falconvar.shared.reporting import logs, progress
 from falconvar.shared.contracts.documents import (Manifest, Media, Produced,
                                            Timeline)
 from falconvar.shared.storage.files import read, write
 from falconvar.shared.contracts.documents import same_video
 from . import samplers as samplers_mod
-#: Aliased, not renamed: the module's takes built sampler objects and a
-#: store, this one takes a spec string and a directory. Two public
-#: functions of one name in one package is the recursion `describe`
-#: had to be rescued from.
+#: The pipeline's `ingest` takes built samplers; this module's takes a spec.
 from .pipeline import ingest as _pass
 from .reader import UnreadableSource
 from ..helpers import FrameStore
-from falconvar.shared.errors import Refused, UnknownOption
+from falconvar.shared.reporting.errors import Refused, UnknownOption
 
 
 def split_specs(sampler: str | Sequence[str]) -> list[str]:
-    """`"clip:[text,scene],yolo"` -> `["clip:[text,scene]", "yolo"]`.
-
-    Bracket-aware, because a comma separates top-level samplers *and* the
-    questions inside a group. Splitting naively would turn one grouped spec
-    into two broken ones.
+    """`"clip:[text,scene],yolo"` -> `["clip:[text,scene]", "yolo"]`, aware of
+    brackets.
     """
     if not isinstance(sampler, str):
         return [s.strip() for s in sampler if str(s).strip()]
@@ -51,12 +42,8 @@ def split_specs(sampler: str | Sequence[str]) -> list[str]:
 
 
 def parse_spec(spec: str) -> tuple[str, list[str]]:
-    """`"clip:[text,scene]"` -> `("clip", ["text", "scene"])`.
-
-    Three spellings, one meaning. `clip:[a,b]` is the form to read; `clip:a+b`
-    is the same thing without brackets, because some shells glob them and
-    quoting a sampler list is a poor first experience. `clip:a` and `clip` are
-    the one- and zero-question cases they always were.
+    """`"clip:[text,scene]"` -> `("clip", ["text", "scene"])`. `clip:a+b` is the
+    same as `clip:[a,b]`; a bare name asks the sampler's own question.
     """
     name, sep, rest = spec.partition(":")
     name, rest = name.strip(), rest.strip()
@@ -73,13 +60,11 @@ def parse_spec(spec: str) -> tuple[str, list[str]]:
     return name, questions
 
 
-#: setting -> the samplers that read it. Everything absent from this table
-#: (`per_second`, `min_interval_s`, `max_per_chunk`) is enforced in the base
-#: class and applies to every sampler.
+#: Setting -> the samplers that read it. Settings absent here apply to every
+#: sampler.
 SAMPLER_SETTINGS: dict[str, tuple[str, ...]] = {
     "every_n": ("uniform",),
-    # Every sampler that decides by change. `uniform` keeps a frame on a
-    # stride, so there is nothing for a threshold to compare.
+    # Samplers that keep a frame when it changed enough.
     "threshold": ("clip", "yolo", "objects", "text"),
     "vocabulary": ("objects",),
     "confidence": ("objects",),
@@ -98,37 +83,12 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
                    ) -> list[samplers_mod.Sampler]:
     """`["yolo", "clip:[text,scene]"]` -> sampler objects.
 
-    Any name may carry one question after a colon or several in a list. The
-    two halves are independent: `uniform:text` reads the screen on a stride
-    without paying OCR to decide *when*; `clip:[text,scene]` asks two questions
-    of one set of frames. Unpaired, the question is the sampler's own name.
-
-    **Specs naming the same strategy are merged into one run.** Selecting
-    frames is the expensive half -- CLIP or YOLO on every decimated frame,
-    EasyOCR at 98% of the text sampler's cost -- and asking a second question
-    about frames already chosen costs one more describe call. So
-    `clip:text,clip:scene` runs CLIP once and means exactly `clip:[text,scene]`;
-    brackets are the explicit spelling of something that happens anyway, rather
-    than the only way to avoid paying twice. Measured before this: `uniform:text`
-    and `uniform:reactor` produced identical frame lists on all 14 chunks of a
-    video, having each walked it separately.
-
-    Every spec here shares one configuration -- there is a single `--threshold`,
-    a single `--vocabulary` -- so merging by name is merging by configuration.
-    The suffix below is for the day that stops being true.
-
-    ``questions`` is the vocabulary to validate against, passed in rather than
-    imported: ingest does not depend on describe, and a sampler records a
-    prompt as an opaque string. The caller that knows the question registry
-    supplies it; without one, any name is accepted and validated later.
-
-    ``confidence`` and ``languages`` are settings of a *detector*, which is why
-    they are separate arguments rather than more of ``threshold``.
-    ``threshold`` is how much the frame must have changed to keep it;
-    ``confidence`` is how sure the detector must be that a box is a box at all,
-    and the two are different quantities on different scales. ``languages`` is
-    what EasyOCR is asked to read -- without it the text sampler is
-    English-only with no way to say otherwise.
+    A name may carry one question after a colon or several in a list; unpaired,
+    the question is the sampler's own name. Specs naming the same sampler merge
+    into one run, so `clip:text,clip:scene` means `clip:[text,scene]`.
+    `questions` is the vocabulary to check against; None accepts any name.
+    `threshold` is how much a frame must change to be kept; `confidence` is the
+    detector's box threshold; `languages` is what the OCR reads.
     """
     given = {"every_n": every_n, "threshold": threshold,
              "vocabulary": vocabulary, "confidence": confidence,
@@ -153,12 +113,7 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
             if question not in merged:
                 merged.append(question)
 
-    # A setting no chosen sampler reads is refused, not dropped. Dropped, the
-    # run reports success having sampled under settings nobody asked for --
-    # `--sampler uniform --confidence 0.55` built a sampler with no config at
-    # all and said nothing. This is the rule `audio.run` already applies to its
-    # two backends, and the table a form's `when` should be derived from rather
-    # than restated beside it.
+    # A setting no chosen sampler reads is refused.
     unreachable = sorted(s for s, value in given.items()
                          if value is not None
                          and not set(SAMPLER_SETTINGS[s]) & set(grouped))
@@ -182,9 +137,7 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
         elif name == "text":
             built.append(samplers_mod.build(name, **ask, **tuned, **reads, **rate))
         else:
-            # Thresholds are left unset unless given: the useful value differs
-            # by an order of magnitude between samplers because they compare
-            # different things, so each class keeps its calibrated default.
+            # Unset thresholds keep each sampler's own default.
             built.append(samplers_mod.build(name, **ask, **tuned, **rate))
     return built
 
@@ -202,42 +155,20 @@ def ingest(media: Media, timeline: Timeline,
            frames: Optional[FrameStore] = None,
            store_scope: str = "sampled",
            on_progress: Optional[progress.Reporter] = None) -> Manifest:
-    """One decode pass over the picture, onto a grid decided elsewhere.
+    """One decode pass over the picture, onto a given grid. Reads the file
+    `media.path` names and writes no artifact.
 
-    Takes the two documents it needs and somewhere to put pixels, and reads
-    and writes no artifact -- it does open the file `media.path` names,
-    because frames are what it is for.
-
-    `frames` is a `FrameStore` over a directory you name. `None` keeps no
-    frames, which is a manifest and no pictures -- legible, and what
-    omitting `store` has always meant.
-
-    **A typo in the question half is refused here, before anything decodes.**
-    `build_samplers` has taken a `questions` vocabulary since it was written,
-    and nothing ever passed one -- so `sampler="uniform:nope"` completed in
-    1.09 s having decoded the video and stored 61 frames (26.68 MB), and then
-    every later `describe` refused the manifest it wrote, including one naming
-    only good samplers. The only way out was to re-run this component, and
-    nothing said so. `workflow.validate` catches the same spec instantly, but a
-    caller driving the components itself never reaches it -- and that is half
-    of what the library is for, and every `POST /run/{component}` besides.
-
-    The vocabulary is resolved *here*, in the driver, which is the composition
-    root -- `workflow.validate` and the tier driver already import it the same
-    way. Ingest itself still does not depend on describe: a sampler records the
-    question as an opaque string and `samplers/base.py` never reads it.
+    `frames` is where kept frames go (a `FrameStore`, `MemoryFrames`), or None to
+    keep none. Questions are checked against the vocabulary before anything
+    decodes.
     """
     from ..describe import prompts
 
-    # The samplers are built first, before a frame is decoded: every check in
-    # here is about the arguments alone, and a typo answered in 7 ms beats one
-    # answered after the grid has been loaded.
+    # Built before anything decodes, so a bad argument fails at once.
     built = build_samplers(split_specs(sampler), every_n, min_interval_s,
                            max_per_chunk, threshold, vocabulary, confidence,
                            languages, questions=prompts.questions())
-    # One decode pass, so the only unit with a completion is a chunk --
-    # `pipeline.ingest` has taken an `on_chunk` since it was written and
-    # nothing ever passed one.
+    # Progress is reported per chunk.
     total = len(timeline)
     seen = 0
 
@@ -266,13 +197,8 @@ def video(media: str | Path, timeline: str | Path, out: str | Path,
           store_scope: str = "sampled",
           prune_store: bool = False,
           on_progress: Optional[progress.Reporter] = None) -> Produced:
-    """Sample the picture onto the grid; write the manifest to `out`.
-
-    `ingest` plus a read at each end. `store` is a *directory* and it is the
-    one input no filepath describes: a frame store is a protocol, and the
-    a caller could satisfy it without one -- so `ingest` takes the object and
-    this takes somewhere to put it. `store=None` keeps no frames, which is
-    what omitting `store` has always meant.
+    """Sample the picture onto the grid; write the manifest to `out`. `ingest` plus
+    a read at each end. `store` is the frame directory; None keeps no frames.
     """
     described = read(media, Media)
     grid = read(timeline, Timeline)
@@ -291,7 +217,7 @@ def video(media: str | Path, timeline: str | Path, out: str | Path,
 
         pruned: list[int] = []
         if frames is not None and prune_store:
-            # After the pass, so a failure mid-run leaves the old store whole.
+            # After the pass: delete stored frames the new manifest does not name.
             named = {f["index"] for c in manifest.chunks
                      for b in c["samplers"].values() for f in b["frames"]}
             pruned = frames.prune(named)
@@ -324,6 +250,8 @@ def load(path: str | Path) -> Manifest:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     import argparse
     import json
 

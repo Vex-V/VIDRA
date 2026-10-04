@@ -1,12 +1,8 @@
 """The Describer protocol, and a registry.
 
-A describer takes frames and a context and returns a summary plus whatever
-structured fields its question owns. Two kinds exist: a stub that loads nothing,
-and `backends.model.ModelDescriber`, which any provider in `shared.models.providers`
-answers through.
-
-Resolution is lazy: importing this must not pull in a client, so a stub run
-pays for no SDK and no key.
+A describer takes frames and a context and returns a summary plus the
+structured fields its question's shape holds: the `stub`, which loads
+nothing, or `ModelDescriber` for any provider. Resolved lazily.
 """
 
 from __future__ import annotations
@@ -15,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, Sequence
 
 from .frames import LoadedFrame
-from falconvar.shared.errors import Unavailable
+from falconvar.shared.reporting.errors import Unavailable
 
 
 class DescriberUnavailable(Unavailable):
@@ -32,7 +28,7 @@ class Description:
 
 
 class Describer(Protocol):
-    #: How many (chunk, sampler) runs `reader.describe` works on at once.
+    #: How many (chunk, sampler) runs are described at once.
     concurrency: int
 
     async def describe(self, images: Sequence[LoadedFrame],
@@ -40,7 +36,7 @@ class Describer(Protocol):
     def config(self) -> dict[str, Any]: ...
 
 
-#: Describers that are not a model provider: the stub, which loads nothing.
+#: Describers that are not a model provider: the stub.
 _REGISTRY: dict[str, Any] = {}
 
 
@@ -50,11 +46,7 @@ def register(cls) -> Any:
 
 
 def build(name: Optional[str] = None, **kwargs) -> Describer:
-    """A provider, `provider/model`, `stub`, or None for the default.
-
-    Every provider is one class; which wire format it speaks is `shared.models.llm`'s
-    concern, so adding a provider adds no describer.
-    """
+    """A provider, `provider/model`, `stub`, or None for the default."""
     from falconvar.shared.models import providers
 
     chosen, _ = providers.choose("describe", name)

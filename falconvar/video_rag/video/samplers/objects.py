@@ -11,19 +11,10 @@ if TYPE_CHECKING:
 
 
 class ObjectChangeSampler(DetectionChangeSampler):
-    """Objects, compared by presence and position -- no embedder involved.
+    """Objects, compared by presence and position; no embedder.
 
-    Objects have no state the way people do. Measured on real footage, the
-    same object one second later scores 0.989 CLIP similarity and has moved
-    half a pixel, so an appearance embedding carries almost no signal while
-    costing a forward pass per detection. What changes is whether a thing is
-    there and where.
-
-    Detection uses an open vocabulary because COCO's classes do not contain
-    the objects most footage is actually about -- plain YOLO found seven
-    non-person classes on checkout video, dominated by ``bench`` and
-    ``suitcase`` at ~0.30 confidence, both of which were the same empty
-    counter. Matching is class-aware, so a cart never counts as a bag.
+    Detection uses an open vocabulary (YOLO-World) set by `vocabulary`. Matching
+    is class-aware, so a cart never counts as a bag.
     """
 
     name = "objects"

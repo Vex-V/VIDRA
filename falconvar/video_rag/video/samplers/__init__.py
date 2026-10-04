@@ -1,14 +1,8 @@
-"""Sampling strategies, addressable by name.
+"""Sampling strategies, by name.
 
-A name here is a *strategy* -- which frames to keep -- and nothing more. What
-is asked about those frames is a prompt, paired as `name:prompt` and accepted
-by every sampler, so there is no entry here for a question. `falconvar` had an
-`overview` sampler whose entire content was `prompt="overview"`; it is spelled
-`uniform:overview` now, and any other sampler can ask it too.
-
-Model-backed samplers are resolved lazily. Importing this package must not pull
-in torch, ultralytics or easyocr: the positional baseline has to stay usable,
-and testable, on a machine with none of them installed.
+A name is a strategy: which frames to keep. What is asked about them is a
+question, paired as `name:question`. Model-backed samplers are imported only
+when built.
 """
 
 from __future__ import annotations
@@ -18,11 +12,9 @@ from typing import Type
 
 from .base import Sampler
 from .uniform import UniformSampler
-from falconvar.shared.errors import UnknownOption
+from falconvar.shared.reporting.errors import UnknownOption
 
-#: name -> "module:ClassName", resolved on first use. The registry name is what
-#: a manifest, a description and an embedding are all keyed by, so it stays
-#: stable even when the file it lives in is renamed.
+#: name -> "module:ClassName", imported on first use.
 _LAZY: dict[str, str] = {
     "clip": "scene:ClipChangeSampler",
     "yolo": "people:PersonChangeSampler",

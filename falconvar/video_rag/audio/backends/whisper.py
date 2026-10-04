@@ -1,8 +1,4 @@
-"""faster-whisper over a whole track.
-
-Imported only when `--transcriber whisper` is asked for: this pulls in torch
-and CTranslate2, and a stub run should pay for neither.
-"""
+"""faster-whisper over a whole track. Imported only when asked for by name."""
 
 from __future__ import annotations
 
@@ -12,11 +8,10 @@ from . import cuda
 from ..models import ModelUnavailable, Segment, Transcript, Word
 from ..source import Track
 
-#: Model ids change faster than this file will, so a plain default.
+#: The default model.
 DEFAULT_MODEL = "small"
 
-#: float16 on GPU, int8 on CPU -- and int8 on CUDA is slower than float16 on
-#: this hardware rather than faster.
+#: Compute type by device.
 DEFAULT_COMPUTE = {"cuda": "float16", "cpu": "int8"}
 
 
@@ -40,12 +35,7 @@ class WhisperTranscriber:
             self._model = model_obj
             return
 
-        # Before importing the runtime, not after. CTranslate2 asks Windows for
-        # its CUDA libraries *by name* at the first encode, not at import, and
-        # `nvidia-cublas-cu12` installs them where no search path points --
-        # since Python 3.8 an extension's dependencies do not resolve from
-        # PATH. The failure is otherwise a missing-DLL error on a machine where
-        # the DLL is present.
+        # Preload the CUDA libraries before CTranslate2 asks for them by name (Windows).
         cuda.enable()
         import torch
         from faster_whisper import WhisperModel

@@ -1,11 +1,5 @@
-"""A describer that loads nothing.
-
-Deliberately obvious in its output. `falconvar` learned why: a form defaulting
-to the alphabetically-first option produced a complete-looking run whose
-content was `[stub0.0][stub0.1]`, and nothing was wrong enough to report.
-
-It still fills the *same keys* a real describer would for this question, so a
-stub run exercises the shape the document has to hold rather than a simpler one.
+"""A describer that loads nothing: its output is obviously stub text, filling the
+same keys a real describer would for the question.
 """
 
 from __future__ import annotations

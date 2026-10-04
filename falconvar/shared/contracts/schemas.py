@@ -1,13 +1,7 @@
-"""JSON Schema generated from the document dataclasses.
+"""JSON Schema generated from the document dataclasses, into `db/json/`.
 
-The dataclasses are the single source of truth; `db/json/*.schema.json` is
-generated and checked in, and `--check` fails on a stale diff so the dataclass,
-the schema and the SQL cannot drift apart silently.
-
-`validate` is structural unless `deep`: presence, the document tag, and
-top-level types. That catches a document written by the wrong component or an
-older version, and costs nothing on a manifest holding tens of thousands of
-frame records.
+`--check` fails when a checked-in schema no longer matches. `validate` is
+structural unless `deep`: presence, the document tag and top-level types.
 """
 
 from __future__ import annotations
@@ -18,14 +12,11 @@ import typing
 from pathlib import Path
 from typing import Any, Optional, get_args, get_origin
 
-from .. import paths
+from ..config import paths
 from . import documents
 
-#: Written to `db/json/`. Relative to the checkout, not the data root: these
-#: are source, not output.
 def schema_dir() -> Path:
-    """Where the generated schemas are written. A checkout only: these are
-    source, not output, so an installed copy has nowhere to put them."""
+    """Where the generated schemas are written (checkout only)."""
     return paths.checkout_root() / "db" / "json"
 
 _PRIMITIVES = {str: "string", int: "integer", float: "number", bool: "boolean"}
@@ -40,9 +31,7 @@ def _json_type(annotation: Any) -> dict[str, Any]:
     args = get_args(annotation)
 
     if origin is typing.Union:
-        # `Optional[X]` is `Union[X, None]`. Rendered as a nullable type
-        # rather than dropped, because "absent" and "null" are different facts
-        # in these documents -- an unknown duration is not a zero one.
+        # `Optional[X]` is rendered as a nullable type.
         inner = [a for a in args if a is not type(None)]
         if len(inner) == 1:
             schema = _json_type(inner[0])
@@ -62,11 +51,8 @@ def _json_type(annotation: Any) -> dict[str, Any]:
 
 
 def schema_for(cls: type) -> dict[str, Any]:
-    """A JSON Schema for one document dataclass.
-
-    Derived from `as_dict`'s shape where it differs from the field list: the
-    document is what gets written, and it carries `document`, `version` and
-    computed values like `fingerprint` that are not fields.
+    """A JSON Schema for one document dataclass, from `as_dict`'s shape (which adds
+    `document`, `version` and computed values).
     """
     fields = {f.name: f for f in dataclasses.fields(cls)}
     hints = typing.get_type_hints(cls)
@@ -87,7 +73,7 @@ def schema_for(cls: type) -> dict[str, Any]:
                 and field.default_factory is dataclasses.MISSING):  # type: ignore[misc]
             required.append(field_name)
 
-    # Computed, not stored: present in the written document but not a field.
+    # Computed values written into the document.
     for extra in ("fingerprint", "manifest_fingerprint", "speakers"):
         if hasattr(cls, extra) and extra not in properties:
             properties[extra] = {"type": ["string", "array"]}
@@ -96,9 +82,7 @@ def schema_for(cls: type) -> dict[str, Any]:
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": name,
         "type": "object",
-        # Open on purpose: a document may gain a field before every reader
-        # knows it, and refusing to parse it would make adding one a
-        # coordinated release rather than an append.
+        # Open: a document may carry fields a schema does not list yet.
         "additionalProperties": True,
         "required": sorted(required),
         "properties": properties,
@@ -119,10 +103,7 @@ def generate(out_dir: Optional[Path] = None) -> dict[str, Path]:
 
 
 def check(out_dir: Optional[Path] = None) -> list[str]:
-    """Which checked-in schemas no longer match the dataclasses.
-
-    What CI runs. Empty means the three descriptions still agree.
-    """
+    """Which checked-in schemas no longer match the dataclasses."""
     out_dir = Path(out_dir or schema_dir())
     stale: list[str] = []
     for tag, cls in sorted(documents.DOCUMENTS.items()):
@@ -137,12 +118,8 @@ def check(out_dir: Optional[Path] = None) -> list[str]:
 
 
 def validate(document: dict[str, Any], tag: str, deep: bool = False) -> list[str]:
-    """Problems with a document, as messages. Empty means it conforms.
-
-    Structural only unless ``deep``: presence, the document tag, and the type
-    of each top-level field. That catches a document written by the wrong
-    component or an older version, which is what a handoff contract is for --
-    and it costs nothing on a manifest holding fifty thousand frame records.
+    """Problems with a document, as messages; empty means it conforms. Structural
+    only unless `deep`.
     """
     cls = documents.DOCUMENTS.get(tag)
     if cls is None:

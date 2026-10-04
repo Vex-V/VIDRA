@@ -1,24 +1,11 @@
-"""How to tell whether two detections are "the same thing, unchanged".
+"""How a change sampler compares two frames' detections.
 
-Every change-based sampler follows the same shape: detect regions, describe
-them, and compare this frame's descriptions against the last kept frame's.
-Only the description and the comparison differ, and they differ because what
-varies differs:
-
-  people   — identity persists while state changes, so appearance carries
-             the signal. A CLIP embedding of the crop.
-  objects  — no state to speak of. Measured on real footage, the same object
-             one second later scores 0.989 CLIP similarity and has moved half
-             a pixel, so appearance carries nothing. Presence and position
-             carry everything. Box geometry.
-  text     — position persists while content changes. A slide advances and
-             the text block stays exactly where it was, so geometry alone
-             would report nothing. The frame is masked to wherever text was
-             found and that is compared as a whole, which captures position
-             through the mask and content through the pixels.
+    people   a CLIP embedding of each crop (appearance)
+    objects  box geometry (presence and position)
+    text     the frame masked to where text was found, compared as a whole
 
 Each descriptor returns an opaque per-frame description and a similarity
-matrix between two of them. The sampler does the rest.
+matrix between two of them.
 """
 
 from __future__ import annotations
@@ -30,7 +17,7 @@ import cv2
 import numpy as np
 
 from .detectors import Detection
-from falconvar.shared.errors import UnknownOption
+from falconvar.shared.reporting.errors import UnknownOption
 
 
 class RegionDescriptor(ABC):
@@ -54,12 +41,7 @@ class RegionDescriptor(ABC):
 
 
 class CropEmbeddingDescriptor(RegionDescriptor):
-    """Appearance, via a CLIP embedding of each crop.
-
-    Used for people: the crop is upsampled to 224 rather than being lost in a
-    full-frame downsample, so posture, orientation and held objects survive
-    into the vector.
-    """
+    """Appearance, via a CLIP embedding of each crop (upsampled to 224)."""
 
     name = "crop_embedding"
 
@@ -107,19 +89,8 @@ def _iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def _proximity_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Graded box similarity: centre distance in box-sized units, times size agreement.
-
-    IoU is the obvious choice and it measured badly. It collapses to exactly
-    zero the moment two boxes stop overlapping, so a detection that jitters
-    just past its previous extent is indistinguishable from an object that
-    was never there — and since the score is a minimum across regions, one
-    such detection pins the whole frame at zero. On supermarket footage that
-    happened on 39% of frames, which is a saturated signal rather than a
-    measurement.
-
-    This decays smoothly instead: identical boxes score 1.0, a box displaced
-    by its own diagonal scores 0.5, something genuinely elsewhere scores near
-    zero. Same footage, zero-scores fall from 39% to 7%.
+    """Graded box similarity: centre distance in box-sized units, times size
+    agreement. Identical boxes score 1.0, a box displaced by its own diagonal 0.5.
     """
     if len(a) == 0 or len(b) == 0:
         return np.zeros((len(a), len(b)))
@@ -138,12 +109,8 @@ def _proximity_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 class BoxGeometryDescriptor(RegionDescriptor):
-    """Presence and position only — no pixels compared.
-
-    For objects this is the whole signal, and skipping the embedder saves an
-    embedding per detection per frame. Optionally requires two regions to
-    share a class before they can match, so a cart and a bag never count as
-    each other.
+    """Presence and position only; no pixels compared. Optionally two regions must
+    share a class to match.
     """
 
     name = "box_geometry"
@@ -178,24 +145,8 @@ class BoxGeometryDescriptor(RegionDescriptor):
 
 
 class TextLayoutDescriptor(RegionDescriptor):
-    """One descriptor for the whole frame's text, not one per region.
-
-    Per-region comparison inherits whatever the detector does with region
-    boundaries, and EasyOCR merges and splits lines from frame to frame — on
-    a completely static slide it returned two, three and four regions in
-    successive seconds. A line that got split cannot match the merged version
-    it is being compared against, so a still image samples as if it changed.
-
-    Masking the frame to wherever text was found and describing the result
-    once sidesteps that entirely: split or merged, the ink covers the same
-    pixels. Position is captured because the mask is positional, and content
-    is captured because the pixels are the pixels. A slide advancing in place
-    changes the content while keeping the mask; text appearing elsewhere
-    changes the mask.
-
-    The trade is sensitivity to small changes: one word altered in a corner
-    barely moves a whole-frame descriptor. For screens and slides — the case
-    this exists for — the text is large and this is the robust choice.
+    """One descriptor for the whole frame's text: the frame masked to every text
+    region, so a line the detector splits or merges still covers the same pixels.
     """
 
     name = "text_layout"

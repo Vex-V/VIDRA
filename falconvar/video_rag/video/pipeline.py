@@ -1,11 +1,8 @@
 """One decode pass, feeding every sampler from it.
 
-Per frame: decimate on media time, ask the grid which chunk this is, reset the
-samplers at a boundary, offer the frame to each, release the pixels.
-
-The grid is an input and is never edited -- this asks `timeline.nearest(ts)`
-and nothing else. No boundary is derived, corrected or merged here, which is
-why nothing needs a streaming chunker.
+Per frame: decimate on media time, ask the grid which chunk it is in, reset
+the samplers at a boundary, offer the frame to each, release the pixels. The
+grid is read, never edited.
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ from .decimate import Decimator
 from .reader import read_frames
 from .samplers import Sampler
 from ..helpers import FrameStore
-from falconvar.shared.errors import Refused, UnknownOption
+from falconvar.shared.reporting.errors import Refused, UnknownOption
 
 
 def ingest(media: Media, timeline: Timeline,
@@ -33,8 +30,7 @@ def ingest(media: Media, timeline: Timeline,
         raise Refused("name at least one sampler")
     ids = [s.sampler_id for s in samplers]
     if len(set(ids)) != len(ids):
-        # The manifest keys frames by sampler id, so a collision would silently
-        # drop one sampler's results into another's.
+        # The manifest keys frames by sampler id.
         raise Refused(f"sampler ids must be unique, got {ids}")
     if store_scope not in ("sampled", "decimated"):
         raise UnknownOption("store_scope must be 'sampled' or 'decimated'")
@@ -43,12 +39,7 @@ def ingest(media: Media, timeline: Timeline,
     config = {
         "decimator": decimator.config(),
         "samplers": [s.config() for s in samplers],
-        # `is not None`, not truthiness. `MemoryFrames` was sized, so an
-        # empty one was falsy -- and it is always empty here, before the first
-        # frame is decoded, so truthiness wrote `frame_store: null` into every
-        # in-memory manifest. That class is gone; the rule outlives it,
-        # because "was I given a store" and "does it hold anything yet" are
-        # different questions and only one of them is being asked.
+        # "Was a store given", not "does it hold anything".
         "frame_store": ({**store.config(), "scope": store_scope}
                         if store is not None else None),
     }
@@ -64,11 +55,7 @@ def ingest(media: Media, timeline: Timeline,
 
     for frame in read_frames(media, decimator.accepts):
         decimated += 1
-        # The grid says which chunk this is. `nearest` rather than `index_at`:
-        # media time can fall past the grid at the tail, because the audio
-        # stream is routinely a few milliseconds shorter than the video one, and
-        # the nearest edge chunk should own those frames rather than them being
-        # dropped or a chunk being invented.
+        # `nearest`: a frame past the end of the grid belongs to the last chunk.
         chunk_id = timeline.nearest(frame.media_ts)
 
         if chunk_id != current:
@@ -81,8 +68,7 @@ def ingest(media: Media, timeline: Timeline,
 
         chunk = chunks[chunk_id]
         chunk["decimated_frames"] += 1
-        # "decimated" keeps every frame the samplers were offered, so a
-        # threshold can be retuned later without decoding the video again.
+        # "decimated" keeps every frame the samplers were offered.
         if store is not None and store_scope == "decimated":
             store.write(frame.index, frame.image)
 
@@ -95,8 +81,7 @@ def ingest(media: Media, timeline: Timeline,
                 "media_ts": round(frame.media_ts, 3),
                 "chunk_local_index": chunk_local_index,
             }
-            # The address a fetcher can use. Seconds are a lossy rendering of
-            # this; at a 1/1200000 timebase a rounded float lands elsewhere.
+            # The exact address of the frame.
             if frame.pts is not None:
                 record["pts"] = frame.pts
             if store is not None and store_scope == "sampled":
@@ -110,9 +95,7 @@ def ingest(media: Media, timeline: Timeline,
             block["frame_count"] += 1
 
         chunk_local_index += 1
-        # A describer wanting the whole window at once would hold frames until
-        # the chunk closes. Nothing does, so pixels go back immediately and
-        # peak memory stays at one frame.
+        # Pixels are released at once; one frame in memory.
         frame.release()
 
     if current is not None and on_chunk is not None:

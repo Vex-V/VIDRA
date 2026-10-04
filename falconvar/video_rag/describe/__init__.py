@@ -1,32 +1,19 @@
-"""One model answer per (chunk, sampler).
+"""7 · describe -- one model answer per (chunk, sampler, question).
 
-Reads the frame store and nothing else. There is no seek-the-video fallback:
-the store exists so this stage has its frames in hand, and a fallback would do
-its job while leaving it broken, silently and ~40x slower.
-
-The question asked is the sampler's `prompt`, falling back to its name. Which
-keys a call's schema may fill is narrowed by the other *questions* on the same
-chunk, so exactly one call answers each key and merging is a plain union.
-
-Resume is keyed on the manifest, the describer and a hash of `prompts.py`
-together: without all three, switching describers skips every pair and reports
-success having done nothing.
+Reads the frame store. A stored answer is reused while its manifest,
+describer and question hash still match. The question vocabulary
+(`add_question`, `question`, `questions`) is published here too.
 """
 
 from __future__ import annotations
 
-#: **The public surface is the entry points, the errors and the return types.**
-#: `run` does the work and `load` reads the result back; anything beyond those
-#: is here because a caller cannot do without it -- a second way *in* that no
-#: naming collapses into `run`, an exception they have to catch by name, or a
-#: type they would annotate. Everything else is machinery, and stays reachable
-#: through its own module rather than advertised here. See CLAUDE.md.
-#:
-#: `main` is deliberately absent: it is argparse, and `__main__.py` reaches it
-#: as `from .driver import main`. Nothing ever imported it from the package.
+#: The public surface: entry points, errors and return types.
 from .base import DescriberUnavailable, available
 from .driver import answer, describe, load
 from .frames import StoreUnavailable
+from .library import (PromptError, ProtectedPrompt, add_question, question,
+                      questions, remove_question)
 
-__all__ = ["DescriberUnavailable", "StoreUnavailable", "answer",
-           "available", "describe", "load"]
+__all__ = ["DescriberUnavailable", "PromptError", "ProtectedPrompt",
+           "StoreUnavailable", "add_question", "answer", "available",
+           "describe", "load", "question", "questions", "remove_question"]

@@ -1,12 +1,5 @@
-"""Frame embedders, kept separate from the samplers that use them.
-
-A sampler decides *whether* a frame is worth keeping; an embedder decides
-*what a frame looks like* as a vector. Splitting them means the sampling
-policy can be tested without loading model weights, and the model can be
-swapped without touching the policy.
-
-All embedders return L2-normalised vectors, so cosine similarity is a dot
-product.
+"""Frame embedders: a frame -> an L2-normalised vector, so cosine similarity is
+a dot product.
 """
 
 from __future__ import annotations
@@ -40,15 +33,8 @@ def _l2(x: np.ndarray) -> np.ndarray:
 
 
 class CLIPEmbedder(FrameEmbedder):
-    """OpenAI CLIP image tower.
-
-    Frames arrive from OpenCV as BGR; CLIP expects RGB, and getting that
-    backwards quietly degrades every similarity in the pipeline rather than
-    failing, so the conversion happens here and only here.
-
-    Frames are downscaled with cv2 before the processor sees them. The
-    processor would resize anyway, but doing it on a 1920x1080 PIL image is
-    most of the per-frame cost.
+    """OpenAI CLIP's image tower. Frames arrive as BGR and are converted to RGB here,
+    and downscaled with cv2 before the processor.
     """
 
     name = "clip"
@@ -92,8 +78,7 @@ class CLIPEmbedder(FrameEmbedder):
             with torch.no_grad():
                 pixels = self._processor(images=batch, return_tensors="pt")["pixel_values"]
                 features = self._model.get_image_features(pixel_values=pixels.to(self.device))
-            # A model output, not a tensor: the projected embedding is its
-            # `pooler_output`.
+            # The projected embedding is `pooler_output`.
             out.append(features.pooler_output.float().cpu().numpy())
         return _l2(np.concatenate(out, axis=0))
 

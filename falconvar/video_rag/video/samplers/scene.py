@@ -8,7 +8,7 @@ import numpy as np
 
 from ..reader import Frame
 from .base import Sampler
-from falconvar.shared.errors import Refused, UnknownOption
+from falconvar.shared.reporting.errors import Refused, UnknownOption
 
 if TYPE_CHECKING:
     from .perception.embedders import FrameEmbedder
@@ -17,28 +17,15 @@ if TYPE_CHECKING:
 class ClipChangeSampler(Sampler):
     """Samples once the scene has changed enough to be worth describing.
 
-    Each decimated frame is embedded and compared by cosine similarity. A
-    frame is kept when similarity falls *below* ``threshold`` -- high
-    similarity means nothing happened, so nothing is sampled. Within a chunk a
-    static scene therefore yields the opening frame and nothing more.
+    Each decimated frame is embedded with CLIP and kept when its cosine
+    similarity falls below `threshold`. Two modes:
 
-    Two comparison modes, and the difference matters:
+      `reference`   -- compare against the last kept frame (slow change
+                       accumulates)
+      `consecutive` -- compare against the previous frame evaluated (only sudden
+                       change)
 
-      ``reference``   -- compare against the last frame that was *kept*.
-                         Change accumulates, so a slow pan eventually trips
-                         the threshold. This is what deduplication wants.
-      ``consecutive`` -- compare against the previous frame it evaluated.
-                         Only detects instantaneous change; a slow pan never
-                         trips it however far the scene travels.
-
-    ``min_interval_s`` suppresses frames before they are embedded, so in
-    ``consecutive`` mode "the previous frame" means the previous frame the
-    sampler was allowed to look at, not the previous decimated frame.
-
-    Threshold is video-dependent and must be measured. On the reference
-    footage consecutive-frame similarity sits at p50 0.989 with sensor noise
-    manufacturing false samples above ~0.97, leaving a usable window of
-    roughly 0.94-0.97; 0.96 is the default.
+    The useful threshold depends on the footage; 0.96 is the default.
     """
 
     name = "clip"
@@ -69,9 +56,7 @@ class ClipChangeSampler(Sampler):
         self._last_score: Optional[float] = None
 
     def on_reset(self, chunk_id: int) -> None:
-        # Chunks are independent: the reference never crosses a boundary, so
-        # every chunk opens with a frame and its sampling is reproducible
-        # regardless of what came before.
+        # The reference resets at every chunk.
         self._reference = None
         self._last_score = None
 

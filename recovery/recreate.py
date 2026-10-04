@@ -1,21 +1,12 @@
 """STANDALONE: rebuild a frame store from a manifest and the video.
 
-Hand someone this file, a `manifest.json` and the source video, and they get the
-store back byte for byte with only `av`, `opencv-python` and `numpy`. Nothing
-here imports the pipeline: if it did, it could lean on a default living in code
-rather than in the manifest, and the manifest's claim to be authoritative would
-go untested.
-
-That is also what makes this the end-to-end oracle. Any change to encoding,
-addressing or the manifest is verified by rebuilding a store and byte-comparing
-it. If a change makes recreate non-identical, the change is wrong.
+Needs only `av`, `opencv-python` and `numpy`, and imports nothing from the
+pipeline. A rebuilt store should match the original byte for byte.
 
     python -m recovery.recreate data/out/<id>/manifest.json --out rebuilt/
     python -m recovery.recreate <manifest> --verify data/out/<id>/store
 
-The manifest names frames by `index`, the reader's count over every frame, and
-carries `pts` for each -- the exact address. Seconds are a lossy rendering of
-`pts` and are not used here.
+Frames are named by `index`, the reader's count over every frame.
 """
 
 from __future__ import annotations
@@ -39,11 +30,7 @@ class Mismatch(RuntimeError):
 
 
 def wanted_frames(manifest: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    """index -> record, for every frame any sampler kept.
-
-    A frame two samplers chose appears once: the store is keyed by index, so
-    it holds one copy however many questions were asked about it.
-    """
+    """index -> record, for every frame any sampler kept (each once)."""
     out: dict[int, dict[str, Any]] = {}
     for chunk in manifest.get("chunks", []):
         for block in chunk.get("samplers", {}).values():
@@ -53,12 +40,7 @@ def wanted_frames(manifest: dict[str, Any]) -> dict[int, dict[str, Any]]:
 
 
 def check_source(manifest: dict[str, Any], path: Path) -> list[str]:
-    """Everything about this file that disagrees with the manifest.
-
-    Compared rather than assumed: recreating from the wrong video produces a
-    complete store of wrong frames, which is indistinguishable from a correct
-    one until someone looks at a picture.
-    """
+    """Everything about this file that disagrees with the manifest."""
     source = manifest.get("source", {})
     problems: list[str] = []
     with av.open(str(path)) as container:
@@ -135,17 +117,8 @@ def digest(path: Path) -> str:
 
 def verify(rebuilt: Path, original: Path,
            names: Optional[set[str]] = None) -> dict[str, Any]:
-    """Byte-compare a rebuilt store against the original. The oracle.
-
-    ``names`` is what this manifest actually names. Without it the comparison
-    is over whatever the output directory happens to contain -- and an output
-    directory accumulates across runs for exactly the reason a frame store
-    does, which the orphan rule below already tolerates in the other direction.
-    Measured: `rebuilt/` held 206 frames from an earlier manifest, a later run
-    wrote 76 into it, and the oracle reported FAIL with 130 "absent from the
-    store" when every named frame was present and identical. A false FAIL is
-    the worst answer this can give, because the whole point of it is that a
-    real one means the change is wrong.
+    """Byte-compare a rebuilt store against the original, over the frames `names`
+    lists (what this manifest names).
     """
     mine = {p.name: p for p in rebuilt.glob("*.jpg")}
     if names is not None:
@@ -156,16 +129,12 @@ def verify(rebuilt: Path, original: Path,
     return {
         "compared": len(shared),
         "identical": identical,
-        # The only real failure: a frame both have, whose bytes differ.
+        # A frame both have whose bytes differ.
         "differing": sorted(set(shared) - set(identical)),
-        # A frame the manifest names that the original store lacks. Also a
-        # failure, in the other direction -- the store is incomplete.
+        # A frame the manifest names that the original store lacks.
         "missing_from_original": sorted(set(mine) - set(theirs)),
-        # Frames the store holds that this manifest does not name. NOT a
-        # failure: a store accumulates across runs and is never pruned, so an
-        # earlier ingest with a different sampler set leaves files behind.
-        # Counting those as a mismatch would make the oracle cry wolf on every
-        # video that has been ingested twice.
+        # Frames the store holds that this manifest does not name: not a failure,
+        # a store keeps earlier runs' frames.
         "orphaned_in_original": sorted(set(theirs) - set(mine)),
     }
 

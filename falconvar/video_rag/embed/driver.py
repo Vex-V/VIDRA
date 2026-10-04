@@ -1,12 +1,8 @@
 """The embed component: descriptions + transcript -> `embedded.json`.
 
-Embeds **only what changed**, keyed by a hash of the unit's own text. A re-run
-against unchanged documents costs nothing and says so.
-
-The vectors land in `embedded.json` and nowhere else. Putting them into a
-database is the pipeline's job -- so embedding does not need a database to be
-reachable, and whoever wants the vectors somewhere this project has never
-heard of gets a file to read.
+Embeds only what changed, keyed by a hash of each unit's text. The vectors
+are written to `embedded.json`; copying them to a database is the pipeline's
+job.
 """
 
 from __future__ import annotations
@@ -14,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from falconvar.shared import logs, progress
+from falconvar.shared.reporting import logs, progress
 from falconvar.shared.contracts.documents import (Descriptions, Embedded,
                                                   Produced, Timeline,
                                                   Transcript)
@@ -23,11 +19,9 @@ from falconvar.shared.storage.files import maybe, read, write
 from falconvar.shared.contracts.documents import same_video
 from . import readable
 from . import units as units_mod
-# The published type, under the name a caller would annotate: an
-# annotation is the contract, and `list[units_mod.Unit]` names an
-# alias local to this file.
+# The published type.
 from .units import Unit
-from falconvar.shared.errors import Refused
+from falconvar.shared.reporting.errors import Refused
 
 
 def encode(descriptions: Optional[Descriptions] = None,
@@ -38,21 +32,10 @@ def encode(descriptions: Optional[Descriptions] = None,
            on_progress: Optional[progress.Reporter] = None) -> list[Unit]:
     """Documents in hand -> units carrying their vectors. Writes nothing.
 
-    Name at least one of the two documents; both is the ordinary case.
-
-    **`previous` is what resume used to need a data root for.** It was an
-    `embedded.json` this function could not see: the diff lived one level up,
-    in the function that knew the video id, so a caller reaching this one
-    re-embedded everything and paid for it. Handed the previous document,
-    the diff belongs here, and both ways in get it.
-
-    A vector is comparable only inside the space that made it, so a
-    `previous` written by a different embedder carries nothing forward and
-    every unit is new work.
-
-    `embedder` is a provider or `provider/model`; None resolves through
-    `shared.models.providers` -- FALCONVAR_EMBEDDER, then openai -- exactly as
-    `retrieve` resolves it, so the two cannot disagree about the space.
+    Name at least one of the two documents. `previous` is an earlier
+    `Embedded`: units whose text is unchanged under the same embedder keep their
+    vectors. `embedder` is a provider or `provider/model`; None resolves to
+    FALCONVAR_EMBEDDER, then openai, as `retrieve` does.
     """
     if batch < 1:
         raise Refused(f"batch must be at least 1, not {batch}")
@@ -70,7 +53,7 @@ def encode(descriptions: Optional[Descriptions] = None,
 
     built = embedders_mod.build(embedder)
 
-    # What a previous run paid for, and only under the same embedder key.
+    # Hashes from a previous run, only under the same embedder.
     hashes: dict[str, str] = {}
     vectors: dict[str, list[float]] = {}
     if previous is not None and previous.embedder == built.key:
@@ -80,10 +63,7 @@ def encode(descriptions: Optional[Descriptions] = None,
 
     changed = [u for u in wanted if hashes.get(u.key) != u.text_hash]
 
-    # The unchanged ones keep the vectors already paid for. Without this the
-    # file is rewritten whole every run, so "unchanged" would mean "dropped"
-    # -- the document is the store now, and a store that forgets what it was
-    # not asked about is worse than one that re-embeds everything.
+    # Unchanged units keep their stored vectors.
     for unit in wanted:
         if unit.key in vectors and unit not in changed:
             unit.vector = vectors[unit.key]
@@ -95,8 +75,7 @@ def encode(descriptions: Optional[Descriptions] = None,
         for unit, vector in zip(window,
                                 built.embed([u.content for u in window])):
             unit.vector = vector
-        # Per batch, not per unit: one request carries the whole window, so a
-        # unit has no completion of its own to report.
+        # Reported per batch.
         progress.report(on_progress, "embed", len(changed),
                         min(start + batch, len(changed)),
                         len(wanted) - len(changed),
@@ -112,20 +91,9 @@ def embed(out: str | Path,
           embedder: Optional[str] = None,
           batch: int = 64,
           on_progress: Optional[progress.Reporter] = None) -> Produced:
-    """Embed what changed, into `out`. Name at least one input document.
-
-    `encode` plus a read at each end.
-
-    **There is no destination parameter, and there have been two.** It took a
-    `sink` it never read, and then an `index_name` naming a vector store to
-    upsert into. Both made the paid half of this component depend on
-    something being reachable: a database down, or an embedded Qdrant lock
-    still held, failed a run whose API calls had already been made. Now it
-    writes one file and the pipeline decides where a copy goes.
-
-    `previous` is usually `out` itself -- the file this run is about to
-    replace. `timeline` is read for its fingerprint alone, which is what
-    tells a later reader whether these units still describe this video.
+    """Embed what changed, into `out`. Name at least one input document. `encode`
+    plus a read at each end. `previous` is usually `out` itself; `timeline` is
+    read for its fingerprint.
     """
     if batch < 1:
         raise Refused(f"batch must be at least 1, not {batch}")
@@ -150,9 +118,7 @@ def embed(out: str | Path,
         carried = 0 if stored is None or stored.embedder != key else sum(
             1 for u in units if stored.stored().get(u.key) == u.text_hash)
 
-        # Rewritten whole, so there is no prune: a unit the grid no longer has
-        # is simply not in `units`. A table keeps what it was never told to
-        # remove, and that is the pipeline's problem, not this one's.
+        # Rewritten whole: units the grid no longer has are simply absent.
         document = readable.build(video_id, units, key,
                                   "" if grid is None else grid.fingerprint())
         where = write(out, document)
@@ -169,11 +135,13 @@ def embed(out: str | Path,
 
 
 def load(path: str | Path) -> Embedded:
-    """Read an `embedded.json` back, typed -- text and vectors together."""
+    """Read an `embedded.json` back, typed: text and vectors."""
     return read(path, Embedded)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     import argparse
     import json
 

@@ -1,20 +1,8 @@
-"""The field builder: a compact field spec in, JSON Schema out.
+"""The field builder: a compact field spec in, strict JSON Schema out.
 
 `{"severity": {"type": "text", "one_of": [...]}}` becomes the schema a
-structured model call is sent. Generated rather than accepted: the call goes
-out with `strict: true`, whose subset is narrow, and a raw schema arriving over
-HTTP could express something the API refuses -- failing *after* the frames are
-read, with the call about to be paid for.
-
-**Shared because an answer is not only a describe answer.** A describe shape
-and an aggregate prompt both declare their fields this way and both compile
-through here, which is why `check_fields` was already written apart from
-`check_shape`. Keeping it in `describe` meant `aggregates` reached a video_rag
-component to build its own schemas.
-
-The caps travel with the checker that enforces them: structured answers run
-~3x longer than prose, and the `people` schema truncated into unparseable JSON
-at 700 output tokens.
+structured model call is sent. Describe shapes and aggregate prompts both
+declare their fields this way. Field counts are capped.
 """
 
 from __future__ import annotations
@@ -23,23 +11,15 @@ import re
 from typing import Any
 
 
-#: A field name has to survive being a JSON Schema property, a `jsonb` key and
-#: a named part of a rendered unit, so it is as narrow as a question name.
+#: Allowed field names.
 FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
 
-#: What a custom field may be. Two primitives; `of` turns a list into a list of
-#: objects. That is the whole range the built-in shapes already span -- `scene`
-#: is flat lists, `people`/`objects`/`text` are the nested form -- so a custom
-#: shape is the shipped vocabulary exposed, not a new mechanism beside it.
+#: What a field may be: `text` or `list`; `of` makes a list's entries objects.
 FIELD_TYPES = ("text", "list")
 
 
-#: Caps. Structured answers run ~3x longer than prose and the `people` schema
-#: already truncated mid-string at `max_output_tokens=700`, coming back as
-#: unparseable JSON. An unbounded shape is a paid call for an answer that
-#: cannot be read, so the limit is refused at write time rather than
-#: discovered at call time.
+#: Caps on fields, nested keys and choices.
 MAX_FIELDS = 12
 
 
@@ -50,15 +30,8 @@ MAX_ENUM = 24
 
 
 def _compile_field(spec: dict[str, Any]) -> dict[str, Any]:
-    """One field spec -> the JSON Schema fragment a call will be sent.
-
-    Generated rather than accepted. The schema goes to the API with
-    `strict: true`, and that subset is narrow -- every property required,
-    `additionalProperties` false, no unions, a shallow nesting cap. A builder
-    cannot express something the API would refuse; a raw schema arriving over
-    HTTP can, and would fail *after* the frames are read with the call about to
-    be paid for. That is the same failure `check` already prevents for a
-    `{typo}` placeholder.
+    """One field spec -> its JSON Schema fragment, in the strict subset (every
+    property required, no additional properties).
     """
     about = str(spec.get("about") or "").strip()
     one_of = list(spec.get("one_of") or [])
@@ -72,9 +45,7 @@ def _compile_field(spec: dict[str, Any]) -> dict[str, Any]:
     nested = spec.get("of")
     if nested:
         keys = list(nested)
-        # One bound object per entity, never parallel lists: a list of people
-        # beside a list of actions does not say who did what, and cannot be
-        # made to afterwards.
+        # A list of objects, one per entity, every key required.
         return {
             "type": "array", "description": about,
             "items": {
@@ -98,11 +69,7 @@ def compile_fields(fields: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_fields(fields: dict[str, Any]) -> list[str]:
-    """Everything wrong with a field builder, as messages.
-
-    Apart from `check_shape` because a describe shape is not the only answer
-    built from fields: an aggregate prompt's is too, with no prose summary.
-    """
+    """Everything wrong with a field spec, as messages."""
     problems: list[str] = []
     if len(fields) > MAX_FIELDS:
         problems.append(f"{len(fields)} fields; {MAX_FIELDS} max -- a longer "
@@ -121,8 +88,7 @@ def check_fields(fields: dict[str, Any]) -> list[str]:
             problems.append(f"{where}: unknown type {kind!r}; "
                             f"known: {', '.join(FIELD_TYPES)}")
         if not str(field.get("about") or "").strip():
-            # The description is what the model is actually steered by, so an
-            # unlabelled field is a paid call for a key nobody explained.
+            # `about` is what the model is told to put in the field.
             problems.append(f"{where} needs an `about` describing what to put "
                             "in it -- it is what the model is steered by")
 
@@ -160,12 +126,7 @@ def check_fields(fields: dict[str, Any]) -> list[str]:
 
 
 def problems(fields: Any) -> list[str]:
-    """`check_fields`, plus the guard that it is a field map at all.
-
-    Separate because `check_shape` has already established that much by the
-    time it calls `check_fields`, while a definition arriving over HTTP has
-    not.
-    """
+    """`check_fields`, plus the check that it is a non-empty field map."""
     if not isinstance(fields, dict) or not fields:
         return ["`fields` must be a non-empty {name: {type, about}} map"]
     return check_fields(fields)

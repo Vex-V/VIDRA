@@ -1,21 +1,7 @@
-"""Reading pixels back out of wherever ingest kept them.
+"""Reading frames back out of the store ingest wrote.
 
-**Whatever it was handed, and nothing else.** There is no seek-the-video
-fallback, and that is deliberate: the store exists so this component has its
-frames in hand, and a fallback would quietly do the store's job while leaving
-it broken -- silently, since the output is identical and only about 40x
-slower. A missing store, or a frame it lacks, raises and names the fix.
-
-**A short frame list is never returned.** A description covering 8 of the 9
-frames it claims is indistinguishable from a correct one once written down.
-
-The source is now *given* rather than resolved. It used to build its own path
-from a video id, which meant `describe` could only ever read frames the
-pipeline's directory layout had put there -- so a caller driving the
-components itself had to adopt that layout to use this one. The store is an
-argument now, so a caller points this at whatever directory holds the frames.
-`store_of` is one line over `FrameStore`, kept so the spelling lives in one
-place.
+There is no fallback to seeking the video: a missing store, or a frame it
+lacks, raises. A short frame list is never returned.
 """
 
 from __future__ import annotations
@@ -25,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from falconvar.shared.contracts.documents import Manifest
-from falconvar.shared.errors import Unavailable
+from falconvar.shared.reporting.errors import Unavailable
 from ..helpers import FrameStore
 
 
@@ -34,16 +20,7 @@ class StoreUnavailable(Unavailable):
 
 
 def store_of(store: str | Path) -> FrameStore:
-    """The store at this path, checked before any describing starts.
-
-    Nothing derives a store path from a video id any more: the caller says
-    where the frames are, which is what lets `describe` read a store this
-    layout never wrote.
-
-    Checked here rather than on first read, because "no store at all" and "a
-    store missing one frame" are different mistakes with different fixes, and
-    the first is worth saying before any describing starts.
-    """
+    """The store at this path, checked before any describing starts."""
     root = Path(store)
     if not root.exists():
         raise StoreUnavailable(
@@ -66,11 +43,7 @@ class LoadedFrame:
 
 
 class FrameSource:
-    """Frames for one (chunk, sampler), read from whatever holds them.
-
-    Caches by index, because a frame two samplers chose is *described* twice --
-    they are different questions -- but only ever read once.
-    """
+    """Frames for one (chunk, sampler), read from the store and cached by index."""
 
     def __init__(self, frames: FrameStore, manifest: Manifest) -> None:
         self.frames = frames

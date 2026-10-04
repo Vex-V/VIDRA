@@ -1,23 +1,9 @@
 """One embeddable unit, and how a document becomes its text.
 
-Both tiers make units: `embed` one per (chunk, sampler), `aggregates` one per
-video from its summary. So this is a contract, not a video_rag feature -- it
-sits beside `documents` for the reason `documents` sits here at all.
-
-`render` sorts keys at every level. `jsonb` preserves array order but not
-object key order, so a document read back from Postgres hands its keys back in
-a different order from the file; joining values in iteration order made the
-same person into different text, a different hash and a different vector
-depending on where it was read from.
-
-Three separators, one per level: `. ` between fields, ` | ` between entities,
-`; ` between one entity's attributes. Fields are named, because a bare `", "`
-also occurs inside values and made field boundaries invisible.
-
-**An aggregate renders a field through this too.** A field read by a summary
-and the same field read by a search must be the same string, or the text a
-summary is built from is not the text that was indexed -- and nothing would
-report the difference.
+`render` joins a summary and its structured fields, keys sorted at every
+level so the text is the same wherever the document was read from. Three
+separators: `. ` between fields, ` | ` between entities, `; ` between an
+entity's attributes. Aggregates render fields through it too.
 """
 
 from __future__ import annotations
@@ -49,8 +35,7 @@ def _render_value(value: Any) -> str:
     if isinstance(value, (int, float, bool)):
         return str(value)
     if isinstance(value, dict):
-        # Sorted here too. Determinism had been handled one level deep and not
-        # two, which is exactly how the Postgres/file divergence survived.
+        # Sorted at every level.
         return "; ".join(f"{k} {_render_value(value[k])}" for k in sorted(value)
                          if _render_value(value[k]))
     if isinstance(value, list):
@@ -64,40 +49,24 @@ class Unit:
 
     #: Which video this text came from.
     video_id: str
-    #: Which chunk of its grid. With `video_id` this is the key a moment is
-    #: grouped on -- a chunk id indexes one video's grid, and grouping on it
-    #: alone fused two videos' chunk 0 into one moment.
+    #: Which chunk of its grid.
     chunk_id: int
-    #: The pairing that produced it, e.g. `clip:text`, or the bare sampler name
-    #: when the question *is* the strategy's own.
+    #: The pairing that produced it, e.g. `clip:text`, or the bare sampler name.
     sampler_id: str
-    #: The text that gets embedded: the summary and the structured fields
-    #: together. Measured, both beats either -- dense MRR 0.705 against 0.528
-    #: for the summary alone and 0.636 for the fields alone.
+    #: The text that gets embedded: the summary and the structured fields.
     content: str
-    #: The answer's fields, kept as payload so a search can filter on them.
-    #: Only useful as a filter where the values are a vocabulary: `role` is
-    #: free text, so one video produced `cashier`, `customer` and `child
-    #: customer`.
+    #: The answer's fields, kept as payload for filtering.
     structured: dict[str, Any] = field(default_factory=dict)
-    #: The embedding, or None when this unit was not re-embedded because its
-    #: text is unchanged. A backend handed a None writes nothing, which is why
-    #: the vectors must exist before any upsert.
+    #: The embedding, or None when the unit was not re-embedded.
     vector: Optional[list[float]] = None
-    #: The two halves of `sampler_id`, carried rather than parsed. Filtering by
-    #: question is the query a person actually makes -- "the text on screen",
-    #: not "what the CLIP sampler said" -- and it is not expressible as a
-    #: suffix match, because a bare id like `clip` means question == strategy.
+    #: The sampler half of `sampler_id`.
     sampler: str = ""
-    #: The question half of `sampler_id`, as its own field so the-text-on-
-    #: screen-wherever-asked is one equality -- which is the query a person
-    #: actually makes.
+    #: The question half of `sampler_id`.
     question: str = ""
 
     @property
     def text_hash(self) -> str:
-        """Identity is the text. Re-embedding is then "what changed", not
-        "what is here", which is what makes a re-run cost nothing."""
+        """A hash of the content."""
         return fingerprint_of({"content": self.content})
 
     @property

@@ -1,8 +1,5 @@
-"""Detect, describe, compare -- the shape every detection sampler shares.
-
-What varies is the descriptor, because what carries the signal varies by
-subject: appearance for people, position for objects, layout for text. See
-:mod:`descriptors`.
+"""Detect, describe, compare: the shape every detection sampler shares. The
+descriptor (see `descriptors`) decides what is compared.
 """
 
 from __future__ import annotations
@@ -11,7 +8,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 
 from ..reader import Frame
 from .base import Sampler
-from falconvar.shared.errors import Refused
+from falconvar.shared.reporting.errors import Refused
 
 if TYPE_CHECKING:
     from .perception.descriptors import RegionDescriptor
@@ -21,19 +18,10 @@ if TYPE_CHECKING:
 class DetectionChangeSampler(Sampler):
     """Samples when detected regions stop looking like the last kept frame.
 
-    The score is the *weakest best match*, taken in one direction only: for
-    each region visible now, how well does it match anything in the reference
-    frame; the worst of those is the score. Direction matters more than it
-    looks. A detector that momentarily loses something and finds it again
-    produces a region that matches its own earlier self, so nothing fires.
-    Scoring the reverse direction too would treat every dropout as a
-    departure, which on busy footage is most frames. Consequence: regions
-    leaving does not trigger a sample; regions arriving or changing does.
-
-    Region *count* is deliberately never a trigger. On checkout footage the
-    person count changed on roughly half of all frame pairs at every
-    confidence threshold tried, and raising confidence to suppress it simply
-    lost real people. Counting is not a change signal on busy footage.
+    The score is the weakest best match, one direction only: for each region
+    visible now, its best match in the reference frame; the worst of those is the
+    score. Regions leaving do not trigger a sample; regions arriving or changing
+    do. Region count is never a trigger.
     """
 
     name = "detection"
@@ -73,7 +61,7 @@ class DetectionChangeSampler(Sampler):
         return self.descriptor.describe(frame.image, detections)
 
     def compare(self, current, reference) -> Optional[float]:
-        """The weakest best match, one-directional. See the class docstring."""
+        """The weakest best match, one-directional."""
         if self.descriptor.count(current) == 0:
             return 1.0                      # nothing in shot; reference untouched
         if self.descriptor.count(reference) == 0:
@@ -91,8 +79,7 @@ class DetectionChangeSampler(Sampler):
             return True
 
         if count == 0:
-            # Nothing in shot. The reference is left alone, so whatever
-            # returns is still compared against what was here before.
+            # Nothing in shot: the reference is kept.
             self._last_score = 1.0
             return False
 
@@ -108,8 +95,7 @@ class DetectionChangeSampler(Sampler):
 
         keep = score < self.threshold
         if keep:
-            # Only a kept frame moves the reference, so change accumulates
-            # across skipped frames instead of resetting each time.
+            # Only a kept frame moves the reference, so change accumulates.
             self._reference = current
         return keep
 

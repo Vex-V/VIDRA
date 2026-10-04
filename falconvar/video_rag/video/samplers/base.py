@@ -1,27 +1,14 @@
 """The sampler contract.
 
-A sampler sees the decimated stream one frame at a time and answers yes or no.
-It cannot look ahead, revisit a frame it declined, or buffer the chunk.
-
-Three things live here rather than in each strategy:
+A sampler sees the decimated stream one frame at a time and answers yes or
+no; it cannot look ahead or revisit a frame. The base class enforces:
 
     min_interval_s  smallest gap between two kept frames
     max_per_chunk   ceiling on frames kept from one chunk
     prompts         which questions describe should ask about these frames
 
-The rate limits short-circuit before `propose` runs, so a rate-limited frame
-costs no inference. Every chunk keeps at least one frame.
-
-`prompts` is on the base class, so any strategy pairs with any number of
-questions -- `uniform:text` reads the screen on a stride, `clip:[text,scene]`
-asks two questions of one set of frames. Selecting frames is the expensive
-half and asking about them is the cheap one, so a sampler runs **once** per
-distinct configuration however many questions it carries. Unpaired, the
-question is the sampler's own name.
-
-Nothing here reads a prompt: they are opaque strings, validated by whoever
-built the sampler, because a sampler knowing the prompt registry would be an
-edge from ingest to describe.
+Rate limits apply before `propose` runs, and every chunk keeps at least one
+frame. Prompts are opaque strings here.
 """
 
 from __future__ import annotations
@@ -30,7 +17,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional, Sequence
 
 from ..reader import Frame
-from falconvar.shared.errors import Refused
+from falconvar.shared.reporting.errors import Refused
 
 
 class Sampler(ABC):
@@ -55,26 +42,12 @@ class Sampler(ABC):
 
     @property
     def sampler_id(self) -> str:
-        """The manifest key: this **run** of this sampler.
-
-        The strategy's name, because a run is one pass over the frames and the
-        questions asked about them are a separate list. An answer is keyed
-        `name:question` further downstream, which is what a search result and
-        `--sampler` still use; that id belongs to describe, which is the stage
-        that knows a question was asked.
-
-        So a run id and a strategy name are the same string. They would only
-        diverge if two runs of one strategy could differ in configuration, and
-        they cannot: one CLI has one `--threshold` and one `--vocabulary`, so
-        the builder merges every spec naming a strategy into a single run.
-        """
+        """The manifest key for this run of this sampler: the strategy's name."""
         return self._sampler_id or self.name
 
     def reset(self, chunk_id: int) -> None:
-        """Called once when a chunk opens, before any frame is offered.
-
-        Samplers forget everything at a boundary, so a chunk's sampling never
-        depends on the chunk before it.
+        """Called once when a chunk opens, before any frame is offered: samplers
+        forget everything at a boundary.
         """
         self._kept_in_chunk = 0
         self._last_kept_ts = None
@@ -86,8 +59,7 @@ class Sampler(ABC):
     def accepts(self, frame: Frame, chunk_local_index: int) -> bool:
         """Final decision for one frame. Do not override -- implement propose."""
         if self.max_per_chunk is not None and self._kept_in_chunk >= self.max_per_chunk:
-            # Chunk is full. Skipping here rather than inside the strategy is
-            # what makes the cap free instead of merely quiet.
+            # Chunk is full.
             return False
 
         first_of_chunk = self._last_kept_ts is None
@@ -95,8 +67,8 @@ class Sampler(ABC):
                 and frame.media_ts - self._last_kept_ts < self.min_interval_s):
             return False
 
-        # The strategy still sees every frame it is allowed to see, so its own
-        # state stays coherent; the guarantee is layered on top.
+        # The strategy sees every allowed frame; the first frame of a chunk is kept
+        # regardless.
         keep = self.propose(frame, chunk_local_index) or first_of_chunk
         if keep:
             self._kept_in_chunk += 1
@@ -106,15 +78,10 @@ class Sampler(ABC):
     @abstractmethod
     def propose(self, frame: Frame, chunk_local_index: int) -> bool:
         """The strategy's opinion, before rate limits and the chunk guarantee.
-
-        ``chunk_local_index`` counts decimated frames in the current chunk from
-        0. It is the only thing about position a sampler is handed.
+        `chunk_local_index` counts decimated frames in the current chunk from 0.
         """
 
-    # The two halves of a change sampler, split so a calibrator can cache the
-    # expensive one and replay the cheap one at many thresholds. Running a
-    # model once per frame and comparing thousands of times is what makes a
-    # threshold sweep affordable -- the same split `boundaries/scenes.py` uses.
+    # The two halves of a change sampler: describe a frame, compare two.
 
     def describe(self, frame: Frame) -> Any:
         """The model's output for this frame. None for positional samplers."""
@@ -125,16 +92,11 @@ class Sampler(ABC):
         return None
 
     def last_score(self) -> Optional[float]:
-        """Whatever the last decision was based on, for the manifest.
-
-        Content-driven samplers record it so a threshold can be retuned by
-        reading a run's output rather than decoding the video again.
-        """
+        """What the last decision was based on, recorded in the manifest."""
         return None
 
     def _base_config(self) -> dict[str, Any]:
-        # `prompts` omitted when empty rather than written as [], so a sampler
-        # that pairs no question keeps the config it always had.
+        # `prompts` is omitted when empty.
         config: dict[str, Any] = {
             "id": self.sampler_id,
             "name": self.name,
@@ -146,10 +108,8 @@ class Sampler(ABC):
         return config
 
     def questions(self) -> list[str]:
-        """The questions to ask about this run's frames.
-
-        Empty means one question named after the strategy, which is what an
-        unpaired sampler has always meant.
+        """The questions to ask about this run's frames; empty means one named after
+        the strategy.
         """
         return list(self.prompts) or [self.name]
 

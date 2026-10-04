@@ -42,6 +42,18 @@
         "string",
         "null"
       ]
+    },
+    "name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recorded_at": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   }
 }

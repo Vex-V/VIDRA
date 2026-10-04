@@ -3,16 +3,8 @@
     vad       cut in the middle of a silence longer than `silence_s`
     speaker   cut where the voice changes
 
-The middle of a gap rather than either edge: a boundary at the end of speech
-clips a trailing word the model placed slightly late, and one at the start of
-the next clips its first.
-
-Consecutive turns by one speaker are not a boundary, which stops a pause inside
-someone's answer becoming a chunk edge. A recording with one voice offers no
-speaker cuts and returns none rather than failing.
-
-Neither applies a guard: `grid.enforce` owns `min_s` so it means the same thing
-under every policy.
+Cuts fall in the middle of a gap. Consecutive turns by one speaker are not a
+boundary. No guards here: `grid.enforce` applies `min_s`.
 """
 
 from __future__ import annotations
@@ -20,22 +12,15 @@ from __future__ import annotations
 from typing import Any
 
 from falconvar.shared.contracts.documents import Cuts, RawTranscript
-from falconvar.shared.errors import Refused, UnknownOption
+from falconvar.shared.reporting.errors import Refused, UnknownOption
 
-#: Below this, a gap between speech is a breath rather than a boundary.
-#: Whisper's own segments on narration sit a median 4.8 s apart with sub-second
-#: gaps between sentences, so a threshold under about half a second would cut
-#: mid-paragraph on every clause.
+#: Below this, a gap between speech is not a boundary.
 DEFAULT_SILENCE_S = 0.65
 
 
 def speech_spans(transcript: RawTranscript) -> list[tuple[float, float]]:
-    """Where there is speech, from whichever pass knows.
-
-    Diarization is preferred when present: it is a purpose-built voice-activity
-    model, and its turns are what a speaker policy will cut on anyway. Whisper's
-    segments are the fallback, so `vad` works without a second model or a gated
-    download.
+    """Where there is speech: diarization turns when present, else Whisper's
+    segments.
     """
     if transcript.turns:
         return sorted((t["start"], t["end"]) for t in transcript.turns)
@@ -44,17 +29,8 @@ def speech_spans(transcript: RawTranscript) -> list[tuple[float, float]]:
 
 def vad_cuts(transcript: RawTranscript,
              silence_s: float = DEFAULT_SILENCE_S) -> list[tuple[float, float]]:
-    """Cut in the middle of every silence longer than ``silence_s``.
-
-    The middle rather than either edge: a boundary at the end of speech clips a
-    trailing word whose timestamp the model placed slightly late, and one at the
-    start of the next clips its first. The middle of a gap belongs to neither
-    utterance.
-
-    Returns ``(cut_ts, gap_length)`` so the caller can cache the gap as the
-    score -- the same reason `scenes` caches `content_val`. A silence threshold
-    is then re-tunable over the cached series instead of by re-running Whisper,
-    which is the expensive thing here by a wide margin.
+    """Cut in the middle of every silence longer than `silence_s`. Returns
+    `(cut_ts, gap_length)`, so the threshold can be retuned over the cached gaps.
     """
     spans = speech_spans(transcript)
     return [((end + start) / 2.0, start - end)
@@ -63,15 +39,7 @@ def vad_cuts(transcript: RawTranscript,
 
 
 def speaker_cuts(transcript: RawTranscript) -> list[tuple[float, float]]:
-    """Cut wherever the speaker changes.
-
-    Between the two turns, not on either, for the same reason as above. And
-    consecutive turns by the same speaker are not a boundary -- which is what
-    stops a pause inside one person's answer from becoming a chunk edge.
-
-    The score carried alongside is the gap, so the two policies produce series
-    of the same shape.
-    """
+    """Cut between turns wherever the speaker changes; the score is the gap."""
     turns = sorted(transcript.turns, key=lambda t: t["start"])
     cuts: list[tuple[float, float]] = []
     for previous, current in zip(turns, turns[1:]):
@@ -92,9 +60,7 @@ def detect(transcript: RawTranscript, policy: str,
         params: dict[str, Any] = {"silence_s": silence_s}
     elif policy == "speaker":
         if not transcript.turns:
-            # Not an error. A recording with one voice, or none, offers no
-            # speaker boundaries; `grid.enforce` then divides the file evenly,
-            # which is the honest outcome rather than an invented one.
+            # One voice or none: no speaker cuts.
             scored = []
             params = {"speakers": 0}
         else:
@@ -122,11 +88,7 @@ def detect(transcript: RawTranscript, policy: str,
 
 
 def rethreshold(cuts: Cuts, silence_s: float) -> Cuts:
-    """A different silence threshold over the cached gaps. No model reloaded.
-
-    Only meaningful for `vad`: a speaker cut is not a thresholded quantity, so
-    raising the number would silently drop real speaker changes.
-    """
+    """A different silence threshold over the cached gaps; `vad` only."""
     if cuts.detector != "vad":
         raise Refused(
             f"{cuts.detector!r} cuts are not thresholded, so there is nothing "

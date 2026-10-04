@@ -1,18 +1,9 @@
 """Sequential decode, converting only the frames something asked for.
 
-Decoding a frame costs ~0.4 ms; converting it to a full-resolution BGR array
-costs ~6 ms. Ingest needs pixels only for frames that survive decimation, and
-the decimator answers from `media_ts` alone -- so its verdict is asked *before*
-the conversion and most frames never become an array.
-
-Sequential rather than seeking: frames reference each other, so producing the
-frame at second 47 means decoding forward from its keyframe regardless.
-
-A generator, so exactly one frame is in flight. `Frame.image` is borrowed and
-released as soon as the frame is not needed; anything outliving the loop copies.
-
-Rotation comes from OpenCV because PyAV 18.1 exposes the display matrix through
-none of `side_data`, `rotation`, `display_matrix` or `metadata`.
+The decimator decides from `media_ts` alone, before a frame is converted to
+an array, so declined frames cost only the decode. A generator: one frame in
+flight. `Frame.image` is released when no longer needed; copy anything kept.
+Rotation is read with OpenCV.
 """
 
 from __future__ import annotations
@@ -24,13 +15,10 @@ import av
 import numpy as np
 
 from falconvar.shared.contracts.documents import Media
-from falconvar.shared.errors import FalconvarError
+from falconvar.shared.reporting.errors import FalconvarError
 
-#: OpenCV auto-applies container rotation; PyAV does not, so the reader does.
-#: PyAV 18.1 exposes the display matrix through none of `side_data`,
-#: `rotation`, `display_matrix` or `metadata`, so OpenCV is opened once purely
-#: to read the number. Checked again on 18.1 rather than assumed from
-#: `falconvar`.
+#: Container rotation is applied by the reader (PyAV does not), read with
+#: OpenCV.
 _ROTATIONS = {90: 0, 180: 1, 270: 2}       # cv2.ROTATE_* resolved lazily
 
 
@@ -42,17 +30,10 @@ class UnreadableSource(FalconvarError, RuntimeError):
 class Frame:
     """One frame the pipeline is going to look at.
 
-    ``media_ts`` is the position on the media clock and the only clock a
-    downstream decision may use. ``pts`` is the same position in the
-    container's integer timebase and is the only thing that can *address* the
-    frame later: seconds are a lossy rendering, and at timebases as fine as
-    1/1200000 a rounded float lands on the wrong frame.
-
-    ``index`` is a plain read counter over *every* frame, not over the kept
-    ones -- it is how a store names a file and how recovery finds it again.
-
-    ``image`` is BGR and is **borrowed**: it is released as soon as the frame
-    is known not to be needed, so anything that outlives the loop must copy.
+    `media_ts` is the position on the media clock. `pts` is the same position in
+    the container's timebase and addresses the frame exactly. `index` counts
+    every frame read, kept or not; it names the stored file. `image` is BGR and
+    borrowed: copy anything that outlives the loop.
     """
 
     index: int
@@ -61,7 +42,7 @@ class Frame:
     image: Optional[np.ndarray] = field(default=None, repr=False)
 
     def release(self) -> None:
-        """Drop the pixels. A method, so the one dangerous operation greps."""
+        """Drop the pixels."""
         self.image = None
 
 
@@ -81,11 +62,8 @@ def rotation_of(path: str) -> float:
 def read_frames(media: Media,
                 keep: Callable[[float], bool],
                 rotation: Optional[float] = None) -> Iterator[Frame]:
-    """Yield only the frames ``keep`` accepts, with pixels attached.
-
-    ``keep`` is handed a ``media_ts`` and nothing else -- deciding from the
-    timestamp is what allows the decision to precede the conversion. A frame it
-    declines is never turned into an array and costs the bare decode.
+    """Yield only the frames `keep` accepts, with pixels attached. `keep` is handed
+    a `media_ts`; a declined frame is never converted.
     """
     if not media.has_video:
         raise UnreadableSource(f"{media.path} has no video stream")
@@ -106,15 +84,13 @@ def read_frames(media: Media,
     index = 0
     try:
         stream = container.streams.video[0]
-        # Mandatory, not an optimisation: 7.15 ms/frame without it against
-        # 3.97 with, which is slower than OpenCV.
+        # Required for decode speed.
         stream.thread_type = "AUTO"
         time_base = stream.time_base
         fps = media.video.rate or 30.0
 
         for av_frame in container.decode(video=0):
-            # No pixels touched yet. `pts * time_base` is exact rational
-            # arithmetic; the float is only for comparison downstream.
+            # Exact rational arithmetic; the float is for comparison.
             if av_frame.pts is not None and time_base is not None:
                 pts = av_frame.pts
                 media_ts = float(pts * time_base)

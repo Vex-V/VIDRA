@@ -11,25 +11,11 @@ if TYPE_CHECKING:
 
 
 class TextChangeSampler(DetectionChangeSampler):
-    """Text, compared by where it is *and* what it looks like.
+    """Text, compared by where it is and what it looks like.
 
-    EasyOCR supplies the regions; nothing is read. The VLM downstream reads
-    text better than an OCR engine would, so the only question here is whether
-    the text on screen changed enough to be worth sending.
-
-    Geometry alone cannot answer that -- a slide advances and the text block
-    does not move an inch. Neither can per-region comparison: EasyOCR merges
-    and splits lines frame to frame, returning two, three and four regions in
-    successive seconds of a completely static slide, and a split line cannot
-    match the merged version it is compared against.
-
-    ``TextLayoutDescriptor`` masks the frame to wherever text was found and
-    describes the result *once*. Split or merged, the ink covers the same
-    pixels. Position is captured through the mask, content through the pixels.
-
-    This sampler is for screens and slides. On footage where text is
-    incidental it keeps ~30% of frames, which is not a bug -- people occlude
-    the text constantly and the whole-frame mask shifts as they pass.
+    EasyOCR finds the regions; nothing is read. `TextLayoutDescriptor` masks the
+    frame to every text region and compares the result as a whole. Meant for
+    screens and slides.
     """
 
     name = "text"

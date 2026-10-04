@@ -1,8 +1,5 @@
-"""Object detectors, kept separate from the samplers that use them.
-
-Same split as the embedders: a detector answers "where are the people in this
-frame", a sampler decides what to do about it. Keeping them apart means the
-sampling policy is testable against fixed boxes, without model weights.
+"""Object detectors: where the people, objects or text are in a frame. The
+samplers decide what to do about it.
 """
 
 from __future__ import annotations
@@ -14,25 +11,17 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from falconvar.shared import paths
+from falconvar.shared.config import paths
 
-# Ultralytics resolves a bare filename against the working directory and
-# downloads it if absent, which scatters weights wherever the command was run
-# from. Keeping them in one place means looking there first.
-#
-# ``weights/clip/ViT-B-32.pt`` also lives there and is *not* stale: YOLO-World
-# embeds its vocabulary with OpenAI CLIP, so OpenVocabDetector pulls a 338 MB
-# text encoder on first use. That is a second, separate CLIP from the one
-# ClipChangeSampler loads through HuggingFace -- different libraries, different
-# formats, different jobs. Deleting it costs a re-download, not a failure.
+# Weights live under the weights folder rather than wherever a command ran.
+# `weights/clip/ViT-B-32.pt` is the CLIP text encoder YOLO-World embeds its
+# vocabulary with (separate from the HuggingFace CLIP the scene sampler uses).
 
 
 
 def weight_path(name: str) -> str:
-    """The local copy of a weight file if we have it, else the bare name.
-
-    Falling back to the bare name rather than raising keeps first-run working:
-    ultralytics downloads what is missing.
+    """The local copy of a weight file if there is one, else the bare name (which
+    ultralytics downloads).
     """
     local = paths.weights_root() / name
     return str(local) if local.exists() else name
@@ -62,12 +51,7 @@ class Detection:
         return max(0.0, self.width) * max(0.0, self.height)
 
     def crop(self, image: np.ndarray, pad: float = 0.08) -> Optional[np.ndarray]:
-        """Cut this detection out of the frame, with a little context around it.
-
-        Padding matters: a box clipped tight to a body loses whatever the
-        person is interacting with, which is usually the thing worth
-        describing.
-        """
+        """Cut this detection out of the frame, padded by `pad` for context."""
         h, w = image.shape[:2]
         px, py = self.width * pad, self.height * pad
         x1 = int(max(0, round(self.x1 - px)))
@@ -92,12 +76,8 @@ class ObjectDetector(ABC):
 
 
 class YoloPersonDetector(ObjectDetector):
-    """Ultralytics YOLO restricted to the person class.
-
-    ``min_height`` drops detections too small to crop usefully. A person
-    forty pixels tall carries no describable detail once cropped and
-    resized, and including them adds noise to the change signal without
-    adding information.
+    """Ultralytics YOLO restricted to the person class. `min_height` drops people
+    too small to crop usefully.
     """
 
     name = "yolo"
@@ -157,18 +137,7 @@ class YoloPersonDetector(ObjectDetector):
 
 class OpenVocabDetector(ObjectDetector):
     """YOLO-World: classes given as text rather than fixed at training time.
-
-    COCO's eighty classes are the wrong vocabulary for most real footage.
-    Measured on supermarket checkout video, plain YOLO found seven non-person
-    classes, dominated by ``bench`` and ``suitcase`` at ~0.30 confidence —
-    both of which were the same static empty counter. Shopping bags, carts,
-    groceries and boxes have no COCO class at all. Naming the classes
-    directly took that from 1.8 junk detections per frame to 12.9 real ones,
-    at the same cost, because ``set_classes`` embeds the vocabulary once.
-
-    Confidence runs much lower than a closed-vocabulary detector — 0.15 to
-    0.40 is normal for a correct box — so thresholds tuned against COCO
-    numbers do not transfer.
+    Confidence runs lower than a closed-vocabulary detector (0.15-0.40 is normal).
     """
 
     name = "openvocab"
@@ -241,17 +210,8 @@ class OpenVocabDetector(ObjectDetector):
 
 
 class TextRegionDetector(ObjectDetector):
-    """EasyOCR's detector only — where is there text, not what does it say.
-
-    Recognition is skipped deliberately. The VLM downstream reads text far
-    better than an OCR engine will, so all that is wanted here is the
-    regions: enough to notice that the text on screen has changed and a
-    frame is worth sending.
-
-    Every region found is weighted equally. Suppressing an area — a burnt-in
-    camera clock is the usual reason — is deliberately not handled here: that
-    is one setting of a general per-region weighting the caller should own,
-    not a binary exclusion baked into the detector.
+    """EasyOCR's detector only: where text is, not what it says. Every region is
+    weighted equally.
     """
 
     name = "text"
@@ -262,11 +222,7 @@ class TextRegionDetector(ObjectDetector):
         gpu: Optional[bool] = None,
         min_height: int = 0,
         low_text: float = 0.4,
-        # 0.85 rather than EasyOCR's 0.7 default. On animated infographics the
-        # looser setting finds text-like structure in graphics — pipework, gauge
-        # faces — and those spurious regions drift frame to frame, which reads
-        # as the text having changed. Measured on an animated documentary, one
-        # chunk went from 24 samples to 2 with no loss on clean rendered text.
+        # Above EasyOCR's 0.7 default, so graphics are not taken for text.
         text_threshold: float = 0.85,
         link_threshold: float = 0.4,
         canvas_size: int = 1280,

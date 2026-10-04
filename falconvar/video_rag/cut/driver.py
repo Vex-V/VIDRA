@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from falconvar.shared import logs
+from falconvar.shared.reporting import logs
 from falconvar.shared.contracts.documents import (Produced, RawTranscript,
                                                   Timeline, Transcript)
 from falconvar.shared.storage.files import read, write
@@ -14,16 +14,8 @@ from .cutter import stats_for, to_chunks
 
 
 def apply(timeline: Timeline, raw: RawTranscript) -> Transcript:
-    """The grid, onto a transcript already in hand. Reads and writes nothing.
-
-    This is the component's whole work, and `cut` below is this plus a read
-    at each end. Nothing here needs a path at all, so a caller with a
-    `Timeline` and a `RawTranscript` -- from this pipeline, from an earlier
-    run, or built by hand -- can cut one against the other.
-
-    The id comes off the transcript rather than being an argument: `cut`
-    re-chunks *that* transcript, and a third opinion about which video it is
-    could only ever disagree with the two documents.
+    """The grid, onto a transcript already in hand. Reads and writes nothing. The
+    video id comes from the transcript.
     """
     chunks = to_chunks(raw, timeline)
     return Transcript(
@@ -37,10 +29,8 @@ def apply(timeline: Timeline, raw: RawTranscript) -> Transcript:
 
 def cut(timeline: str | Path, raw_transcript: str | Path,
         out: str | Path) -> Produced:
-    """Apply the grid at `timeline` to the transcript at `raw_transcript`.
-
-    Costs no model and can be repeated at will. `apply` plus a read at each
-    end, with the paths named rather than derived from a video id.
+    """Apply the grid at `timeline` to the transcript at `raw_transcript`. `apply`
+    plus a read at each end; no model.
     """
     grid = read(timeline, Timeline)
     raw = read(raw_transcript, RawTranscript)
@@ -64,6 +54,8 @@ def load(path: str | Path) -> Transcript:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     import argparse
     import json
 

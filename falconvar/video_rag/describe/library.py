@@ -1,44 +1,13 @@
-"""The prompt vocabulary: built-in questions, plus whatever a user has added.
+"""The question vocabulary: built-in questions, plus any a user has added.
 
-Two files, and the split is the point:
+    falconvar/video_rag/describe/prompts.json   built in, read-only
+    data/prompts.json                           custom, written by `add_question`
 
-    falconvar/video_rag/describe/prompts.json   built in, shipped, read-only at runtime
-    data/prompts.json                 custom, written by the API
-
-Custom entries layer on top and may not shadow a built-in, so a request can
-never change what a shipped question asks -- the alternative is a deployment
-whose `yolo` means something different from every other one, with nothing in
-the repo saying so.
-
-A question is an instruction and a **shape**. The shape is where the response
-schema lives, and a question either names a shipped shape or brings its own --
-`yolo` is not a special case in the code, it is the `people` shape.
-
-A shape is just a set of fields. The one marked `fallback` is what an
-unrecognised question resolves to; it has no other privilege. Two questions
-whose shapes share a field both answer it, and both answers are kept, because
-a (sampler, question) pairing is independent of every other pairing on the
-chunk.
-
-**A custom shape is built, never accepted.** `fields` is a small builder --
-`text` or `list`, plus `of` for a list of objects and `one_of` for a fixed
-vocabulary -- and `compile_shape` generates the JSON Schema from it. The schema
-reaches the model API with `strict: true`, whose subset is narrow, so a raw
-schema arriving over HTTP could express something the API refuses and the
-failure would land after the frames are read with the call about to be paid
-for. The builder spans exactly the range the shipped shapes already use:
-verified by rebuilding all five from their own field lists, identical.
-
-A custom shape is stored under its question's name and dies with it. It may
-not take a shipped shape's name -- `people` and `prose` are shape names that
-are *not* question names, so the question-level shadow guard does not cover
-them -- and it can never claim `fallback`, because exactly one shape is what
-every unrecognised question resolves to and it is a shipped one.
-
-**Which keys identify an entry is not a shape's business.** It used to be
-declared beside the shapes, for entity linking; a link profile in
-`falconvar/aggregates/definitions/definitions.json` owns it now, so the same answers can be
-linked by different keys without touching what was asked.
+A question is an instruction and a shape; the shape holds the response
+schema. A custom question names a shipped shape or brings its own, built from
+`fields` (`text` or `list`, `of` for a list of objects, `one_of` for a fixed
+vocabulary). A custom entry may not shadow a built-in question or shape, and
+an unknown question resolves to the shape marked `fallback`.
 """
 
 from __future__ import annotations
@@ -49,32 +18,21 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from falconvar.shared import paths
-from falconvar.shared.errors import FalconvarError
-from falconvar.shared.contracts.fields import (FIELD_NAME, FIELD_TYPES, MAX_ENUM,
-                                        MAX_FIELDS, MAX_NESTED_KEYS,
-                                        check_fields, compile_fields)
+from falconvar.shared.config import paths
+from falconvar.shared.reporting.errors import FalconvarError
+from falconvar.shared.contracts.fields import check_fields, compile_fields
 
 BUILTIN_PATH = Path(__file__).with_name("prompts.json")
 
-#: A question name has to survive being a `--sampler` half, a manifest key, a
-#: filename fragment and a JSON Schema `name`, so it is deliberately narrow.
-#: A colon would split a `name:question` pair in two.
+#: Allowed question names: lowercase, no colon (`sampler:question` splits on one).
 NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
-#: `{n}` and `{span}` are substituted for every question; `{vocabulary}` only
-#: has a value when the sampler recorded one, so it renders as a plain note
-#: rather than failing. Anything else is a typo that would raise at call time,
-#: which is after the frames have been read and the money is about to be spent.
+#: Placeholders an instruction may use.
 PLACEHOLDERS = {"n", "span", "vocabulary"}
 
 
 _lock = threading.Lock()
-#: Keyed by data root, not a single slot. The custom half lives at
-#: `paths.PROMPTS`, which is under the data root -- so with one slot a
-#: `configure()` that moved the root mid-process was still served the old
-#: root's vocabulary, and a question custom to one deployment leaked into
-#: another.
+#: The merged vocabulary, cached per data root.
 _cache: dict[str, dict[str, Any]] = {}
 
 
@@ -83,12 +41,7 @@ class PromptError(FalconvarError, ValueError):
 
 
 class ProtectedPrompt(PromptError):
-    """The question exists and is built in, so it cannot be changed.
-
-    Distinct from a rejected or unknown one because the answer to a caller is
-    different: not "fix this" and not "no such thing", but "this one is not
-    yours to edit".
-    """
+    """The question is built in, so it cannot be changed."""
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -104,14 +57,8 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def compile_shape(spec: dict[str, Any]) -> dict[str, Any]:
-    """A field spec -> a shape, in the form the built-ins are already written.
-
-    So `shape_of`, `schema_for` and `fields_of` need no idea that a shape was
-    supplied rather than shipped.
-
-    `fallback` is never set. Exactly one shape is what an unrecognised question
-    resolves to, and it is a shipped one -- a custom shape that could claim it
-    would change what every unknown question means.
+    """A field spec -> a shape, in the form the built-ins are written. Never the
+    fallback shape.
     """
     fields = spec.get("fields") or {}
     return {
@@ -122,10 +69,7 @@ def compile_shape(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def check_shape(spec: Any) -> list[str]:
-    """Everything wrong with a proposed shape, as messages.
-
-    Returned rather than raised, so a caller reports all of them at once.
-    """
+    """Everything wrong with a proposed shape, as messages."""
     problems: list[str] = []
     if not isinstance(spec, dict):
         return ["shape must be an object with a `fields` map"]
@@ -145,12 +89,8 @@ def check_shape(spec: Any) -> list[str]:
 
 
 def load(refresh: bool = False) -> dict[str, Any]:
-    """The merged vocabulary: built-ins, then custom layered on top.
-
-    Cached, because every describe call asks for it. `refresh` is what the API
-    uses after a write, so a running server does not serve a stale list -- the
-    file is small enough that re-reading it is cheaper than reasoning about
-    when a cache is wrong.
+    """The merged vocabulary: built-ins, then custom on top. Cached; `refresh`
+    re-reads the files.
     """
     key = str(paths.PROMPTS)
     with _lock:
@@ -172,33 +112,17 @@ def load(refresh: bool = False) -> dict[str, Any]:
 
         custom = _read(paths.PROMPTS)
 
-        # Shapes before questions: a question resolves its shape by name, so
-        # the shape has to exist by the time the question is merged.
-        #
-        # Stored as a spec and compiled here rather than stored compiled, so
-        # the file holds what a person wrote and can hand-edit. The generated
-        # JSON Schema is derivable from it, and two copies of one thing is two
-        # things that drift.
+        # Shapes first: a question resolves its shape by name.
         for name, spec in (custom.get("shapes") or {}).items():
-            # A custom shape may not redefine a shipped one -- and this is not
-            # covered by the question-level guard: `people` and `prose` are
-            # shape names that are *not* question names, so a question called
-            # `people` would otherwise silently rewrite the people schema.
+            # A custom shape may not redefine a shipped one.
             if name in merged["shapes"]:
                 continue
             try:
                 merged["shapes"][name] = compile_shape(spec)
             except Exception as exc:                       # noqa: BLE001
-                # A hand-edited shape that will not compile is dropped, and the
-                # question falls back to the general shape exactly as an
-                # unknown shape name already does. Refusing at write time is
-                # where the error belongs; this file is editable by hand too.
-                #
-                # Dropped *out loud*: `compile_shape` once called a function
-                # that did not exist, and every custom shape on disk was
-                # dropped here in silence -- nine of nine, each question
-                # answering in the fallback shape with nothing reporting it.
-                from falconvar.shared import logs
+                # A custom shape that will not compile is dropped, with a warning; its
+                # question falls back to the general shape.
+                from falconvar.shared.reporting import logs
                 logs.logger("describe").warning(
                     "custom shape %r dropped: %s", name, exc,
                     extra={"component": "describe", "event": "dropped",
@@ -206,11 +130,7 @@ def load(refresh: bool = False) -> dict[str, Any]:
                 continue
 
         for name, entry in (custom.get("questions") or {}).items():
-            # A custom entry that collides with a built-in is dropped rather
-            # than applied. Refusing at write time is where the error belongs,
-            # but the file is hand-editable too, and a shadowed built-in is the
-            # one failure that would change a shipped question's meaning
-            # silently.
+            # A custom question may not shadow a built-in.
             if name in merged["questions"]:
                 continue
             merged["questions"][name] = {**entry, "builtin": False}
@@ -227,11 +147,26 @@ def questions() -> list[str]:
 
 
 def question(name: str) -> dict[str, Any]:
+    """One question: its instruction, about, shape, summary length and
+    `{field: what the model is told to put there}`.
+    """
     entry = load()["questions"].get(name)
     if entry is None:
         raise PromptError(f"unknown question {name!r}; "
                           f"known: {', '.join(questions())}")
-    return entry
+    shape = shape_of(name)
+    return {
+        "name": name,
+        "instruction": entry.get("instruction", ""),
+        "about": entry.get("about", ""),
+        "builtin": bool(entry.get("builtin")),
+        # Its own shape is stored under the question's name.
+        "shape": None if entry.get("shape") == name and not entry.get("builtin")
+                 else entry.get("shape"),
+        "summary": shape.get("summary", "standard"),
+        "fields": {field: spec.get("description", "")
+                   for field, spec in (shape.get("fields") or {}).items()},
+    }
 
 
 def shapes() -> dict[str, Any]:
@@ -239,23 +174,12 @@ def shapes() -> dict[str, Any]:
 
 
 def builtin_shapes() -> set[str]:
-    """Which shapes ship in the package.
-
-    Read from the file rather than marked on the shape itself: `version_of`
-    hashes the shape dict, so a `builtin` key inside it would change every
-    hash and re-describe every chunk of every video once.
-    """
+    """Which shapes ship in the package."""
     return set(_read(BUILTIN_PATH).get("shapes") or {})
 
 
 def shape_of(name: str) -> dict[str, Any]:
-    """The shape a question answers in, falling back to the general one.
-
-    An unknown question resolves to the fallback shape rather than raising,
-    because this is called per (chunk, sampler) after the manifest is written:
-    the vocabulary is checked before a run, and failing here would mean failing
-    with the frames already read.
-    """
+    """The shape a question answers in; an unknown question gets the fallback shape."""
     entry = load()["questions"].get(name)
     shape = entry.get("shape") if entry else None
     return load()["shapes"].get(shape) or _fallback_shape()
@@ -280,17 +204,7 @@ def instruction_of(name: str) -> str:
 
 
 def fields_of(name: str) -> list[str]:
-    """The structured keys this question answers, from its shape.
-
-    A property of the question alone. It used to depend on which other
-    questions were asked about the same chunk -- the fallback shape gave up any
-    key a specialist owned -- and that coupling was the source of three silent
-    faults: sampler ids passed where questions were meant, `yolo:overview`
-    taking a key from a call that answered none, and two fallback questions
-    overlapping on everything with no rule for which won. It bought a few
-    percent of output tokens in one of four possible pairings. Pairings are
-    independent now, and overlap is answered twice and kept twice.
-    """
+    """The structured keys this question answers, from its shape."""
     return list(shape_of(name).get("fields") or {})
 
 
@@ -298,13 +212,8 @@ def fields_of(name: str) -> list[str]:
 
 def check(name: str, entry: dict[str, Any],
           shape_spec: Optional[dict[str, Any]] = None) -> list[str]:
-    """Everything wrong with a proposed question, as messages.
-
-    Returned rather than raised so a caller reports all of them at once, the
-    same way `workflow.validate` does.
-
-    ``shape_spec`` is checked instead of `entry["shape"]` when the question
-    brings its own shape rather than naming a shipped one.
+    """Everything wrong with a proposed question, as messages. `shape_spec` is
+    checked instead of `entry["shape"]` when the question brings its own shape.
     """
     problems: list[str] = []
     if not NAME.match(name or ""):
@@ -317,8 +226,7 @@ def check(name: str, entry: dict[str, Any],
     elif len(instruction) > 4000:
         problems.append(f"instruction is {len(instruction)} characters; 4000 max")
     else:
-        # A `{typo}` would raise at call time -- after the frames are read and
-        # with the request about to be paid for.
+        # Only the known placeholders may appear in braces.
         try:
             unknown = {f for _, f, _, _ in __import__("string").Formatter()
                        .parse(instruction) if f} - PLACEHOLDERS
@@ -332,12 +240,7 @@ def check(name: str, entry: dict[str, Any],
                     f"{', '.join(sorted(PLACEHOLDERS))}")
 
     if shape_spec is not None:
-        # A shape supplied with the question. Its name is the question's, so
-        # the shipped shape names have to be refused here too.
-        #
-        # Against the *built-ins*, not against every shape: a custom shape is
-        # stored under its question's name, so checking the merged set would
-        # make a question unable to edit the shape it already owns.
+        # A question's own shape may not take a built-in shape's name.
         if name in builtin_shapes():
             problems.append(f"{name!r} is a built-in shape; a question that "
                             "defines its own shape cannot take that name")
@@ -364,13 +267,8 @@ def _write_custom(doc: dict[str, Any]) -> None:
 def add(name: str, instruction: str, shape: str = "scene",
         about: str = "", fields: Optional[dict[str, Any]] = None,
         summary: str = "standard") -> dict[str, Any]:
-    """Add or replace a custom question. Built-ins are refused.
-
-    ``fields`` makes the question bring its own shape instead of naming a
-    shipped one, and the shape is then stored under the question's own name.
-    Ownership of a key like `people` still stays with the shipped shapes: a
-    custom shape may not take a shipped shape's name, and no custom shape can
-    claim `fallback`.
+    """Add or replace a custom question. Built-ins are refused. `fields` gives
+    the question its own shape, stored under its name.
     """
     shape_spec = (None if fields is None
                   else {"summary": summary, "fields": fields})
@@ -396,8 +294,7 @@ def add(name: str, instruction: str, shape: str = "scene",
         if shape_spec is not None:
             shapes[name] = shape_spec
         else:
-            # Switching a question from its own shape back to a shipped one
-            # leaves the old shape addressed by nothing.
+            # A question that switched to a shipped shape drops its own.
             shapes.pop(name, None)
         if not shapes:
             doc.pop("shapes")
@@ -406,13 +303,66 @@ def add(name: str, instruction: str, shape: str = "scene",
     return {**entry, "builtin": False}
 
 
-def remove(name: str) -> None:
-    """Delete a custom question, and the shape it brought with it.
+def add_question(name: str, instruction: str, *,
+                 fields: Optional[dict[str, Any]] = None,
+                 shape: Optional[str] = None,
+                 summary: Optional[str] = None,
+                 about: str = "") -> dict[str, Any]:
+    """Add a question of your own, or replace one you added. Returns `question(name)`.
 
-    The shape goes because it is keyed by the question's name and nothing else
-    can reference it -- a shipped shape is never touched, since a question
-    naming one does not own it.
+        describe.add_question(
+            "hazards",
+            "These {n} frames span {span}. List every hazard you can see.",
+            fields={
+                "hazards":  {"type": "list", "about": "each hazard, briefly"},
+                "severity": {"type": "text", "about": "the worst one",
+                             "one_of": ["none", "low", "high"]},
+                "exposed":  {"type": "list", "about": "who is at risk",
+                             "of": {"who": "by appearance", "how": "how exposed"}},
+            })
+        video_rag("x.mp4", "data/out", sampler="clip:hazards")
+
+    Pair it with any sampler as `sampler:name`. What it answers is one of:
+
+        fields=   its own fields: `type` is `text` or `list`; `about` (required)
+                  is what the model is told to put there; `one_of` fixes the
+                  values; `of` makes a list's entries objects
+        shape=    a shipped shape: `scene`, `people`, `objects`, `text`, `prose`
+        neither   prose only (the `prose` shape)
+
+    `summary` sets the prose length for a shape of your own: `standard` (at least
+    150 words) or `brief` (4 to 5 sentences). `instruction` may use `{n}`,
+    `{span}` and `{vocabulary}`. Saved in `prompts.json` under the data root. A
+    built-in's name raises `ProtectedPrompt`.
     """
+    if fields is not None and shape is not None:
+        raise PromptError("pass fields= for a shape of your own or shape= for "
+                          "a shipped one, not both")
+    if shape is not None and shape not in builtin_shapes():
+        # Only shipped shapes: another question's own shape is removed with it.
+        raise PromptError(f"unknown shape {shape!r}; shipped: "
+                          f"{', '.join(sorted(builtin_shapes()))} -- or give "
+                          f"fields= for one of your own")
+    if summary is not None and fields is None:
+        raise PromptError("summary= sets the length for a shape of your own, "
+                          "so it needs fields=; a shipped shape has its own")
+    if summary is not None and summary not in load()["summaries"]:
+        raise PromptError(f"unknown summary {summary!r}; "
+                          f"known: {', '.join(load()['summaries'])}")
+    add(name, instruction, shape=shape or "prose", about=about, fields=fields,
+        summary=summary or "standard")
+    return question(name)
+
+
+def remove_question(name: str) -> None:
+    """Remove a question you added, with any shape it brought. A later describe
+    naming it is refused as unknown.
+    """
+    remove(name)
+
+
+def remove(name: str) -> None:
+    """Delete a custom question and its own shape."""
     if load()["questions"].get(name, {}).get("builtin"):
         raise ProtectedPrompt(f"{name!r} is built in and cannot be deleted")
     with _lock:

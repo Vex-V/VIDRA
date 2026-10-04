@@ -1,15 +1,7 @@
-"""Evidence plus a duration, into spans.
+"""Evidence plus a duration, into spans. The only place boundaries are decided.
 
-The only place boundaries are decided. `uniform` needs no evidence at all --
-it is arithmetic over the container duration.
-
-Both guards are mandatory for a content-derived policy. Voice activity cuts on
-every pause, which would shred the video into chunks too short to describe; a
-monologue yields zero cuts and one chunk covering the file. `min_s` merges,
-`max_s` splits.
-
-`max_s` splits evenly, not into fixed bites: 30 s bites off a 62.5 s span leave
-a 2.5 s remainder, so a guard against short chunks would create one.
+`uniform` is arithmetic over the container duration. A content-derived policy
+gets two guards: `min_s` merges short chunks, `max_s` splits long ones evenly.
 """
 
 from __future__ import annotations
@@ -17,11 +9,9 @@ from __future__ import annotations
 from typing import Any, Optional, Sequence
 
 from falconvar.shared.contracts.documents import Timeline
-from falconvar.shared.errors import Refused, UnknownOption
+from falconvar.shared.reporting.errors import Refused, UnknownOption
 
-#: Every policy, and which evidence each needs. The dependency, not a branch:
-#: a driver reads this to know what must run first, rather than carrying an
-#: ordering rule of its own.
+#: Every policy, and which evidence it needs first (None, "video" or "audio").
 POLICIES: dict[str, Optional[str]] = {
     "uniform": None,           # arithmetic over media.json. Nothing runs first.
     "scene": "video",          # boundaries.scenes -> cuts.json
@@ -29,28 +19,14 @@ POLICIES: dict[str, Optional[str]] = {
     "speaker": "audio",
 }
 
-#: A final chunk shorter than this fraction of the nominal length is merged
-#: into the one before it, under every policy.
-#:
-#: A grid divides the media wherever it happens to end, so the tail is
-#: uniformly distributed over the chunk length -- 97.99 s at 20 s leaves a
-#: usable 17.99 s, but 100.4 s leaves 0.40 s. That stub is not harmless: it
-#: costs a describer call *per sampler*, it keeps a frame because every chunk
-#: keeps at least one, and it is a moment retrieval can return that nobody can
-#: play. A fraction rather than a number of seconds, so the rule holds at any
-#: chunk length.
+#: A final chunk shorter than this fraction of the nominal length is merged into
+#: the one before it, under every policy.
 MIN_TAIL_FRACTION = 0.25
 
 
 def merge_tail(spans: list[tuple[float, float]],
                min_tail_s: float) -> list[tuple[float, float]]:
-    """Absorb a too-short final chunk into the one before it.
-
-    Only the last, and only backwards into its predecessor. A short chunk
-    anywhere else is a content boundary something decided on purpose; the last
-    is an artifact of where the media stopped relative to a grid that knew
-    nothing about it.
-    """
+    """Absorb a too-short final chunk into the one before it."""
     if len(spans) < 2:
         return spans
     start, end = spans[-1]
@@ -61,14 +37,14 @@ def merge_tail(spans: list[tuple[float, float]],
 
 def enforce(spans: list[tuple[float, float]], min_s: float = 0.0,
             max_s: Optional[float] = None) -> list[tuple[float, float]]:
-    """The two guards every content-derived policy needs."""
+    """Apply `min_s` (merge) and `max_s` (split evenly)."""
     merged: list[tuple[float, float]] = []
     for start, end in spans:
         if merged and (end - start) < min_s:
             merged[-1] = (merged[-1][0], end)      # absorb into the previous
         else:
             merged.append((start, end))
-    # Nothing precedes the first chunk, so a short one absorbs forwards.
+    # A short first chunk absorbs forwards.
     if min_s and len(merged) > 1 and (merged[0][1] - merged[0][0]) < min_s:
         merged[:2] = [(merged[0][0], merged[1][1])]
 
@@ -89,12 +65,7 @@ def enforce(spans: list[tuple[float, float]], min_s: float = 0.0,
 
 
 def uniform(video_id: str, duration_s: float, chunk_s: float = 20.0) -> Timeline:
-    """A fixed grid, truncated to where the media ends.
-
-    The truncation is not tidiness: telling a describer that a window is twenty
-    seconds longer than the footage is telling it something false about every
-    video.
-    """
+    """A fixed grid, truncated to where the media ends."""
     if chunk_s <= 0:
         raise Refused("chunk_s must be positive")
     if duration_s <= 0:
@@ -113,17 +84,9 @@ def from_cuts(video_id: str, cuts: Sequence[float], duration_s: float,
               derived_from: str = "grid",
               min_s: float = 5.0,
               max_s: Optional[float] = 30.0) -> Timeline:
-    """Interior cut times plus a total length, guarded, as a Timeline.
-
-    A policy that finds nothing to cut on returns one chunk covering the file,
-    which `max_s` then divides evenly. That is the honest outcome for a
-    monologue asked to be split on speaker changes -- there are none, and
-    inventing some would be worse than saying so through the grid.
-
-    The last span always reaches ``duration_s``, which is the *container's*
-    duration rather than either stream's. A grid built from the audio alone
-    leaves the last video frames outside every chunk: the streams differ by
-    16 ms on the reference file, and a file is as long as its longest.
+    """Interior cut times plus a total length, guarded, as a Timeline. No cuts gives
+    one chunk covering the file, which `max_s` then divides. The last span
+    reaches `duration_s`, the container's duration.
     """
     edges = [0.0] + sorted(t for t in cuts if 0.0 < t < duration_s) + [duration_s]
     spans = [(a, b) for a, b in zip(edges, edges[1:]) if b > a]
@@ -139,10 +102,8 @@ def build(video_id: str, policy: str, duration_s: float,
           chunk_s: float = 20.0, min_s: float = 5.0,
           max_s: Optional[float] = None,
           params: Optional[dict[str, Any]] = None) -> Timeline:
-    """One grid, whatever the policy.
-
-    `max_s` defaults to ``chunk_s`` for a content-derived policy, so "how long
-    should a chunk be" is one number rather than two that can disagree.
+    """One grid, whatever the policy. `max_s` defaults to `chunk_s` for a
+    content-derived policy.
     """
     if policy not in POLICIES:
         raise UnknownOption(f"unknown policy {policy!r}; "

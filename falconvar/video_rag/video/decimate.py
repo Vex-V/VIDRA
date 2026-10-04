@@ -1,22 +1,14 @@
-"""Rate reduction at the head of the pipeline.
+"""Rate reduction at the head of the pipeline: `per_second` frames per second of
+media time.
 
-Nothing downstream sees native frame rate. A 25 fps source becomes whatever
-`per_second` asks for, which is what keeps samplers and a VLM from reasoning
-about twenty-five near-identical frames a second.
-
-**Buckets on media time, never every Nth frame.** Identical on a clean file and
-self-correcting on a lossy one: the frame that lands in second 47 is the frame
-for second 47 however many went missing before it. Counting drifts permanently
-after a gap; bucketing snaps back within one bucket.
-
-It answers from a timestamp alone, which is what lets the reader ask it
-*before* converting pixels -- see `reader.py`.
+Buckets on media time, never every Nth frame, so a lossy file stays aligned.
+Decides from a timestamp alone, before any pixels are converted.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
-from falconvar.shared.errors import Refused
+from falconvar.shared.reporting.errors import Refused
 
 
 class Decimator:

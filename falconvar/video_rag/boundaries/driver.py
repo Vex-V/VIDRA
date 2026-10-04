@@ -1,20 +1,8 @@
 """The boundaries component: evidence -> `cuts.json`, then -> `timeline.json`.
 
-Two callables, because the component has two jobs and the orchestrator needs to
-see both:
-
-    evidence(video_id, policy)   run the precursor this policy needs, if any
-    run(video_id, policy)        decide the grid and write it
-
-They stay separate rather than `run` calling `evidence` itself, so the
-dependency chain is visible in `workflow.py` rather than hidden one level down.
-The whole argument for the grid being its own component is that ordering falls
-out of what a policy depends on -- burying the expensive pass inside the cheap
-one would put that back out of sight.
-
-`run()` is the callable and `main()` a shim over it, never the reverse:
-`falconvar` had to undo the opposite arrangement, where a server would have had
-to import an argparse module to reach the work behind it.
+    evidence(out, policy, ...)        run the pass this policy needs, if any
+    boundaries(media, out, policy)    decide the grid and write it
+    retune(cuts, out, threshold)      re-threshold cached scores
 """
 
 from __future__ import annotations
@@ -22,15 +10,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from falconvar.shared import logs
-from falconvar.shared.paths import MissingArtifact
+from falconvar.shared.reporting import logs
+from falconvar.shared.config.paths import MissingArtifact
 from falconvar.shared.contracts.documents import (Cuts, Media, Produced,
                                            RawTranscript, Timeline)
 from falconvar.shared.storage.files import maybe, read, write
 from falconvar.shared.contracts.documents import same_video
 from . import scenes, speech
 from .grid import POLICIES, build
-from falconvar.shared.errors import Refused, UnknownOption
+from falconvar.shared.reporting.errors import Refused, UnknownOption
 
 
 def load_cuts(path: str | Path) -> Cuts:
@@ -39,20 +27,14 @@ def load_cuts(path: str | Path) -> Cuts:
 
 
 def load(path: str | Path) -> Timeline:
-    """Read a `timeline.json` back. Every consumer starts from one."""
+    """Read a `timeline.json` back, typed."""
     return read(path, Timeline)
 
 
-#: Policies whose evidence is a scene pass, read off POLICIES so a picture
-#: policy added later gets the scene settings without editing this.
+#: Policies whose evidence is a scene pass.
 _PICTURE = tuple(p for p, needs in POLICIES.items() if needs == "video")
 
-#: setting -> (the policies that read it, its default).
-#:
-#: Keyed by policy, not by precursor: `speech.detect` takes `silence_s` but
-#: only `vad` reads it -- `speaker_cuts` has no such argument -- so grouping
-#: both speech policies together would let `--policy speaker --silence 2.0`
-#: through to be ignored, which is the failure this table exists to stop.
+#: Setting -> (the policies that read it, its default).
 EVIDENCE_SETTINGS: dict[str, tuple[tuple[str, ...], object]] = {
     "stride": (_PICTURE, scenes.DEFAULT_STRIDE),
     "threshold": (_PICTURE, scenes.DEFAULT_THRESHOLD),
@@ -62,18 +44,8 @@ EVIDENCE_SETTINGS: dict[str, tuple[tuple[str, ...], object]] = {
 
 
 def _check_settings(policy: str, given: dict[str, object]) -> None:
-    """A setting this policy's precursor cannot read is refused, not dropped.
-
-    `stride` belongs to the scene pass and `silence_s` to the speech one, and
-    a signature cannot say so -- it was published beside `policy: scene`,
-    where it is silently ignored, which is what `EVIDENCE_SETTINGS` replaces.
-    Compared against the default rather than a sentinel, so the published
-    defaults stay discoverable; passing one unchanged is a no-op either way.
-
-    Here rather than in `evidence`, so both ways into this component get it.
-    A check that lives on only one of two public paths is a check half the
-    callers walk past -- which is exactly how `sampler="uniform:nope"` reached
-    a whole video decode.
+    """A setting this policy's evidence pass does not read is refused (a default
+    value passes).
     """
     unreachable = sorted(
         name for name, (reads, default) in EVIDENCE_SETTINGS.items()
@@ -94,21 +66,11 @@ def detect(policy: str,
            threshold: float = scenes.DEFAULT_THRESHOLD,
            detect_width: int = scenes.DETECT_WIDTH,
            silence_s: float = speech.DEFAULT_SILENCE_S) -> Optional[Cuts]:
-    """Run this policy's precursor over documents in hand. Writes nothing.
-
-    Which input is needed is the policy's business, and `POLICIES` is that
-    table: a picture policy wants the `Media` (it decodes the file it names),
-    a speech policy wants the `RawTranscript`, and `uniform` wants neither.
+    """Run this policy's evidence pass over documents in hand. Writes nothing.
 
         detect("scene", media=media, stride=5)      -> Cuts
         detect("vad", transcript=raw)               -> Cuts
         detect("uniform")                           -> None
-
-    **`None` is the answer for `uniform`, not an absence.** There are no cuts,
-    and no cuts is what the document would say. `evidence()` still returns a
-    `Produced` carrying `skipped: ["evidence"]`, because that is a receipt for
-    a step and a step that did nothing is still a step -- the two levels
-    answer different questions and each answers its own honestly.
     """
     if policy not in POLICIES:
         raise UnknownOption(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
@@ -140,22 +102,9 @@ def evidence(out: str | Path, policy: str,
              threshold: float = scenes.DEFAULT_THRESHOLD,
              detect_width: int = scenes.DETECT_WIDTH,
              silence_s: float = speech.DEFAULT_SILENCE_S) -> Produced:
-    """Run whichever precursor this policy needs, and write the cuts to `out`.
-
-    Both inputs are optional and `POLICIES` decides which is read: a scene
-    pass never opens the transcript, a speech pass never opens the container.
-
-    `uniform` needs neither -- it is arithmetic over a duration `media.json`
-    already recorded -- so nothing runs and the answer says so, as
-    `skipped: ["evidence"]`. **A policy needing no precursor is an answer, not
-    an absence**, and every component returns a `Produced` at both levels.
-
-    That case has no document to take an id from, so `media=` is read for the
-    receipt alone. Addressed by id the receipt got that from its argument for
-    free; this is what it costs to stop resolving.
-
-    This is `detect` plus a read at each end; the checks are all down there,
-    so the two ways in cannot drift apart.
+    """Run whichever evidence pass this policy needs and write the cuts to `out`.
+    `POLICIES` decides which input is read. Under `uniform` nothing runs and the
+    receipt says `skipped: ["evidence"]`.
     """
     if policy not in POLICIES:
         raise UnknownOption(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
@@ -202,12 +151,7 @@ def evidence(out: str | Path, policy: str,
 
 
 def retune(cuts: str | Path, out: str | Path, threshold: float) -> Produced:
-    """A different threshold over the cached scores. Runs no model.
-
-    This is what caching the score series buys, and it is exact rather than an
-    estimate: `detect` and `rethreshold` both threshold the same array, so a
-    retune and a re-run at the same value cannot disagree.
-    """
+    """A different threshold over the cached scores. Runs no model."""
     stored = load_cuts(cuts)
     module = scenes if stored.source == "video" else speech
     retuned = module.rethreshold(stored, threshold)
@@ -222,19 +166,11 @@ def retune(cuts: str | Path, out: str | Path, threshold: float) -> Produced:
 
 
 def _cuts_for(cuts: Optional[str | Path], policy: str) -> Optional[Cuts]:
-    """The cuts this policy needs, read as a file.
-
-    Reading rather than importing is what keeps `boundaries` free of an edge
-    to `listen`, and lets the evidence have been produced by an earlier run,
-    on another machine, or by hand.
-    """
+    """The cuts this policy needs, read from a file."""
     needs = POLICIES[policy]
     if needs is None:
         return None
-    # Kept rather than left to `files.read`, because it can say more: which
-    # *policy* wants the cuts, and which half of `evidence` would produce
-    # them. A `MissingArtifact` so it lands in the same clause as every other
-    # skipped step.
+    # A missing cuts file names the policy and the pass that writes it.
     producer = "scenes" if needs == "video" else "speech"
     if cuts is None:
         raise MissingArtifact(
@@ -251,27 +187,16 @@ def timeline(media: Media, policy: str = "uniform",
              cuts: Optional[Cuts] = None,
              chunk_s: float = 20.0, min_s: float = 5.0,
              max_s: Optional[float] = None) -> Timeline:
-    """Decide the grid from documents in hand. The one place boundaries are
-    chosen, and it reads and writes nothing.
+    """Decide the grid from documents in hand. Reads and writes nothing.
 
         timeline(media)                              # uniform
         timeline(media, "scene", cuts=detect("scene", media=media))
         timeline(media, "vad", cuts=detect("vad", transcript=raw))
-
-    `cuts` is the `Cuts` document `detect` returned, not a bare list of
-    timestamps: it carries which detector produced it, and a grid built from
-    the wrong one is a silent disagreement rather than an error. `uniform`
-    takes none.
     """
     if policy not in POLICIES:
         raise UnknownOption(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
 
-    # `enforce` merges up to `min_s` and *then* splits at `max_s`, so the split
-    # runs last and wins. Asking for a floor above the ceiling therefore
-    # produced chunks below the floor and reported success -- measured, `--min-
-    # chunk 30` against a `max_s` defaulting to `--chunk-duration` 20 gave a
-    # grid whose shortest span was 18.07s. Refused rather than resolved,
-    # because there is no reading of "at least 30, at most 20" to honour.
+    # A floor above the ceiling is refused.
     ceiling = chunk_s if max_s is None else max_s
     if ceiling and min_s > ceiling:
         raise Refused(
@@ -343,6 +268,8 @@ def boundaries(media: str | Path, out: str | Path, policy: str = "uniform",
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     import argparse
     import json
 

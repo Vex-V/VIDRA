@@ -1,13 +1,9 @@
-"""The two model families, their protocols, and a lazy registry each.
+"""The transcriber and diarizer protocols, their results, and a lazy registry
+each.
 
 `Word`, `Segment`, `Transcript` for what was said; `Turn`, `Diarization` for
 who spoke. Plus a stub transcriber and a no-op diarizer that load nothing.
-
-Nothing is imported until a registry is asked for it by name: between them the
-real backends pull in torch, and a stub run should pay for neither.
-
-A per-word timestamp is what lets a finished transcript be re-cut to any grid
-at no cost, which is the property the whole ordering argument rests on.
+Real backends are imported only when asked for by name.
 """
 
 from __future__ import annotations
@@ -17,21 +13,16 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
 
 from .source import Track
-#: The same class the local aggregates raise; see `shared/errors.py`.
-from falconvar.shared.errors import ModelUnavailable
-from falconvar.shared.errors import UnknownOption
+#: Shared with the local aggregates.
+from falconvar.shared.reporting.errors import ModelUnavailable
+from falconvar.shared.reporting.errors import UnknownOption
 
 
 # ---------------------------------------------------------------- transcribe
 
 @dataclass
 class Word:
-    """One word, with the span the model placed it in.
-
-    A per-word timestamp is the thing that makes the whole ordering argument
-    work: it is what lets a finished transcript be re-cut to any grid, any
-    number of times, at no cost and with no word lost.
-    """
+    """One word, with the span the model placed it in."""
 
     start: float
     end: float
@@ -40,12 +31,8 @@ class Word:
 
     @property
     def midpoint(self) -> float:
-        """Where this word *belongs*.
-
-        A word straddling a boundary belongs to whichever side holds more of
-        it, and the two models estimate edges independently -- word spans
-        routinely cross a turn boundary by tens of milliseconds. The same rule
-        attributes a word to a speaker and to a chunk.
+        """Where this word belongs: its midpoint, used to attribute it to a speaker and
+        to a chunk.
         """
         return (self.start + self.end) / 2.0
 
@@ -123,14 +110,8 @@ class Diarizer(Protocol):
 # ----------------------------------------------------------------- registry
 
 class StubTranscriber:
-    """Returns fixed text without loading anything.
-
-    Exists so the pipeline can be exercised end to end with no model, and it is
-    deliberately obvious in the output. `falconvar` learned why that matters:
-    a form that offered the registry in alphabetical order defaulted to the
-    stub, and an audio-only run completed in 10.6 s reporting 42 segments and
-    205 words, having written a transcript of `[stub0.0][stub0.1]`. Nothing was
-    wrong enough to report. Defaults are named explicitly here for that reason.
+    """Returns fixed text without loading anything, for running the pipeline with
+    no model.
     """
 
     name = "stub"
@@ -154,12 +135,7 @@ class StubTranscriber:
 
 
 class NoDiarizer:
-    """No speaker information, said plainly.
-
-    Every word keeps `speaker=None`, which is truthful. Labelling everything
-    `SPEAKER_00` is not, and is worse than saying nothing because it reads as a
-    finding.
-    """
+    """No speaker information: every word keeps `speaker=None`."""
 
     name = "none"
 
@@ -170,8 +146,7 @@ class NoDiarizer:
         return {"diarizer": self.name}
 
 
-#: name -> "module:Class", resolved on first use so nothing heavy is imported
-#: for a run that does not ask for it.
+#: name -> "module:Class", imported on first use.
 TRANSCRIBERS: dict[str, Any] = {"stub": StubTranscriber,
                                 "whisper": "backends.whisper:WhisperTranscriber"}
 DIARIZERS: dict[str, Any] = {"none": NoDiarizer,
@@ -199,18 +174,8 @@ def diarizer(name: str, **kwargs) -> Diarizer:
 
 
 def settings(kind: str, name: str) -> set[str]:
-    """What this backend's constructor accepts, by argument name.
-
-    Read off the signature rather than tabled beside it, for the reason
-    `/capabilities` introspects a component rather than restating its
-    parameters: a restated list drifts, and a drifted one offers a setting the
-    backend does not take or hides one it does.
-
-    The backends differ in what they can be told -- `whisper` has a
-    `vad_filter` and `pyannote` an `exclusive`, and neither stub has either --
-    so the caller asks instead of assuming. Resolving the class imports its
-    module, which is the module the caller is about to construct from anyway;
-    nothing heavy is pulled in that the build would not pull in.
+    """What this backend's constructor accepts, by argument name (read off its
+    signature).
     """
     registry = {"transcriber": TRANSCRIBERS, "diarizer": DIARIZERS}.get(kind)
     if registry is None:
@@ -218,10 +183,7 @@ def settings(kind: str, name: str) -> set[str]:
     import inspect
     cls = _resolve(registry, name, kind)
     if cls.__init__ is object.__init__:
-        # A backend with no constructor of its own takes nothing. Without this
-        # the signature read is `object.__init__(*args, **kwargs)`, whose
-        # parameter names are `args` and `kwargs` -- a set that happens to
-        # match nothing today and would match a real `kwargs` tomorrow.
+        # A backend with no constructor of its own takes nothing.
         return set()
     named = (inspect.Parameter.POSITIONAL_OR_KEYWORD,
              inspect.Parameter.KEYWORD_ONLY)

@@ -1,12 +1,5 @@
-"""The waveform, decoded once, whole.
-
-PyAV rather than an ffmpeg subprocess: one decoder, one set of timestamp
-semantics, no second binary to check for. Resampling happens inside the decode
-loop -- 16 kHz mono float32, what both Whisper and pyannote want.
-
-The whole file is held at once, which is the price of transcription being a
-whole-file operation. At 16 kHz mono that is 64 KB per second, so an hour is
-230 MB.
+"""The waveform, decoded once, whole, with PyAV: 16 kHz mono float32, what both
+Whisper and pyannote want.
 """
 
 from __future__ import annotations
@@ -16,16 +9,12 @@ from typing import Any
 
 import av
 import numpy as np
-from falconvar.shared.errors import FalconvarError
+from falconvar.shared.reporting.errors import FalconvarError
 
-#: What both Whisper and pyannote are trained on. Not a parameter.
+#: The sample rate both models expect.
 SAMPLE_RATE = 16000
 
-#: Below this RMS a track carries no speech worth transcribing. Measured: CCTV
-#: with a live but empty microphone sits at RMS 0.000221 and peak 0.0291;
-#: narration at 0.1796 -- three orders of magnitude, so the threshold sits in a
-#: wide gap rather than on a cliff. It exists to skip a model load and to make
-#: "no speech" a reported fact, not to make a fine judgement.
+#: Below this RMS a track is treated as silent.
 SILENCE_RMS = 1e-3
 
 
@@ -35,8 +24,7 @@ class NoAudio(FalconvarError):
 
 @dataclass
 class Track:
-    """One decoded waveform, and the two numbers that say whether a model
-    should be handed it."""
+    """One decoded waveform, with its RMS and peak."""
 
     samples: np.ndarray                      # float32, mono, SAMPLE_RATE
     rate: int
@@ -63,8 +51,7 @@ def load(path: str, rate: int = SAMPLE_RATE) -> Track:
         stream = next((s for s in container.streams if s.type == "audio"), None)
         if stream is None:
             raise NoAudio(f"{path} has no audio stream")
-        # Mandatory rather than an optimisation, exactly as on the video side:
-        # 7.15 ms/frame without it against 3.97 with.
+        # Required for decode speed.
         stream.thread_type = "AUTO"
         resampler = av.AudioResampler(format="fltp", layout="mono", rate=rate)
         blocks: list[np.ndarray] = []
