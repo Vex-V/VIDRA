@@ -55,12 +55,7 @@ audio = [
     "faster-whisper",
     "pyannote.audio",
 ]
-api = [
-    "fastapi",
-    "uvicorn[standard]",
-    "python-multipart",
-]
-all = ["falconvar[local,audio,api]"]
+all = ["falconvar[local,audio]"]
 
 [tool.setuptools.package-data]
 # The built-in prompts and definitions are data inside the package, not
@@ -84,6 +79,6 @@ all = ["falconvar[local,audio,api]"]
 # the standalone kit: hand someone those files, a manifest and the video and
 # they rebuild the store with only `av`, `opencv-python` and `numpy`.
 # Installing it beside the pipeline is the first step towards it importing
-# from one. `api`, `eval` and `db` are not part of the library either.
+# from one. `eval` and `db` are not part of the library either.
 include = ["falconvar*"]
-exclude = ["recovery*", "api*", "eval*", "db*", "web*", "data*", "samples*"]
+exclude = ["recovery*", "eval*", "db*", "data*", "samples*"]

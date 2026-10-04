@@ -29,11 +29,6 @@ openai
 # --- where a copy of a document goes; the files need nothing
 supabase
 
-# --- api
-fastapi
-uvicorn[standard]
-python-multipart
-
 # --- audio
 faster-whisper
 pyannote.audio
