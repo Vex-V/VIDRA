@@ -1,37 +1,19 @@
-"""Which entity linker, over the VLM's people descriptions: a bench.
+"""A bench of entity linkers over the describer's people entries, scored
+against hand labels.
 
     python -m eval.linkers                       # test (primary) and test1
     python -m eval.linkers --video test --top 25
     python -m eval.linkers --embedders openai,local
 
-A linker is two choices, and they are varied independently:
+A linker is a similarity (cosine over a rendering of the entry, attribute
+distance, or a blend) and a grouping (the production rules, agglomeration,
+tracking, chunk-first). Every similarity is a z-score against the video's
+provably different pairs. The calibrated row reads its threshold off the
+video; the oracle row sweeps it against the labels (a ceiling). Scored on
+pairwise P/R/F1, wrong links and B-cubed F1.
 
-    similarity   how alike two mentions read: cosine over an embedding of some
-                 rendering of the entry, the fixed-vocabulary attribute
-                 distance (`eval.attributes`), garment Dice, or a blend
-    grouping     how pairs become people: today's rules (calibrated threshold,
-                 mutual best, greedy single link), average-link agglomeration,
-                 Hungarian tracking over time, or chunk-first consensus
-
-Every similarity is first put on one scale -- a z-score against this video's
-provably different pairs (two entries of one answer) -- so a threshold means
-the same thing whatever produced the number, and a blend is an average rather
-than an invented weighting. The **calibrated** row of each linker reads its
-threshold off the video and sees no label; that is what a deployment gets. The
-**oracle** row sweeps the threshold against the labels, and is a ceiling, not
-a result.
-
-Scored on pairwise P/R/F1 and wrong links, as `eval.attributes` does, and on
-B-cubed F1. Pairwise is dominated by whoever is on screen longest -- on test
-the two cashiers are 53 of 125 labelled mentions and ~80% of same-person pairs
--- so B-cubed, which weighs every mention equally, is the one that sees a
-customer being split or swallowed.
-
-Labels: `people_labels_test.json` (12 people, 125 of 128 mentions) and
-`people_labels_test2.json` (7 people, 31 of 32), both written by watching the
-video, not by reading the descriptions, and `people_labels.json` for test1.
-All three videos live under the prototype root `data/eval/people`, described
-as `yolo,clip:yolo` at 2 fps on a 20 s uniform grid.
+Labels: `people_labels_test.json`, `people_labels_test2.json` and
+`people_labels.json` (test1), for videos under `data/eval/people`.
 """
 from __future__ import annotations
 
@@ -40,7 +22,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 from itertools import combinations
-from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 import numpy as np
@@ -49,8 +30,7 @@ from .attributes import DATA, HERE, Corpus, colour_garment, use_data
 
 LABELS = {"test": HERE / "people_labels_test.json", "test1": HERE / "people_labels.json",
           "test2": HERE / "people_labels_test2.json",
-          # test3.mp4 is a byte-identical copy of test2.mp4, described again:
-          # the same frames, a second draw from the describer.
+          # test3 is a copy of test2, described again.
           "test3": HERE / "people_labels_test3.json"}
 CACHE = DATA / "embedding_cache.json"
 
@@ -99,9 +79,7 @@ def different_pairs(c: Corpus) -> np.ndarray:
 
 
 def standardise(c: Corpus, sim: np.ndarray) -> np.ndarray:
-    """z-score against this video's provably different pairs. A pair at 0 is as
-    alike as a typical two-different-people pair; the calibrated threshold is
-    where the most alike of those sits."""
+    """z-score against this video's provably different pairs."""
     d = sim[different_pairs(c)]
     return (sim - d.mean()) / (d.std() or 1.0)
 
@@ -114,8 +92,7 @@ def _cache() -> dict:
 
 
 def embed(texts: Sequence[str], name: str) -> np.ndarray:
-    """Unit vectors, cached on disk by (embedder, text): the bench is re-run
-    far more often than the text changes, and OpenAI calls cost money."""
+    """Unit vectors, cached on disk by (embedder, text)."""
     from falconvar.shared.models import embedders
 
     store = _cache()
@@ -132,8 +109,7 @@ def embed(texts: Sequence[str], name: str) -> np.ndarray:
 ATTRS = ("gender", "age_group", "hair_color", "hair_style", "top_color", "top_type",
          "bottom_color", "bottom_type")
 
-#: What gets embedded. `production` is exactly what the `people` profile signs a
-#: mention with today: appearance and clothing, joined.
+#: What gets embedded; `production` is what the `people` profile uses.
 RENDER: dict[str, Callable[[dict], str]] = {
     "production": lambda e: "; ".join(str(e[k]).strip() for k in ("appearance", "clothing")
                                       if str(e.get(k) or "").strip()),
@@ -141,8 +117,7 @@ RENDER: dict[str, Callable[[dict], str]] = {
     "rich": lambda e: " ".join(filter(None, (e.get("appearance"), e.get("clothing"),
                                              ", ".join(e.get("accessories") or []),
                                              e.get("distinguishing")))),
-    # The closed-vocabulary fields as words: the embedder sees the same facts
-    # the attribute distance does, and supplies the near-miss tolerance itself.
+    # The closed-vocabulary fields as words.
     "attributes": lambda e: " ".join(
         f"{k.replace('_', ' ')} {str(e.get(k, '')).replace('_', ' ')}"
         for k in ATTRS if e.get(k) not in (None, "", "unclear", "covered")),
@@ -155,8 +130,7 @@ def cosine(c: Corpus, render: str, embedder: str) -> np.ndarray:
 
 
 def fieldwise(c: Corpus, embedder: str) -> np.ndarray:
-    """Clothing and appearance embedded apart and averaged: a long appearance
-    string can no longer drown the garments, which is where identity lives."""
+    """Clothing and appearance embedded apart and averaged."""
     a = embed([m.entry.get("appearance") or "unknown" for m in c.mentions], embedder)
     b = embed([m.entry.get("clothing") or "unknown" for m in c.mentions], embedder)
     return 0.35 * (a @ a.T) + 0.65 * (b @ b.T)
@@ -177,9 +151,7 @@ PLACES = {"left", "center", "centre", "middle", "central", "right", "far", "back
 
 
 def places(c: Corpus) -> np.ndarray:
-    """Where the action says they were, as place words. A fixed camera makes
-    position an identity cue for anyone who stays put -- a cashier is at one
-    register all video -- and no cue at all for anyone passing through."""
+    """Place words from the action, as an identity cue."""
     import re
     sets = [set(re.findall(r"[a-z]+", (m.entry.get("action") or "").lower())) & PLACES
             for m in c.mentions]
@@ -191,10 +163,7 @@ def places(c: Corpus) -> np.ndarray:
 
 
 def attr_generic(c: Corpus) -> np.ndarray:
-    """Agreement over the closed-vocabulary fields with nothing hand-tuned: every
-    field weighs the same, no near-miss table, no bonus for shared words.
-    `unclear` and `covered` say nothing either way. This is what a profile gets
-    for free from any shape with `one_of` fields."""
+    """Agreement over the closed-vocabulary fields, every field weighted equally."""
     unknown = {"unclear", "covered", ""}
     vals = [[str(m.entry.get(k, "")) for k in ATTRS] for m in c.mentions]
     s = np.zeros((c.n, c.n))
@@ -224,9 +193,7 @@ def similarities(c: Corpus, embedders: Sequence[str]) -> dict[str, np.ndarray]:
         raw[f"cos[{e}] keywise"] = keywise(c, e)
     z = {k: standardise(c, v) for k, v in raw.items()}
     for e in embedders:
-        # Blends: text similarity catches what the vocabularies cannot say
-        # (a red cap, a printed back); the attributes catch what a paraphrase
-        # hides (navy vs black is one word apart in text, one step here).
+        # Blends of text similarity and attribute agreement.
         z[f"blend[{e}] production+attr"] = (z[f"cos[{e}] production"] + z["attr distance"]) / 2
         z[f"blend[{e}] fieldwise+attr"] = (z[f"cos[{e}] fieldwise"] + z["attr distance"]) / 2
         z[f"blend[{e}] rich+attr"] = (z[f"cos[{e}] rich"] + z["attr distance"]) / 2
@@ -234,7 +201,7 @@ def similarities(c: Corpus, embedders: Sequence[str]) -> dict[str, np.ndarray]:
                                              + 0.5 * z["places"]) / 2.5
         z[f"blend[{e}] fieldwise+attr+places"] = (z[f"cos[{e}] fieldwise"] + z["attr distance"]
                                                   + 0.5 * z["places"]) / 2.5
-        # Nothing hand-tuned: what production can derive from a profile alone.
+        # Built only from what a profile declares.
         z[f"blend[{e}] keywise+generic"] = (z[f"cos[{e}] keywise"] + z["attr generic"]) / 2
     return z
 
@@ -247,8 +214,9 @@ def calibrated(c: Corpus, z: np.ndarray, rule: str = "max") -> float:
 
 
 def rules(c: Corpus, z: np.ndarray, thr: float, mutual: bool = True):
-    """Today's `linking.link`, over any similarity: mutual best matches above
-    the bar, greedy merge most-similar first, refusing an answer clash."""
+    """The production rules over any similarity: mutual best matches above the
+    bar, greedy merge, refusing an answer clash.
+    """
     n, ans = c.n, c.answer
     by: dict = {}
     for i, a in enumerate(ans):
@@ -272,10 +240,9 @@ def rules(c: Corpus, z: np.ndarray, thr: float, mutual: bool = True):
 
 def agglomerate(c: Corpus, z: np.ndarray, thr: float, linkage: str = "average",
                 start: Optional[list[list[int]]] = None):
-    """Merge the two most alike groups until none clears the bar. `average`
-    asks every member to agree, where single link lets one lookalike chain two
-    people together -- the failure a cashier and a customer in a grey T-shirt
-    invite. Never merges two groups holding entries of one answer."""
+    """Merge the two most alike groups until none clears the bar, never joining
+    two entries of one answer.
+    """
     groups = [list(g) for g in (start or [[i] for i in range(c.n)])]
     answers = [{c.answer[i] for i in g} for g in groups]
     agg = {"average": np.mean, "single": np.max, "complete": np.min}[linkage]
@@ -299,11 +266,7 @@ def agglomerate(c: Corpus, z: np.ndarray, thr: float, linkage: str = "average",
 
 
 def chunk_first(c: Corpus, z: np.ndarray, thr: float, pair_thr: Optional[float] = None):
-    """Two answers about one chunk describe the same people at the same moment,
-    so pair them first -- a Hungarian match inside each chunk, where the
-    candidates are few and co-present -- then agglomerate those pairs across
-    chunks. A pair is one person read twice, so its average is steadier than
-    either reading."""
+    """Pair each chunk's two answers first (Hungarian), then agglomerate the pairs."""
     from scipy.optimize import linear_sum_assignment
 
     pair_thr = thr if pair_thr is None else pair_thr
@@ -329,9 +292,9 @@ def chunk_first(c: Corpus, z: np.ndarray, thr: float, pair_thr: Optional[float] 
 
 
 def track(c: Corpus, z: np.ndarray, thr: float, gap: int = 2, merge: Optional[str] = "single"):
-    """`eval.tracking`'s best variant over any similarity: answers in time
-    order, Hungarian assignment to tracks seen within `gap` answers against a
-    track's last two members, then join tracks that never share an answer."""
+    """Hungarian tracking over answers in time order, then join tracks that never
+    share an answer.
+    """
     from scipy.optimize import linear_sum_assignment
 
     tracks: list[dict] = []
@@ -353,13 +316,9 @@ def track(c: Corpus, z: np.ndarray, thr: float, gap: int = 2, merge: Optional[st
 
 
 def attach(c: Corpus, z: np.ndarray, groups, thr: float, largest: int = 1):
-    """A second, lower bar for stragglers only. A mention left on its own is
-    usually a poor reading -- cropped at the frame edge, seen from behind -- of
-    someone already grouped. Attaching one risks one mention, where lowering the
-    bar for everything risks merging two people wholesale, so each straggler
-    joins the group it averages closest to, if that clears `thr` and holds no
-    entry of its answer. Groups are fixed while stragglers are placed: one
-    straggler never becomes another's evidence."""
+    """Attach each lone mention to the group it averages closest to, if that clears
+    the lower bar `thr` and holds no entry of its answer.
+    """
     groups = [list(g) for g in groups]
     stragglers = [g for g in groups if len(g) <= largest]
     anchors = [g for g in groups if len(g) > largest]
@@ -399,7 +358,7 @@ GROUPINGS: dict[str, Callable] = {
     "track": lambda c, z, t: track(c, z, t, merge=None),
     "track + merge": lambda c, z, t: track(c, z, t),
     "track + avg merge": lambda c, z, t: track(c, z, t, merge="average"),
-    # Stragglers attach at the q80 of different pairs, whatever the main bar.
+    # Stragglers attach at the q80 of different pairs.
     "chunk-first + attach": lambda c, z, t: attach(c, z, chunk_first(c, z, t),
                                                    calibrated(c, z, "q80")),
     "average link + attach": lambda c, z, t: attach(c, z, agglomerate(c, z, t, "average"),
@@ -407,9 +366,7 @@ GROUPINGS: dict[str, Callable] = {
     "track + merge + attach": lambda c, z, t: attach(c, z, track(c, z, t),
                                                      calibrated(c, z, "q80")),
 }
-#: Where the bar is read off this video's provably different pairs. `max` is
-#: today's rule and one VLM double count moves it; q99 and q95 ignore the top
-#: 1% and 5% of them.
+#: Where the bar is read off the different pairs.
 RULES = ("max", "q99", "q95")
 
 
@@ -433,9 +390,7 @@ class _Cached:
 
 
 def shipped(c: Corpus, embedder: str, profile: str = "people") -> Score:
-    """The production linker, run exactly as `entities` runs it: the shipped
-    profile's measure and rules, through `linking`. If this disagrees with the
-    bench row it was chosen from, the port is wrong."""
+    """The production linker, run as `entities` runs it."""
     from falconvar.aggregates import definitions
     from falconvar.aggregates.entities.linking import link_similar, similarity
 
@@ -511,7 +466,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="print splits and mixed groups for one calibrated config")
     args = ap.parse_args(argv)
     use_data(DATA)
-    from falconvar.shared import env
+    from falconvar.shared.config import env
     env.load()
 
     embedders = [e for e in args.embedders.split(",") if e]
@@ -520,8 +475,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for video in videos:
         c, sims, rows = bench(video, embedders, args.top, args.only)
         for s, sname, gname, rule, _ in rows:
-            # Keyed by the similarity's family, embedder lifted out: a default
-            # has to hold under whichever embedder a deployment runs.
+            # Keyed by the similarity's family, embedder lifted out.
             family = sname
             for e in embedders:
                 family = family.replace(f"[{e}]", "")
@@ -542,8 +496,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             for s, sname, gname, thr in sorted(out, key=lambda r: (-r[0].b3, -r[0].f1))[:args.top]:
                 print(f"  {sname:<34} {gname:<22} z>{thr:5.2f}  {s.row()}")
 
-    # One default has to serve every video under every embedder, so rank by
-    # the worst cell. Cells run video-major, embedder-minor.
+    # Rank by the worst cell over every video and embedder.
     print(f"\n######## worst case over {' x '.join(videos)} x {' x '.join(embedders)}: "
           f"calibrated, cells are B3/P")
     ranked = sorted(table.items(), key=lambda kv: (-min(s.b3 for s in kv[1]),

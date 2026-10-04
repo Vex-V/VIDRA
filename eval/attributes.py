@@ -1,23 +1,12 @@
-"""Link people by fixed-vocabulary attributes (test.md), against today's linker.
+"""Link people by fixed-vocabulary attributes, against the production linker.
 
     python -m eval.attributes                  # one embedding call, for the cosine rows
     python -m eval.attributes --no-embed
 
-test.md's proposal: the `people` shape answers in closed vocabularies (gender,
-age group, hair, top and bottom colour and type, accessories), two readings of
-one person are compared by a weighted distance over those fields, and answers
-are walked in time order with a Hungarian assignment of detections to tracks.
-`eval.tracking` builds on the distance and the scoring here.
-
-Reads a PROTOTYPE data root, not `data/out`: test1 re-described with the
-attribute fields, so the `activity` labels in `entity_labels.json` survived on
-the real one. `--data` points elsewhere; it is set before `falconvar` is
-imported, because `FALCONVAR_DATA` is read when the paths resolve.
-
-Labels are `people_labels.json`: 15 people, 62 of 87 mentions across `yolo` and
-`clip:yolo`, written by the builder after one run. A direction, not a result.
-Measured: attributes separate same from different people at AUC 0.970, against
-0.862 for word Jaccard over the same entries.
+Two readings of one person are compared by a weighted distance over the
+`people` shape's closed-vocabulary fields, and answers are walked in time
+order with a Hungarian assignment to tracks. Reads a prototype data root
+(`--data`, set before `falconvar` is imported). Labels: `people_labels.json`.
 """
 from __future__ import annotations
 
@@ -38,7 +27,7 @@ DATA = HERE.parent / "data" / "eval" / "people"
 WEIGHTS = {"gender": 3.0, "age_group": 2.0, "hair_color": 2.5, "hair_style": 1.0,
            "top_color": 2.0, "top_type": 1.0, "bottom_color": 2.0, "bottom_type": 1.0}
 UNKNOWN = {"unclear", "covered", ""}
-#: Near values cost half: phrasing drift between two readings of one person.
+#: Near values cost half.
 NEAR = [{"dark_blue", "black"}, {"dark_blue", "blue"}, {"blue", "light_blue"},
         {"grey", "white"}, {"beige", "white"}, {"beige", "brown"}, {"red", "pink"},
         {"blonde", "grey"}, {"blonde", "brown"},
@@ -47,7 +36,7 @@ NEAR = [{"dark_blue", "black"}, {"dark_blue", "blue"}, {"blue", "light_blue"},
         {"trousers", "jeans"}, {"trousers", "leggings"},
         {"teen", "young_adult"}, {"young_adult", "adult"}, {"adult", "older_adult"},
         {"short", "shaved"}, {"ponytail", "bun"}, {"long", "ponytail"}]
-#: Things a person picks up and puts down, so sharing one is weaker evidence.
+#: Carried items: sharing one is weaker evidence.
 CARRIED = {"shopping_bag", "basket", "box", "stroller"}
 WORD = re.compile(r"[a-z]+")
 STOP = {"a", "an", "the", "and", "with", "of", "on", "in", "none", "nothing", "no"}
@@ -64,7 +53,7 @@ class Corpus:
     def __init__(self, video: str = "test1", labels: Path = LABELS, data: Path = DATA):
         from falconvar.aggregates import context
         from falconvar.aggregates.definitions import Selection
-        from falconvar.aggregates.inputs import Source
+        from falconvar.aggregates.core.inputs import Source
         from falconvar.aggregates.entities.linking import mentions_of
 
         self.labels = json.loads(labels.read_text(encoding="utf-8"))
@@ -78,7 +67,7 @@ class Corpus:
             raise SystemExit(f"labelled mentions not in the data: {missing}")
         self.n = len(self.mentions)
         self.answer = [m.answer for m in self.mentions]
-        #: chunk order, and within a chunk `yolo` before `clip:yolo`.
+        #: Chunk order, and within a chunk `yolo` before `clip:yolo`.
         self.answers = sorted(set(self.answer), key=lambda a: (a[0], a[1] != "yolo", a[1]))
 
     def distances(self, **kw) -> np.ndarray:
@@ -138,8 +127,9 @@ def distance(x: dict, y: dict, carried: bool = True, bonus: bool = True) -> floa
 
 
 def hungarian(corpus: Corpus, D: np.ndarray, threshold: float, gap: int, recent: int = 2):
-    """test.md's assignment: answers in time order, detections matched one-to-one
-    to tracks seen within `gap` answers, against each track's last `recent`."""
+    """Hungarian assignment: answers in time order, detections matched one-to-one to
+    tracks seen within `gap` answers, against each track's last `recent`.
+    """
     from scipy.optimize import linear_sum_assignment
 
     tracks = []
@@ -161,8 +151,7 @@ def hungarian(corpus: Corpus, D: np.ndarray, threshold: float, gap: int, recent:
 
 
 def rules(corpus: Corpus, sim: np.ndarray, rule: str):
-    """Today's linker over any similarity: threshold read off within-answer
-    pairs, mutual best matches, greedy merge under cannot-link."""
+    """The production linker over any similarity."""
     n, answer = corpus.n, corpus.answer
     diff = [sim[i, j] for i in range(n) for j in range(i + 1, n) if answer[i] == answer[j]]
     thr = float(max(diff) if rule == "max" else np.quantile(diff, {"q95": .95, "q90": .9}[rule]))
@@ -230,7 +219,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--no-embed", action="store_true", help="skip the cosine rows")
     args = ap.parse_args(argv)
     use_data(args.data)
-    from falconvar.shared import env
+    from falconvar.shared.config import env
     env.load()
 
     c = Corpus(args.video, args.labels, args.data)

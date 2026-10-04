@@ -1,34 +1,13 @@
 """Grade a retrieval configuration against a query set.
 
-**Nothing here can tell you a ranking is good.** It tells you whether one
-configuration ranks a known answer higher than another does, on this corpus, by
-these cases. That is the only claim it makes, and it is the claim every
-retrieval change in this project has so far been unable to support: every
-figure in CLAUDE.md's "Retrieval -- measured" predates the current tree and was
-taken on a corpus that no longer exists.
-
 A case is a query and the chunks a person says answer it:
 
     {"query": "...", "video_id": "Chernobyl", "relevant": [5, 6],
      "kind": "literal" | "paraphrase", "why": "..."}
 
-`kind` matters because the two halves of the hybrid fail in opposite places --
-BM25 at 0.752 MRR on literal queries and 0.468 on paraphrases, dense flat at
-~0.52 on both -- so an average over a mixed set hides which half moved.
-
-**A case is banded by MEASURED overlap, not by its label.** Asked to share no
-content words with the corpus, a model kept a median 50% of them, and BM25 then
-appeared to win on paraphrases. Writing them by hand does no better: of 18
-candidates drafted against this corpus, 2 came in under a third. 1280 distinct
-content words of verbose VLM prose is simply hard to restate, so a binary
-`literal`/`paraphrase` label would be a judgement dressed as a fact.
-
-`kind` is kept as the author's intent and reported, but every summary is
-stratified by `overlap()` -- the fraction of a query's content words the corpus
-actually contains. That is the quantity the lexical half responds to, so it is
-the one worth grouping on.
-
-Metrics are over CHUNKS, not units, because a chunk is what retrieval returns.
+Results are grouped by measured overlap (the fraction of a query's content
+words the corpus contains), with `kind` reported beside it. Metrics are over
+chunks, which is what retrieval returns.
 """
 
 from __future__ import annotations
@@ -46,16 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from falconvar.video_rag.retrieve import search                 # noqa: E402
 
-#: Word splitting for the overlap bands below, and only for those -- ranking
-#: is Postgres' now, through `to_tsvector('english')`. It lived beside the
-#: Qdrant sparse vector, which needed a tokenizer in Python; this file wants
-#: one to measure how literal a query is, which is a different job that
-#: happens to want the same rule.
+#: Word splitting for the overlap bands.
 _WORD = re.compile(r"[a-z0-9£$€%.:'-]+")
 
-#: Dropped before matching. Not an optimisation: without it the query
-#: "youngsters fleeing a poisoned town" overlaps the corpus on the word "a",
-#: so every query bands as literal and the bands distinguish nothing.
+#: Words dropped before measuring overlap.
 STOPWORDS = frozenset("""
 a an the and or but if then than that this these those of in on at to from by
 for with without into onto over under again further is are was were be been
@@ -67,24 +40,14 @@ other some what which who whom
 
 
 def tokenize(text: str) -> list[str]:
-    """Words, lowercased, stopwords removed.
-
-    Keeps `£1.85`, `9p` and `1:23` whole -- those are exactly the literal
-    strings the lexical half is best at, and splitting them would throw away
-    the advantage it exists for.
-    """
+    """Words, lowercased, stopwords removed; `1:23` and `9p` stay whole."""
     return [t for t in _WORD.findall(text.lower()) if t not in STOPWORDS]
 
 
 # ----------------------------------------------------------------- metrics
 
 def reciprocal_rank(ranked: list[int], relevant: set[int]) -> float:
-    """1/rank of the first relevant chunk, or 0. The headline number.
-
-    Reciprocal rather than a hit count because position is what a person
-    experiences: an answer at rank 1 and the same answer at rank 8 are not the
-    same result, and precision@k cannot tell them apart.
-    """
+    """1/rank of the first relevant chunk, or 0."""
     for position, chunk_id in enumerate(ranked, start=1):
         if chunk_id in relevant:
             return 1.0 / position
@@ -98,12 +61,7 @@ def recall_at(ranked: list[int], relevant: set[int], k: int) -> float:
 
 
 def overlap(query: str, corpus_terms: set[str]) -> float:
-    """What fraction of a query's content words appear in the corpus.
-
-    The check a paraphrase set needs. High overlap on a case labelled
-    `paraphrase` means the case is really a literal one wearing a label, and
-    every conclusion drawn from it is about the wrong thing.
-    """
+    """What fraction of a query's content words appear in the corpus."""
     terms = tokenize(query)
     if not terms:
         return 0.0
@@ -112,8 +70,7 @@ def overlap(query: str, corpus_terms: set[str]) -> float:
 
 # -------------------------------------------------------------------- run
 
-#: Where a query stops being answerable lexically. Not a law -- a reading of
-#: this corpus, where BM25 can only fire on words the corpus contains.
+#: Overlap bands the results are grouped by.
 BANDS = ((0.34, "low overlap"), (0.67, "mixed"), (1.01, "high overlap"))
 
 
@@ -147,8 +104,7 @@ def run_case(case: dict[str, Any], config: dict[str, Any], moments: int,
         "mrr": reciprocal_rank(ranked, relevant),
         "top1": 1.0 if ranked and ranked[0] in relevant else 0.0,
         "recall": recall_at(ranked, relevant, moments),
-        # How often the lexical half had an opinion at all. A fused ranking
-        # that is silently dense-only looks exactly like a fused one minus this.
+        # How often the lexical half returned anything.
         "lexical_hits": lexical_fired,
         "units": sum(len(m.hits) for m in found),
         "elapsed_s": round(time.perf_counter() - started, 3),
@@ -162,8 +118,7 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return round(statistics.fmean(values), 4) if values else 0.0
 
     by_kind: dict[str, Any] = {}
-    # By measured overlap, in band order -- the label is reported, never
-    # grouped on, because it is an intention and the overlap is a measurement.
+    # By measured overlap, in band order.
     order = [name for _, name in BANDS] + ["unknown"]
     for band in [b for b in order if any(r.get("band") == b for r in rows)]:
         part = [r for r in rows if r.get("band") == band]
@@ -186,12 +141,7 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def corpus_terms(video_ids: Iterable[str]) -> set[str]:
-    """Every content word the index holds, read from `embedded.json`.
-
-    That file exists to be read rather than searched, which is exactly what
-    this needs -- and it is the same text the vectors were built from, so an
-    overlap measured here is the overlap the lexical half sees.
-    """
+    """Every content word the index holds, read from `embedded.json`."""
     from falconvar.video_rag.embed import readable
 
     terms: set[str] = set()
@@ -207,6 +157,8 @@ def corpus_terms(video_ids: Iterable[str]) -> set[str]:
 # ------------------------------------------------------------------- main
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     ap = argparse.ArgumentParser(
         description="Grade a retrieval configuration against a query set.")
     ap.add_argument("cases", type=Path, nargs="?",
@@ -233,9 +185,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         for case in cases:
             share = overlap(case["query"], terms)
             kind = case.get("kind", "literal")
-            # A paraphrase is supposed to share little wording; a literal case
-            # is supposed to share a lot. Either label can be wrong, and a
-            # wrong one is worse than no label.
+            # Flag a case whose label disagrees with its measured overlap.
             wrong = (kind == "paraphrase" and share > 0.67) or \
                     (kind == "literal" and share < 0.34)
             bad += wrong
