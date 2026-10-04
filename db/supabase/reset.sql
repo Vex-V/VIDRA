@@ -1,14 +1,8 @@
--- Drop everything the pipeline owns, then re-run install.sql.
+-- Drop everything the pipeline owns, then run video_rag.sql and aggregates.sql.
 --
--- Separate from install.sql because install.sql is safe to re-run against a
--- live database and this is not: it destroys every row, including descriptions
--- and embeddings that cost money to produce. Nothing calls it; it is run by
--- hand, deliberately.
---
--- The later statements remove what earlier versions left behind: a `ver3`
--- schema from before the rename, and the tables the pipeline before that wrote
--- into `public`. Nothing writes to either now. Harmless on a database that
--- never had them.
+-- Destroys every row, including descriptions and embeddings that cost money to
+-- produce. Run by hand only. The later statements remove leftovers of older
+-- versions (a `ver3` schema, tables in `public`); harmless when absent.
 
 drop schema if exists falconvar cascade;
 

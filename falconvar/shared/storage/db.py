@@ -1,13 +1,6 @@
-"""The Supabase client, and the one place that knows the key names.
+"""The Supabase client, batched writes, and the key variable names.
 
-Imports nothing from the components. Every stage that writes rows gets its
-client here, so "which env var holds the key" is answered once -- the mistake
-the embedder made by inventing its own list, where `OPENAI_API` worked for the
-describer and not for it.
-
-**Two keys, and which one you get depends on what you are doing.** The secret
-key writes; the publishable one reads. A reader handed a writing key is a
-larger blast radius than the job needs.
+The secret key writes; the publishable key reads.
 """
 
 from __future__ import annotations
@@ -15,13 +8,9 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from .. import env
-from ..errors import Unavailable
+from ..reporting.errors import Unavailable
 
-#: falconvar's tables live in their own Postgres schema, not `public`. falconvar's
-#: are still deployed alongside and `video_embeddings` collides outright, so a
-#: shared schema would mean `create table if not exists` silently doing nothing
-#: and every write landing in the wrong shape.
+#: The Postgres schema every table lives in.
 SCHEMA = "falconvar"
 
 URL_VARS = ("SUPABASE_URL",)
@@ -35,18 +24,15 @@ class DatabaseUnavailable(Unavailable):
 
 
 class SchemaOutOfDate(DatabaseUnavailable, RuntimeError):
-    """A database whose schema predates this code: `install.sql` was not
-    re-run. Not fixed by retrying, which is what makes it `Unavailable`; a
-    `RuntimeError` still, as it always was."""
+    """A database whose schema predates this code: re-run the schema files."""
 
 
 def _first(names: tuple[str, ...]) -> Optional[str]:
-    env.load()
     return next((os.environ[n] for n in names if os.environ.get(n)), None)
 
 
 def configured(write: bool = True) -> bool:
-    """Whether a client could be built. Asked before offering the backend."""
+    """Whether a client could be built."""
     names = SECRET_VARS if write else PUBLISHABLE_VARS
     return bool(_first(URL_VARS) and _first(names))
 
@@ -70,13 +56,8 @@ def client(url: Optional[str] = None, key: Optional[str] = None,
 
 
 def upsert_vectors(table: str, rows: list[dict[str, Any]], api: Any = None) -> int:
-    """`upsert`, with the one refusal a new embedder is likely to meet.
-
-    A database whose column is still `vector(1536)` refuses any other width
-    with "expected 1536 dimensions" -- true, and no help towards the fix.
-
-    Here rather than beside the moment index because both tiers write vectors:
-    `embed` the chunk units, `aggregates` the whole-video one.
+    """`upsert`, turning a fixed-width vector column's refusal into "re-run the
+    schema file".
     """
     try:
         return upsert(table, rows, api)
@@ -85,21 +66,13 @@ def upsert_vectors(table: str, rows: list[dict[str, Any]], api: Any = None) -> i
             raise
         raise SchemaOutOfDate(
             f"{table} refused these vectors ({exc}). The column still has a "
-            "fixed width: re-run db/supabase/install.sql, which lets it hold "
+            "fixed width: re-run db/supabase/video_rag.sql, which lets it hold "
             "any embedder's") from None
 
 
 
 def as_vector(value: Any) -> list[float]:
-    """A pgvector column as floats, whatever PostgREST handed back.
-
-    **It hands back a string.** `vector(1536)` arrives as the text
-    `"[-0.0342,0.0450,...]"`, not a list -- so a cosine written against a list
-    silently compared nothing, returned its "these are not comparable"
-    sentinel for every row, and left `sorted` to preserve the order the rows
-    happened to arrive in -- a ranking nobody had computed. Measured: every
-    similarity -1.0 across a 4-row table.
-    """
+    """A pgvector value as floats: PostgREST returns it as a string."""
     if isinstance(value, str):
         try:
             return [float(x) for x in value.strip("[]").split(",") if x]
@@ -110,11 +83,7 @@ def as_vector(value: Any) -> list[float]:
 
 def upsert(table: str, rows: list[dict[str, Any]], api: Any = None,
            chunk: int = 200) -> int:
-    """Upsert rows in batches. Returns how many were sent.
-
-    Batched because a three-hour video's `chunk_samplers` is thousands of rows
-    and a single request would be refused on size rather than on content.
-    """
+    """Upsert rows in batches. Returns how many were sent."""
     if not rows:
         return 0
     api = api or client()
@@ -125,12 +94,8 @@ def upsert(table: str, rows: list[dict[str, Any]], api: Any = None,
 
 def delete_stale_chunks(table: str, video_id: str, keep_below: int,
                         api: Any = None) -> None:
-    """Remove rows naming a chunk that no longer exists.
-
-    A grid that shrank leaves rows for chunks nobody can play. The file writers
-    rewrite their whole document and never have this problem; an upserting
-    table keeps whatever it was not told to remove. Deleted *after* the
-    upserts, so a failure leaves the previous copy whole rather than a hole.
+    """Delete rows for chunks past `keep_below` (a grid that shrank). Call after the
+    upserts.
     """
     api = api or client()
     (api.table(table).delete()
@@ -139,11 +104,8 @@ def delete_stale_chunks(table: str, video_id: str, keep_below: int,
 
 def delete_except(table: str, match: dict[str, Any], column: str,
                   keep: list[Any], api: Any = None) -> None:
-    """Remove the rows matching `match` whose `column` is not in `keep`.
-
-    After the upserts, for the reason `delete_stale_chunks` is: a document that
-    shrank leaves rows it no longer holds, and deleting first would leave a
-    hole if the upsert failed.
+    """Delete the rows matching `match` whose `column` is not in `keep`. Call after
+    the upserts.
     """
     api = api or client()
     query = api.table(table).delete()

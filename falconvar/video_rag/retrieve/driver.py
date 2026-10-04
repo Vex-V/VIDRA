@@ -1,16 +1,8 @@
 """The retrieve component: a query -> ranked moments. Writes nothing.
 
-**The query is embedded with the embedder that built the index.** Not a
-default, an argument. A mismatch across widths fails loudly; a mismatch between
-two models of the same width returns a well-formed ranking that means nothing,
-which is why every row carries its embedder key and every query filters on it
-before a distance is taken -- searching with the wrong model matches no rows
-rather than the wrong vectors.
-
-Ranking is Postgres', through the `search_embeddings` RPC in `postgres.py`.
-There were two backends and the other one, embedded Qdrant, ranked worse on
-the half that differed: no stemming and raw term counts where `Modifier.IDF`
-expects BM25 weights, measured at 13 of 41 units matched against Postgres' 21.
+The query is embedded with the embedder that built the index; every row
+carries its embedder key and only rows in that space are searched. Ranking is
+the database's (`Database.search`; for Supabase the `vr_search` RPC).
 """
 
 from __future__ import annotations
@@ -20,25 +12,17 @@ from typing import Any, Mapping, Optional, Sequence
 
 from ..boundaries import load as load_timeline
 from falconvar.shared.models import embedders as embedders_mod
-from . import postgres
 from .search import Moment, to_moments
-from falconvar.shared.errors import Refused
-from falconvar.shared.paths import MissingArtifact
+from falconvar.shared.reporting.errors import Refused
+from falconvar.shared.models.roles import Models, keys_of, unpack
+from falconvar.shared.storage.database import Database, as_database
+from falconvar.shared.config.paths import MissingArtifact
 
 
 def scope_of(video_id: Optional[str | Sequence[str]] = None,
              video_ids: Optional[Sequence[str]] = None) -> Optional[list[str]]:
-    """The set of videos to search. `None` means every one.
-
-    One video, three, or all of them is the same question asked over a
-    different set -- so the scope is a set, and the single-video case is the
-    one-element case rather than a second endpoint. `video_id` stays accepted
-    as the shorthand it always was.
-
-    Annotated rather than left `Any`: `/capabilities` publishes a parameter's
-    annotation verbatim and the client picks a widget from it, so `Any` is a
-    form field with nothing to build from. It takes a string or a sequence of
-    them, and now says so.
+    """The set of videos to search, from a string or a sequence. None means every
+    one.
     """
     if video_ids is not None:
         chosen = [v for v in video_ids if v]
@@ -52,38 +36,17 @@ def scope_of(video_id: Optional[str | Sequence[str]] = None,
 
 
 def spans_of(video_id: str,
-             timeline: Optional[str | Path] = None) -> list[tuple[float, float]]:
-    """The grid: from a `timeline.json` if one is named, else from `chunks`.
-
-    A span is stored in exactly one place -- the grid -- and everything else
-    joins on `chunk_id`. The database holds the other copy of that same grid,
-    so it is a second reading of one source rather than a second source.
-
-    **The local half used to be found rather than given**, by resolving
-    `timeline.json` under a data root. That made a search depend on this
-    project's directory layout: measured, moving one file aside turned a
-    working query into `404 No such file or directory`. A caller that has the
-    grid on disk names it; one that does not gets the database, which is
-    where the vectors being searched already live.
-    """
+             timeline: Optional[str | Path] = None,
+             database: Optional[str | Database] = None) -> list[tuple[float, float]]:
+    """The grid: from a `timeline.json` if one is named, else from the database."""
     if timeline is not None and Path(timeline).exists():
         return load_timeline(timeline).spans
-    from falconvar.shared.storage import db
-    rows = (db.client(write=False).table("chunks")
-            .select("chunk_id,start_ts,end_ts")
-            .eq("video_id", video_id).order("chunk_id").execute().data or [])
-    return [(float(r["start_ts"]), float(r["end_ts"])) for r in rows]
+    return as_database(database or "supabase").spans(video_id)
 
 
 def chunks_in(spans: Sequence[tuple[float, float]],
               after: Optional[float], before: Optional[float]) -> list[int]:
-    """Which chunks overlap a time window.
-
-    Time is not a field on a vector and deliberately is not one: a span lives
-    in the grid, so seconds are resolved to chunk ids here and the filter that
-    reaches the database is the one that already existed -- no column, no
-    migration, and nothing already stored becomes unreachable.
-    """
+    """Which chunks overlap a time window."""
     lo = float("-inf") if after is None else after
     hi = float("inf") if before is None else before
     return [i for i, (start, end) in enumerate(spans) if end > lo and start < hi]
@@ -102,11 +65,11 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
            before: Optional[float] = None,
            structured: Optional[dict[str, Any]] = None,
            video_ids: Optional[Sequence[str]] = None,
-           grids: Optional[Mapping[str, str | Path]] = None
+           grids: Optional[Mapping[str, str | Path]] = None,
+           database: Optional[str | Database] = None,
+           models: Optional[Models] = None
            ) -> tuple[list[Moment], list[str]]:
-    """Ranked moments, and anything the caller should be told about the ranking.
-
-    The five calls worth knowing, out of the fourteen parameters:
+    """Ranked moments, and notes about the ranking.
 
         # every video in the index
         moments, notes = retrieve.search("the audience laughed")
@@ -118,41 +81,30 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
         moments, notes = retrieve.search("the key insight", video_id="talk",
                                          after=120.0, before=300.0)
 
-        # by question, wherever it was asked -- which is the query a person
-        # actually makes. Not a suffix match on the pairing: a bare id like
-        # `clip` means the question *is* the strategy name.
+        # by question, wherever it was asked
         moments, notes = retrieve.search("the diagram", video_id="talk",
                                          question="text")
 
-        # several named videos. `video_id` is the one-element shorthand for
-        # `video_ids`, and omitting both searches everything.
+        # several named videos
         moments, notes = retrieve.search("the budget",
                                          video_ids=["q1", "q2"])
 
-    **Read `notes` when `moments` is empty.** That is the case they exist
-    for, and it used to be unreachable: they rode on each moment, so a search
-    that matched nothing returned a bare `[]` with nowhere to say why. Found
-    by searching with an embedder that had never indexed the video -- a silent
-    200. The note names the embedder key, because that is exactly how such a
-    search comes back empty.
-
-    **A `Moment.score` is a rank fusion, not a similarity.** Measured on the
-    four-video corpus, a nonsense query scores 0.1136 against a real one's
-    0.1294: there is no relevance floor, and the number alone says nothing.
-    The ranks on each hit are the signal.
+    Read `notes` when `moments` is empty: they say why. A `Moment.score` is a rank
+    fusion, not a similarity. `database` is a built `Database` or a name
+    (`supabase` by default); `models` supplies the embedder the index was built
+    with.
     """
     if not (query or "").strip():
-        # Refused here rather than at the provider. An empty string reached
-        # OpenAI and came back `400 Invalid 'input'` -- an error about the
-        # request body, from inside the embedder, for a mistake the caller made
-        # and can fix. A search for nothing has no answer worth inventing.
+        # An empty query is refused here rather than at the provider.
         raise Refused("a search needs a query; this one is empty")
 
     scope = scope_of(video_id, video_ids)
-    built = embedders_mod.build(embedder)
+    # The client reads its key when built.
+    with keys_of(models):
+        built = embedders_mod.build(unpack(models, embedder=embedder)["embedder"])
     return _search(built, query, scope, moments, sampler, question,
                    candidates, strategy, chunk_ids, window, after, before,
-                   structured, grids)
+                   structured, grids, as_database(database or "supabase"))
 
 
 def _search(built, query: str,
@@ -162,37 +114,29 @@ def _search(built, query: str,
             chunk_ids: Optional[Sequence[int]], window: int,
             after: Optional[float], before: Optional[float],
             structured: Optional[dict[str, Any]],
-            grids: Optional[Mapping[str, str | Path]] = None
+            grids: Optional[Mapping[str, str | Path]],
+            database: Database
             ) -> tuple[list[Moment], list[str]]:
     notes: list[str] = []
-    # A grid per video in scope. `chunk_id` is an index into ONE video's grid,
-    # so it means nothing without knowing whose.
-    known = list(scope) if scope else _all_videos()
-    spans = {vid: spans_of(vid, (grids or {}).get(vid))
+    # A grid per video in scope: a chunk id means nothing without its video.
+    known = list(scope) if scope else _all_videos(database)
+    spans = {vid: spans_of(vid, (grids or {}).get(vid), database)
              for vid in known}
     one = spans.get(known[0], []) if len(known) == 1 else spans
 
-    # A time window and a chunk set are the same filter. Resolved before the
-    # query so exactly one mechanism reaches the store.
+    # A time window and a chunk set are the same filter.
     wanted: Optional[set[int]] = None
     if chunk_ids:
-        # Truthiness, not `is not None`: an empty list is no constraint, which
-        # is what an empty `video_ids` already meant. Two list-valued filters
-        # reading an empty list opposite ways is a difference nobody could
-        # guess -- `chunk_ids=[]` returned nothing while `video_ids=[]`
-        # returned everything.
+        # An empty list is no constraint, as with `video_ids`.
         wanted = set(int(c) for c in chunk_ids)
     if after is not None or before is not None:
-        # Over every grid in scope: the same second is a different chunk id in
-        # each video, so the union is what a window means across a set.
+        # A window over several videos is the union of each one's chunks.
         in_window: set[int] = set()
         for vid in known:
             in_window |= set(chunks_in(spans.get(vid, []), after, before))
         wanted = in_window if wanted is None else (wanted & in_window)
     if wanted is not None and window:
-        # A neighbourhood, because "more context around chunk 6" is almost
-        # always 5, 6, 7. Chunk ids are contiguous over the grid, so a window is
-        # arithmetic rather than another query.
+        # The neighbours of each matched chunk, `window` either side.
         longest = max((len(v) for v in spans.values()), default=0)
         widened = {c + step for c in wanted
                    for step in range(-window, window + 1)}
@@ -201,26 +145,14 @@ def _search(built, query: str,
     if narrowed is not None and not narrowed:
         return [], notes + ["no chunk matches that window"]
 
-    # The query side: e5, nomic and bge embed a question differently from the
-    # passage it should find, and a query embedded as a document loses recall
-    # with no error anywhere.
+    # Some models embed a query differently from a passage.
     vector = embedders_mod.query_vector(built, query)
-    hits = postgres.search(vector, query, built.key, candidates, scope,
+    hits = database.search(vector, query, built.key, candidates, scope,
                            sampler, question, strategy, narrowed, structured)
     if not hits:
         if any(f is not None for f in (sampler, question, strategy,
                                        narrowed, structured, scope)):
-            # Nothing matched a filter is a different answer from nothing
-            # indexed, and only one of them is worth re-running `embed` over.
-            #
-            # `scope` counts as a filter: naming a video that holds nothing is
-            # "no such video in this index", not "this deployment has never
-            # embedded anything" -- and the raise below tells you to run
-            # `embed`, which would not help.
-            #
-            # Named with the embedder: a space holds only what was embedded
-            # with that model, so searching with one that never indexed these
-            # videos comes back empty in exactly this way.
+            # Nothing matched the filters, as opposed to nothing indexed in this space.
             return [], notes + [f"nothing matched those filters in {built.key} -- "
                                 "if that embedder never indexed these videos, "
                                 "embed them with it first"]
@@ -234,11 +166,7 @@ def _search(built, query: str,
                      "contributes fewer terms, so scores fall -- to a single "
                      "1/(k+rank) when only one unit per chunk survives")
     if scope is None or len(known) > 1:
-        # More than one video in one ranking is the case the chunk aggregation
-        # was designed for and has never been exercised: a chunk contributes
-        # one term per sampler that described it, so a video described by more
-        # samplers would win on count if the score summed rather than taking
-        # the best plus a discounted second.
+        # Moments from several videos share one ranking.
         notes.append(f"scope is {len(known)} videos: moments are keyed by "
                      "(video_id, chunk_id), since a chunk id only means "
                      "something inside one grid")
@@ -246,45 +174,17 @@ def _search(built, query: str,
                       one, moments), notes
 
 
-def _all_videos() -> list[str]:
-    """Every video the database has a grid for.
-
-    It used to read the output directory first and fall back to `timelines`.
-    There is no output directory to read now -- a component is pointed at
-    files rather than resolving them -- and the database is the copy that the
-    vectors being searched are stored beside, so it is the only honest answer
-    to "every video this search could reach".
-    """
+def _all_videos(database: Database) -> list[str]:
+    """Every video the database has a grid for."""
     try:
-        from falconvar.shared.storage import db
-        rows = (db.client(write=False).table("timelines")
-                .select("video_id").execute().data or [])
-        return [r["video_id"] for r in rows]
+        return database.video_ids()
     except Exception:                                    # noqa: BLE001
         return []
 
 
-def videos(query: str, embedder: Optional[str] = None, limit: int = 5
-           ) -> list[dict[str, Any]]:
-    """Which video is this about. A different question from which moment.
-
-    `search` answers *which twenty seconds*, and every filter it takes narrows
-    inside one video. This ranks whole videos by their summary, from
-    `video_embeddings` -- so a caller can find the video first and then search
-    inside it, which is the two-step a single index cannot serve: a whole-video
-    "moment" beside real ones would be a result nobody can play.
-
-    Postgres only, because that is where the summaries are written.
-    """
-    built = embedders_mod.build(embedder)
-    # The query side: e5, nomic and bge embed a question differently from the
-    # passage it should find, and a query embedded as a document loses recall
-    # with no error anywhere.
-    vector = embedders_mod.query_vector(built, query)
-    return postgres.search_videos(vector, built.key, limit)
-
-
 def main(argv: Optional[list[str]] = None) -> int:
+    from falconvar.shared.config import env
+    env.load()        # an entry point reads .env; the library never does
     import argparse
     import json
 
@@ -314,6 +214,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "`severity=severe,environment=outdoor`")
     ap.add_argument("--candidates", type=int, default=20,
                     help="units ranked per half before fusion (default 20)")
+    ap.add_argument("--database", default="supabase",
+                    help="where the index is read from: `supabase`, or `folder` "
+                         "for the output folder itself, no server")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -331,7 +234,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                               question=args.question, strategy=args.strategy,
                               chunk_ids=chunk_ids, window=args.window,
                               after=args.after, before=args.before,
-                              structured=structured)
+                              structured=structured, database=args.database)
     except (KeyError, ValueError, FileNotFoundError,
             embedders_mod.EmbedderUnavailable) as exc:
         print(f"error: {exc}")
