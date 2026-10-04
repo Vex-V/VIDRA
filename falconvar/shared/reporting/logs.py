@@ -1,16 +1,12 @@
-"""What a run says about itself, for whoever is listening.
+"""Logging: one logger per component, `falconvar.<component>`, and no handler.
 
-One logger per component, `falconvar.<component>`, and **no handler anywhere**
--- a library that configures logging configures it for the application that
-imported it. `falconvar/__init__.py` attaches a `NullHandler` and nothing
-else, so the default is silence and a caller opts in:
+`falconvar/__init__.py` attaches a `NullHandler`, so the default is silence:
 
     import logging
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("falconvar").setLevel(logging.DEBUG)
 
-Every record carries structured fields on `extra`, so a handler that wants
-JSON has them without parsing the message:
+Every record carries structured fields on `extra`:
 
     video_id     which video
     component    the same vocabulary as `Produced.component`
@@ -19,15 +15,9 @@ JSON has them without parsing the message:
     artifact     for a read or a write
     reason       for a skip
 
-**Levels, and one departure from the obvious.** DEBUG is what was read, what
-was skipped and why. INFO is a component starting and finishing, with its
-headline numbers. ERROR is a failure.
-
-WARNING is *not* used for a setting resolved by its default -- `providers`
-choosing openai is the documented answer, published by `/capabilities`, not a
-fallback, and warning on a working default teaches people to filter warnings
-out. It is reserved for what this tree already reports-and-continues: the
-best-effort Supabase write, and a `prompts_error`.
+DEBUG is what was read and skipped; INFO is a component starting and
+finishing; WARNING is a failed database write that was continued past; ERROR
+is a failure.
 """
 
 from __future__ import annotations
@@ -38,8 +28,7 @@ from typing import Any, Optional
 
 ROOT = "falconvar"
 
-#: The fields every record may carry. Named here so a formatter can ask for
-#: them without a record that lacks one raising inside logging itself.
+#: The fields every record may carry.
 FIELDS = ("video_id", "component", "event", "duration_ms", "artifact", "reason")
 
 
@@ -48,28 +37,19 @@ def logger(component: str) -> logging.Logger:
     return logging.getLogger(f"{ROOT}.{component}")
 
 
-#: Attribute names a `LogRecord` already owns. `extra` holding one of these
-#: does not shadow it -- `logging` raises `KeyError: Attempt to overwrite
-#: 'name' in LogRecord` and takes the run down with it. A component's stats
-#: are its own business and may legitimately be called `module` or `name`, so
-#: a collision is renamed rather than refused: a logging call must never be
-#: the thing that fails a stage that has already done its work.
+#: Attribute names a `LogRecord` already owns; an `extra` key with one of these
+#: names is renamed.
 RESERVED = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None)))
 
 
 def _extra(component: str, event: str, video_id: Optional[str],
            rest: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """`rest` is a dict and not `**kwargs` on purpose: a component's stats are
-    its own vocabulary, and `done(video_id=...)` is a perfectly reasonable
-    thing to write -- as `**kwargs` it collided with this function's own
-    parameter and took the run down from inside a logging call."""
+    """The `extra` dict for one record; `rest` holds a component's own stats."""
     fields = {"component": component, "event": event, "video_id": video_id}
     for key, value in (rest or {}).items():
         if value is None:
             continue
-        # A stat may not overwrite the three structural fields either: a
-        # record claiming a component it did not come from is worse than one
-        # with an awkwardly named number on it.
+        # A stat may not overwrite the structural fields.
         taken = key in RESERVED or key in ("component", "event", "video_id")
         fields[f"stat_{key}" if taken else key] = value
     return fields
@@ -102,12 +82,7 @@ class timed:
             ...
             done(described=12, skipped=3)
 
-    The closing call takes the headline numbers, because they do not exist
-    until the work does -- and a finish line with no numbers is the thing a
-    poller could already infer from the next start line.
-
-    A failure logs ERROR with the elapsed time and re-raises. Nothing is
-    swallowed: this reports, it does not handle.
+    A failure logs ERROR with the elapsed time and re-raises.
     """
 
     __slots__ = ("component", "video_id", "started", "_stats")
@@ -119,12 +94,8 @@ class timed:
         self._stats: dict[str, Any] = {}
 
     def __call__(self, video_id: Optional[str] = None, **stats: Any) -> None:
-        """The headline numbers, and -- for `media` -- the id itself.
-
-        `media` is the one component that does not know its video id until it
-        has run: a different file wanting a taken id is given a new one. So
-        the id is settable here rather than only at construction, and it lands
-        in the structural `video_id` field where a handler looks for it.
+        """Record the headline numbers, and optionally the video id (which `media`
+        only knows once it has run).
         """
         if video_id is not None:
             self.video_id = video_id

@@ -1,8 +1,13 @@
 """What more than one component needs.
 
-    paths.py        where things live; the only module that knows a filename
-    env.py          reading `.env` at the top of an entry point
-
+    config/         where things are, and what a process was told
+      paths.py      where things live; the only module that knows a filename
+      env.py        reading a `.env` -- by an entry point, or when asked
+      settings.py   `falconvar.configure()`
+    reporting/      how a run tells its caller something
+      errors.py     every deliberate failure, as a `FalconvarError`
+      logs.py       records at the choke points
+      progress.py   events from inside the long stages
     contracts/      what components hand each other
       documents.py  what every artifact is
       schemas.py    JSON Schema generated from the dataclasses
@@ -14,7 +19,7 @@
       providers.py  which provider serves a role, and how to reach it
       llm.py        asking a model for text or a JSON shape
 
-`paths` and `env` sit at the top because everything below imports them.
-`paths` and `documents` import nothing. A module only one component needs does
-not belong here.
+`reporting/errors` and `contracts/documents` import nothing of ours but each
+other's leaf; `config/paths` only errors. A module only one component needs
+does not belong here.
 """
