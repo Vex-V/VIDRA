@@ -1,166 +1,118 @@
 # FalCONvar
 
-Video RAG ingestion. A video goes in; a searchable index of moments comes out.
+Video RAG ingestion, as a library. A video goes in; both the picture and the
+soundtrack are read onto **one chunk grid**, described, embedded, and a
+searchable index of moments comes out. A second tier answers questions over the
+whole video: summaries, chapters, and who is who across chunks.
 
-Both the picture and the soundtrack are read onto **one chunk grid**. Everything
-downstream is keyed by `(video_id, chunk_id)`.
+`CLAUDE.md` is the reasoning behind every decision here, and records what is
+measured and what is not. `db/json/` holds every document's JSON Schema,
+generated from the dataclasses.
 
 ## Install
 
-Working on FalCONvar itself:
-
 ```bash
-pip install -r requirements.txt   # all of it: nothing falls back without a package
-pip install -e .              # then `python -m falconvar.…` from any directory
-cp .env.example .env          # OpenAI key; Supabase and HF tokens if used
+pip install -r requirements.txt   # working on it: all of it, nothing falls back
+pip install -e .
+cp .env.example .env              # provider keys; Supabase and HF tokens if used
 ```
 
-Using it as a library, where the heavy halves are opt-in:
+As a dependency, the heavy halves are opt-in:
 
 ```bash
 pip install falconvar            # core: uniform sampling + an API model
-pip install "falconvar[local]"   # clip/yolo/objects/text, and in-process models
+pip install "falconvar[local]"   # clip/yolo/objects/text samplers, local models
 pip install "falconvar[audio]"   # whisper + pyannote
 pip install "falconvar[all]"
 ```
 
-An extra you did not install still fails with a plain `ModuleNotFoundError` at
-the point it is needed — nothing falls back to a second code path.
+An extra you did not install fails with a plain `ModuleNotFoundError` where it
+is needed.
+
+## Use
 
 ```python
-import falconvar
-falconvar.configure(data_root="/var/lib/falconvar")   # before anything runs
+from falconvar import Models, Supabase, aggregates
+from falconvar.video_rag import layout, search, video_rag
 
-from falconvar.video_rag import video_rag             # the whole pipeline
-run = video_rag("x.mp4", policy="scene", sampler="clip:[text,scene]")
+# who answers each role, chosen once and checked when built
+models = Models(describer="openai", embedder="local", llm="openai")
 
-from falconvar.video_rag import embed, describe       # or one component
-embed.run(run.video_id, embedder="local", index_name="qdrant")
-descriptions = describe.load(run.video_id)            # and read it back
+run = video_rag("x.mp4", "data/out", policy="scene", sampler="clip,yolo",
+                models=models)                      # media -> ... -> embed
+at = layout(run.home)                               # every file in its folder
+
+done = aggregates.aggregate(run.home, at["aggregates"], previous=at["aggregates"],
+                            models=models, summary=True, entities_people=True)
+summary = aggregates.load(done.artifacts["summary"]).payload
 ```
 
-Without `configure()` and outside a checkout, everything is written under
-`~/.falconvar`; `FALCONVAR_DATA` and `FALCONVAR_WEIGHTS` move it too.
+`example.py` is that, runnable. A copy in a database is one more argument, and
+search reads it back:
 
-For the Postgres backend, run `db/supabase/install.sql` in the SQL editor and
-add `falconvar` to **Settings → API → Exposed schemas**. The file is idempotent
-and is also how a schema change is applied — re-run the whole thing.
-`db/supabase/reset.sql` drops everything first, and is the only destructive one.
-
-### Deleting every video, locally and in Supabase
-
-Irreversible: descriptions, embeddings and llm aggregates cost paid calls to
-rebuild. Stop the API first -- the embedded Qdrant store is locked while it runs.
-Keeps the schema, custom prompts and definitions (`data/*.json`), `data/eval/`
-and `weights/`, so nothing needs re-installing.
-
-```bash
-python db/wipe.py                 # lists what it will delete, then asks you to type 'delete'
-python db/wipe.py --local         # only data/out and data/uploads
-python db/wipe.py --supabase      # only the rows
+```python
+db = Supabase()                                     # SUPABASE_* from .env
+run = video_rag("x.mp4", "data/out", models=models, database=db)
+moments, notes = search("the moment the reactor exploded", run.video_id,
+                        models=models, database=db)
 ```
 
-## Quickstart
+For Supabase, run `db/supabase/video_rag.sql` and then `db/supabase/aggregates.sql`
+in the SQL editor, and add `falconvar` to **Settings → API → Exposed schemas**.
+video_rag's tables start `vr_`, the aggregates' `ag_`. Both files are idempotent
+and are how a schema change is applied; `reset.sql` drops everything first.
 
-```bash
-python -m falconvar.workflow samples/video.mp4 --policy vad --sampler clip,yolo:overview
-python -m falconvar.video_rag.retrieve "the moment the reactor exploded" video
-python -m uvicorn api.main:app --port 8000     # the app at /, /docs for the schema
-python example.py                             # both levels of the library, side by side
-```
+A role can still be a string per call (`embedder="local"`), and a database a
+name (`database="supabase"`). Setting a role both ways is refused. The one rule
+that matters: **search with the embedder that built the index**, which a single
+`Models` makes the default.
 
 ## The pipeline
 
-Two tiers, each a driver over the components in its folder, and `workflow`
-runs one then the other:
+Two tiers. `video_rag` extracts, and is a complete RAG engine on its own.
+`aggregates` answers over what it extracted and never reads the video.
+`workflow` runs one, then the other.
 
-- **`video_rag`** extracts, and is a complete RAG engine on its own: the picture
-  and the soundtrack onto one chunk grid, described, embedded, searchable.
-- **`aggregates`** answers higher-level questions over what video_rag extracted
-  — counts, speakers, summaries, chapters, entities — and never reads the video.
+Every component takes the files it reads and the file it writes, so each runs
+alone, and each also has a verb that works on objects with no filesystem.
 
-Every component reads files and writes files, none imports another, and every
-one has the signature `run(video_id, ...) -> Produced`, with `load(video_id)`
-to read what it wrote back.
-
-| # | tier | component | reads | writes |
+| # | component | reads | writes | verb |
 |---|---|---|---|---|
-| 1 | video_rag | `media` | the media file | `media.json` |
-| 2 | video_rag | `audio` | `media.json` | `transcript.raw.json` |
-| 3 | video_rag | `boundaries.evidence` | `media.json` *or* `transcript.raw.json` | `cuts.json` |
-| 4 | video_rag | `boundaries` | `media.json` + `cuts.json` | **`timeline.json`** |
-| 5 | video_rag | `video` | `media.json` + `timeline.json` | `manifest.json`, `store/` |
-| 6 | video_rag | `cut` | `transcript.raw.json` + `timeline.json` | `transcript.json` |
-| 7 | video_rag | `describe` | `manifest.json` + `store/` | `descriptions.json` |
-| 8 | video_rag | `embed` | `descriptions.json` + `transcript.json` | vectors, `embedded.json` |
-| 9 | aggregates | `aggregate` | everything above | `aggregates/*.json`, the video's vector |
+| 1 | `media` | the video | `media.json` | `split` |
+| 2 | `audio` | `media.json` | `transcript.raw.json` | `listen` |
+| 3 | `boundaries.evidence` | `media.json` *or* the raw transcript | `cuts.json` | `detect` |
+| 4 | `boundaries` | `media.json` + `cuts.json` | **`timeline.json`** | `timeline` |
+| 5 | `video` | `media.json` + `timeline.json` | `manifest.json`, `store/` | `ingest` |
+| 6 | `cut` | the raw transcript + `timeline.json` | `transcript.json` | `apply` |
+| 7 | `describe` | `manifest.json` + `timeline.json` + `store/` | `descriptions.json` | `answer` |
+| 8 | `embed` | `descriptions.json` + `transcript.json` | `embedded.json` (text and vectors) | `encode` |
+
+`--policy` decides where the grid's boundaries come from: `uniform`
+(arithmetic, needs nothing), `scene` (picture changes), `vad` (silences) or
+`speaker` (voice changes).
 
 ```bash
-python -m falconvar.video_rag samples/x.mp4 --sampler clip       # tier 1 only
-python -m falconvar.aggregates <id> --tier llm --index supabase  # tier 2 over it
+python -m falconvar.workflow samples/x.mp4 --sampler clip,yolo --tier llm
+python -m falconvar.video_rag samples/x.mp4 data/out --sampler clip   # tier 1 only
+python -m falconvar.aggregates data/out/<id> --out data/out/<id>/aggregates --summary --ner
+python -m falconvar.aggregates --list                                 # every aggregator
+
+# one component at a time; per-stage tuning lives here, not on workflow
+python -m falconvar.video_rag.media samples/x.mp4 data/out
+python -m falconvar.video_rag.boundaries D/media.json D/cuts.json --policy scene --evidence
+python -m falconvar.video_rag.boundaries D/media.json D/timeline.json --policy scene --cuts D/cuts.json
+python -m falconvar.video_rag.video D/media.json D/timeline.json D/manifest.json --sampler "clip:[text,scene]"
+python -m falconvar.video_rag.describe D/manifest.json D/timeline.json D/store D/descriptions.json
+python -m falconvar.video_rag.embed D/embedded.json --descriptions D/descriptions.json --embedder local
+python -m falconvar.video_rag.retrieve "..." <id> --question text --embedder local
 ```
 
-Everything a run writes lands in `data/out/<video-id>/`:
-
-```
-media.json           the two streams and their addressing
-transcript.raw.json  words, segments and speaker turns — no chunk ids
-cuts.json            boundary evidence, and the score series behind it
-timeline.json        THE GRID: every chunk's span
-manifest.json        which frames each sampler kept
-store/               those frames as JPEG, named by read index
-transcript.json      what was said, cut to the grid
-descriptions.json    one model answer per (chunk, sampler:question)
-embedded.json        the text that went into the index, without the vectors
-aggregates/*.json    one file per answer: summary.json, entities.people.json
-```
-
-Vectors go to `data/out/_qdrant/` or to Postgres, not into the video's
-directory.
-
-### The grid
-
-`--policy` decides where boundaries come from, which decides what has to run
-first:
-
-| policy | boundaries come from | runs first |
-|---|---|---|
-| `uniform` | arithmetic over the duration | **nothing** |
-| `scene` | frame-to-frame content change | a scene pass over the picture |
-| `vad` | silences between speech | the audio pass |
-| `speaker` | where the voice changes | the audio pass |
-
-Three guards apply under every policy: `--min-chunk` merges spans below the
-floor, `--max-chunk` splits those above the ceiling (defaulting to
-`--chunk-duration`), and a final chunk shorter than a quarter of the chunk
-length is merged into the one before it. A floor above the ceiling is refused.
-
-### One component at a time
-
-Per-stage tuning lives on these, not on `workflow`.
-
-```bash
-python -m falconvar.video_rag.media samples/x.mp4
-python -m falconvar.video_rag.audio <id> --transcriber whisper --diarizer pyannote
-python -m falconvar.video_rag.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
-python -m falconvar.video_rag.boundaries <id> --calibrate            # what each threshold costs
-python -m falconvar.video_rag.boundaries <id> --retune 45            # re-threshold, runs no model
-python -m falconvar.video_rag.boundaries <id> --policy scene --min-chunk 30 --max-chunk 60
-python -m falconvar.video_rag.video <id> --sampler "clip:[text,scene]" --per-second 1
-python -m falconvar.video_rag.video <id> --sampler uniform:text --every-frames 5
-python -m falconvar.video_rag.cut <id>
-python -m falconvar.video_rag.describe <id> --describer openai --limit 5     # costs money
-python -m falconvar.video_rag.embed <id> --index qdrant,supabase
-python -m falconvar.aggregates <id> --tier llm
-```
-
-`--sink file,supabase` writes the document to both, on every stage that writes
-one; `embed` takes `--index qdrant,supabase` instead. `--calibrate` and
-`--retune` read the cached score series and run no model.
+Each CLI's `--help` names its files.
 
 ## Samplers and questions
 
-**Samplers** decide which frames get described:
+A **sampler** decides which frames get described; a **question** decides what
+is asked about them. Pair any of each as `name:question`.
 
 | sampler | keeps a frame when |
 |---|---|
@@ -168,302 +120,95 @@ one; `embed` takes `--index qdrant,supabase` instead. `--calibrate` and
 | `yolo` | the people change |
 | `objects` | an open-vocabulary detection changes (`--vocabulary`) |
 | `text` | the writing on screen changes |
-| `uniform` | every Nth decimated frame (`--every-frames`) |
-
-**Questions** decide what is asked about those frames, and the two are
-independent — pair any sampler with any question as `name:question`:
+| `uniform` | every Nth decimated frame |
 
 ```bash
 --sampler uniform:text          # read the screen on a stride
 --sampler yolo:overview         # frames where people changed, asked for prose
---sampler "clip:[text,scene]"   # ONE pass over the video, two questions about it
---sampler clip:text+scene       # the same, for shells that glob brackets
+--sampler "clip:[text,scene]"   # ONE pass over the video, two questions
 ```
 
-A sampler runs once however many questions it carries, and
-`clip:text,clip:scene` merges into that same single pass. Unpaired, a sampler is
-asked the question named after it. Two questions that answer the same field both
-answer it, and both answers are stored and searched separately.
+A custom question is an instruction and a shape, stored in `data/prompts.json`:
 
-Rate limits are applied before a sampler runs: `--min-interval` in seconds and
-`--max-per-chunk`. Every chunk keeps at least one frame.
-
-### Adding a question
-
-A question is an instruction plus a **shape**, and the shape carries the
-response schema. The shipped shapes are `scene`, `people`, `objects`, `text` and
-`prose`; `yolo` is the `people` shape, `overview` is `prose`. Built-in questions
-live in `falconvar/video_rag/describe/prompts.json`; anything you add lands in
-`data/prompts.json` and may not shadow a built-in.
-
-```bash
-curl -X POST localhost:8000/prompts -H 'Content-Type: application/json' -d '{
-  "name": "safety", "shape": "scene",
-  "instruction": "These {n} frames span {span}. List every safety hazard visible."}'
-
-python -m falconvar.workflow site.mp4 --sampler clip,uniform:safety
+```python
+from falconvar.video_rag import describe
+describe.add_question("safety", "These {n} frames span {span}. List every hazard.",
+                      fields={"hazards": {"type": "list", "about": "Each hazard."},
+                              "severity": {"type": "text", "about": "The worst one.",
+                                           "one_of": ["none", "low", "high"]}})
 ```
 
-An instruction may use `{n}`, `{span}` and `{vocabulary}`; anything else is
-refused at submission. Editing a question re-describes only the pairs that used
-it, and adding one re-describes nothing.
-
-## Retrieval
-
-Descriptions and transcript chunks both become units in one index, keyed
-`(video_id, chunk_id, sampler_id)`. A transcript chunk is
-`sampler_id = transcript`, so it filters exactly like any visual pairing.
-
-```bash
-python -m falconvar.video_rag.retrieve "..." <id>
-python -m falconvar.video_rag.retrieve "..." <id> --sampler clip:text   # one pairing
-python -m falconvar.video_rag.retrieve "..." <id> --question text       # across samplers
-python -m falconvar.video_rag.retrieve "..." <id> --strategy clip       # one sampler's output
-python -m falconvar.video_rag.retrieve "..." <id> --chunks 4,6 --window 1   # drill-down
-python -m falconvar.video_rag.retrieve "..." <id> --after 90 --before 130   # a time window
-python -m falconvar.video_rag.retrieve "..." <id> --where severity=severe   # a fixed vocabulary
-```
-
-A time window is resolved to chunk ids through the grid, so a span is stored in
-one place and both backends get one filter. `--where` only means something
-where a shape fixed the values with `one_of`.
-
-`POST /search` takes `video_ids` as its scope — omit it for every video, name
-one, or name three; a set of one is not a special case. `level: "video"` ranks
-whole videos by their summary out of `video_embeddings` instead of ranking
-chunks.
-
-Ranking is RRF twice: a dense and a lexical ranking fused per unit, then the
-units of a chunk fused into a moment as `1/(k+best) + 0.5/(k+second)` at k=10.
-The number a search returns is a rank fusion, not a similarity.
-
-Two backends, both hybrid: **`qdrant`** (embedded at `data/out/_qdrant/`, or
-served with a url) and **`supabase`** (pgvector + `ts_rank_cd`).
+Editing a question re-describes only the answers that used it.
 
 ## Aggregates
 
-Video-level answers, one file per answer. A tier is a ceiling and they run
-cheapest first, so `--tier llm` runs all three tiers.
+One file per answer, run cheapest first.
 
-| tier | aggregators | |
-|---|---|---|
-| `free` | `stats`, `speakers`, `coverage` | arithmetic |
-| `local` | `ner`, `sentiment` | GPU models |
-| `llm` | `summary`, `chapters`, `events`, `entities:people`, `entities:objects`, `entities:text` | paid calls |
-
-An aggregator that does not apply — `speakers` on a silent video,
-`entities:people` where nobody was asked about people — is skipped with the
-reason rather than failing.
-
-**What an aggregate reads is an input.** Everything outside the free tier takes
-one, and the default is `transcript+*`: what was said, and every description.
-
-| input | reads |
+| cost | aggregators |
 |---|---|
-| `transcript` | what was said |
-| `*` | every answer's prose |
-| `activity` · `clip:activity` · `clip:*` | a question wherever asked · one pairing · everything one sampler answered |
-| `clip:hazards[severity,hazards]` | only those fields, as one input |
-| `yolo[people.clothing]` | keys inside a list's entries |
-| `x+y` | sources joined into one input |
-| `x,y` | separate inputs — one answer each |
+| free | `stats`, `speakers`, `coverage` |
+| local | `ner`, `sentiment` |
+| llm | `summary`, `chapters`, `events`, `entities:people`, `entities:objects`, `entities:text` |
 
-```bash
-python -m falconvar.aggregates <id> --tier llm --input summary=transcript+clip:activity
-python -m falconvar.aggregates <id> --tier llm --only summary \
-       --input "summary=clip:hazards[severity],clip:hazards[hazards]"  # summary~severity, summary~hazards
-python -m falconvar.aggregates --list                                 # every aggregator, and what it reads
+What a text aggregator reads is a selection, defaulting to `transcript+*`:
+`clip:activity` is one pairing, `clip:hazards[severity,hazards]` two fields as
+one input, `a+b` joins, and `a,b` gives two answers.
+`entities:<profile>` links the same person or thing across chunks by rules,
+not by a model, then writes one account per entity.
+
+A custom aggregate prompt is stored in `data/aggregates.json` and runs like the
+built-ins. `kind` is `fold` (one answer), `spans` (chapters) or `items` (each
+citing a chunk); `add_profile` adds a link profile the same way:
+
+```python
+from falconvar import aggregates
+aggregates.add_prompt("incident_report", "Write an incident report for this video.",
+                      fields={"report": {"type": "text", "about": "What happened, in order."},
+                              "severity": {"type": "text", "about": "How serious.",
+                                           "one_of": ["none", "minor", "major"]}},
+                      inputs="clip:safety")
+aggregates.aggregate("data/out/x", "data/out/x/aggregates", incident_report=True)
 ```
-
-**`summary`, `chapters` and `events` are data, not classes** — one prompt each
-of kind `fold`, `spans` and `items` in `falconvar/aggregates/definitions/definitions.json`.
-`POST /aggregate-prompts` adds your own: an instruction, the answer's fields in
-the builder a custom question uses, and optionally the input it reads by
-default. Custom definitions live in `data/aggregates.json`.
-
-**`entities:<profile>` links the same person or thing across chunks.** A link
-profile names a list field and the keys that identify an entry — `people` by
-`appearance` and `clothing` — and linking embeds those and merges under rules
-read off each video, not by asking a model. Each linked entity then gets one
-call for its account, written from the profile's instruction into its fields,
-with how long it was in shot and what it appeared with. With `check: flag` the
-same call names observations that contradict the rest: they stay in the entity,
-marked with the reason, and the account is written without them.
-`POST /link-profiles` adds a profile; `python -m eval.entities` grades the
-linking against hand labels.
 
 ## Models
 
-Three roles call a model. Each takes one string — a provider, or
-`provider/model` — and unset every role is `openai`:
+Three roles, each one string (a provider, or `provider/model`):
 
-| role | does | flag | `.env` |
-|---|---|---|---|
-| `describe` | frames → structured answers (needs a vision model) | `--describer` | `FALCONVAR_DESCRIBER` |
-| `llm` | text → the `--tier llm` aggregates | `--llm` | `FALCONVAR_LLM` |
-| `embed` | text → vectors, for `embed` and `retrieve` | `--embedder` | `FALCONVAR_EMBEDDER` |
-
-The model goes after the first slash:
-
-```bash
-python -m falconvar.video_rag.describe <id> --describer anthropic
-python -m falconvar.video_rag.describe <id> --describer ollama/gemma3:4b
-python -m falconvar.aggregates <id> --tier llm --llm gemini
-python -m falconvar.video_rag.embed <id> --embedder local
-python -m falconvar.video_rag.retrieve "..." <id> --embedder local
-python -m falconvar.workflow samples/x.mp4 --describer ollama/gemma3:4b \
-       --llm ollama/gemma3:4b --embedder local            # nothing leaves the machine
-```
-
-| provider | where | answers | vectors | default models |
-|---|---|---|---|---|
-| `openai` | cloud | ✓ | ✓ | `gpt-5.4-mini` · `text-embedding-3-small` |
-| `anthropic` | cloud | ✓ | — | `claude-haiku-4-5` |
-| `gemini` | cloud | ✓ | ✓ | `gemini-2.5-flash` · `gemini-embedding-001` |
-| `mistral` | cloud | ✓ | ✓ | `mistral-small-latest` · `mistral-embed` |
-| `deepseek` | cloud | text only | — | `deepseek-chat` |
-| `voyage` | cloud | — | ✓ | `voyage-3.5` |
-| `openrouter` · `groq` · `xai` | cloud | ✓ | — | name one |
-| `together` | cloud | ✓ | ✓ | name one |
-| `ollama` | this machine | ✓ | ✓ | `gemma3:4b` · `nomic-embed-text` |
-| `lmstudio` · `llamacpp` | this machine | ✓ | ✓ | name one |
-| `local` | in-process | — | ✓ | `BAAI/bge-small-en-v1.5` |
-
-Keys go in `.env` under each provider's usual name (`ANTHROPIC_API_KEY`,
-`GEMINI_API_KEY`, …); providers on this machine need none. `<NAME>_BASE_URL`
-moves a built-in, e.g. `OLLAMA_BASE_URL=http://gpu-box:11434/v1`. Any other
-OpenAI-compatible server — vLLM, a gateway — goes in `data/providers.json`,
-which names the key's variable and never holds the key:
-
-```json
-{"providers": {"vllm": {"protocol": "chat", "base_url": "http://localhost:8001/v1",
-                        "chat_model": "Qwen/Qwen2.5-VL-7B-Instruct", "local": true}}}
-```
-
-Calls run concurrently: `concurrency` caps how many are in flight per provider
-— 8 for cloud APIs, 1 for servers on this machine — and can be set in the same
-file. Describing a 7-chunk video took 76 s one call at a time and 12.8 s at 8.
-
-`GET /capabilities` lists every provider, whether it has a key, and what each
-role resolves to right now.
-
-- **Search with the embedder that built the index.** Vectors are keyed
-  `provider:model:dims`, so a different embedder is a different, empty space.
-- **Switching describer re-describes; switching `--llm` rebuilds the llm
-  aggregates.** Both are part of what counts as current.
-- **Supabase:** re-run `install.sql` before writing vectors that are not 1536
-  wide.
-
-## The API
-
-26 routes. `python -m uvicorn api.main:app --port 8000`, then `/` for the
-client or `/docs` for the schema.
-
-The client is three files under `web/` with no build step. Every parameter
-form is generated from `/capabilities`, so nothing about the pipeline is
-written down twice. Five pages:
-
-| page | does |
+| role | does |
 |---|---|
-| Video RAG | the extraction components one at a time, with what each has written |
-| Aggregates | pick aggregators by tier, override what each reads, run, read the answers; opens once describe or cut has run |
-| Prompts | describe's questions, and the aggregate prompts — copy a built-in like `summary` to make your own |
-| Search | moments or videos, every filter the route takes |
-| Data | this video's aggregate files (what each read, its version) and any Postgres table with filters |
+| `describer` | frames → structured answers (a vision model) |
+| `embedder` | text → vectors, for `embed`, search and the linker |
+| `llm` | text → the llm aggregates and entity accounts |
 
-Two ways to run a video, and the choice is about how much you want to tune:
+Providers: `openai`, `anthropic`, `gemini`, `mistral`, `deepseek`, `voyage`,
+`openrouter`, `groq`, `xai`, `together`, `ollama`, `lmstudio`, `llamacpp`, and
+`local` (in-process `BAAI/bge-small-en-v1.5`, no key). Keys go in `.env` under
+each provider's usual name; any other OpenAI-compatible server goes in
+`data/providers.json`, which names a key's variable and never holds one.
+
+## Checking it
 
 ```bash
-# the whole pipeline, on workflow defaults                             202
-curl -X POST localhost:8000/videos -F file=@video.mp4 \
-     -F policy=vad -F sampler=clip,uniform:text -F tier=llm
-
-# or register it and drive the stages yourself, with per-stage settings
-curl -X POST localhost:8000/videos -F file=@video.mp4 -F run=false   # 201
-curl -X POST localhost:8000/videos/video/run/boundaries \
-     -H 'Content-Type: application/json' \
-     -d '{"params": {"policy": "scene", "min_s": 30, "max_s": 60}}'
-curl -X POST localhost:8000/videos/video/run/video \
-     -H 'Content-Type: application/json' \
-     -d '{"params": {"sampler": "uniform:overview,clip:[mood,motion]",
-                     "per_second": 1, "every_n": 5}}'
+python -m eval.library_check              # every component and both pipelines, free
+python -m eval.library_check --llm        # + the paid aggregates
+python -m eval.linkers                    # people linking against hand labels
+python -m falconvar.shared.contracts.schemas --check
+python -m recovery.recreate data/out/<id>/manifest.json --verify data/out/<id>/store
 ```
-
-`params` is passed to the component as keyword arguments, so every component
-setting is reachable over HTTP. Order on the second path is yours:
-`audio · boundaries.evidence · boundaries · video · cut · describe · embed ·
-aggregate`.
-
-Anything that decodes, transcribes or pays a model is queued one job at a time
-and answers **202** with a job id; poll `GET /jobs/{id}` for `stage` (running),
-`history` (finished) and `detail`. Job records die with the process; artifacts
-do not, and `GET /videos` reads them from disk.
-
-- `GET /capabilities` — every registry, the defaults, and each component's
-  parameters with their types and defaults
-- `GET /videos/{id}` · `/artifacts/{name}` · `/aggregates/{name}` ·
-  `/frames/{index}` — only the artifacts that exist are listed
-- `POST /search` — narrows by pairing (`clip:text`) or by question (`text`,
-  across every sampler that asked it)
-- `GET|POST|DELETE /prompts` — built-ins refuse edits with 409
-- `GET /aggregate-definitions` · `POST|DELETE /aggregate-prompts` ·
-  `POST|DELETE /link-profiles` — custom aggregates and link profiles, the same
-  rules; a bad `inputs` on an aggregate run is a 422 before it is queued
-- `GET /db/tables` · `POST /db/query` — the rows a run wrote, filtered, ordered
-  and paged under the publishable key, with the size of the whole result
-
-`docs/ROUTES.md` is the full surface; `/docs` is the authority on shapes.
 
 ## Layout
 
 ```
 falconvar/
-  workflow.py      the whole run: video_rag's driver, then aggregates'
-  shared/          paths · env · contracts/ · storage/ · models/
-  video_rag/       tier 1: extraction and search · driver.py
-    media/         1  split
-    audio/         2  source · reader · models · backends/
-    boundaries/    3+4 scenes · speech · grid
-    video/         5  reader · decimate · store · pipeline · samplers/
-    cut/           6
-    describe/      7  prompts · library · prompts.json · frames · backends/
-    embed/         8  units · embedders · remote · local · indexes/ · readable
-    retrieve/         search
-  video_rag/driver.py + engine.py (what aggregates may ask)
-  aggregates/      tier 2: driver.py · base · inputs · rendering ·
-                   definitions/ · one folder per aggregator, each with a
-                   driver.py: stats speakers coverage (free) · ner sentiment
-                   (local) · fold spans items entities (llm)
-api/               HTTP: routes, dispatch, one background worker, db reads
-web/               the client at /app: one page, no build step
-recovery/          STANDALONE: rebuild a store from a manifest + the video
-db/
-  supabase/        install.sql · reset.sql
-  wipe.py          delete every video, locally and in Supabase
-  json/            document schemas, generated from the dataclasses
+  workflow.py      the whole run
+  shared/          paths · errors · contracts/ · storage/ (files, database,
+                   supabase) · models/ (providers, llm, embedders, roles)
+  video_rag/       tier 1: media audio boundaries video cut describe embed
+                   retrieve, and driver.py (the pipeline)
+  aggregates/      tier 2: select, one folder per aggregator, driver.py
+example.py         the pipeline, then a summary and the people linker
+eval/              library_check · linkers + attributes · harness
+recovery/          STANDALONE: rebuild a frame store from a manifest + the video
+db/                supabase/ video_rag.sql · aggregates.sql · reset.sql · wipe.py · json/ schemas
 data/              everything a run writes; gitignored
-docs/ROUTES.md     the HTTP surface
 ```
-
-116 Python files, ~15.6k lines.
-
-## State
-
-Runs end to end on real models — Whisper, pyannote, CLIP, YOLO, GPT, GLiNER —
-writing documents to files and Postgres and vectors to Qdrant and pgvector.
-
-Last verified through the API from wiped local, Qdrant and Postgres state,
-driving every stage with its own settings: a `scene` grid with a 30 s floor gave
-4 chunks of 39.8–55.6 s; `uniform:overview` at a 5 s stride and
-`clip:[mood,motion]` (two custom prompts added over HTTP) gave 12 descriptions
-and 16 searchable units; every Postgres table exact under both keys;
-`recovery.recreate` 76/76 byte-identical.
-
-Of the providers, only OpenAI and the in-process `local` embedder have been run
-for real; the rest are checked against a mock server's recording of the request.
-
-Not built: a test suite, an import checker, a corpus big enough for
-`eval/harness.py` to give a result rather than a direction, sampler threshold
-calibration, and keeping a describe run's answers when one of its calls fails.
-`CLAUDE.md` is the reasoning behind every decision here, and records what is
-measured and what is not.

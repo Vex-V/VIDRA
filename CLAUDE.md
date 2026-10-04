@@ -16,14 +16,18 @@ falconvar/
                    the NullHandler. Imports almost nothing
   py.typed         PEP 561: without it a consumer's checker sees no annotations
   workflow.py      the whole run: video_rag's driver, then aggregates'
-  shared/          paths · env · errors · logs · progress   both tiers import these
+  shared/          what both tiers import
+    config/        paths · env · settings (`configure()`)   where things are
+    reporting/     errors · logs · progress   how a run tells its caller
     contracts/     documents · schemas   what components hand each other
                    units (one embeddable thing + render) · fields (the builder)
-                   reference: TYPES.txt, generated from the dataclasses
-    storage/       files · db · supabase   where a document goes, and
-                   separately whether a copy also goes to a database
-    models/        providers · llm · embedders/   who answers a model call
-                   errors imports nothing; paths imports only errors
+    storage/       files · db · supabase · database   where a document goes,
+                   and separately whether a copy also goes to a database.
+                   `database` is the base every backend shares; `supabase`
+                   is one backend whole -- tables, rows, and `Supabase`
+    models/        providers · llm · embedders/ · roles (`Models`)
+                   who answers a model call
+                   reporting/errors imports nothing; config/paths only errors
   video_rag/       TIER 1: the video in, a searchable index out, and the search
     driver.py        Options · validate · process · video_rag() · the CLI
                      and vocabulary(), the one thing aggregates asks
@@ -41,44 +45,46 @@ falconvar/
       backends/      stub · model (every provider, through shared/models/llm)
     embed/         8 units · embedders · remote · local · readable
                      writes embedded.json -- text AND vectors. No index
-    retrieve/        search: a query to ranked moments
-                     postgres: the search_embeddings RPC, the one reader
+    retrieve/        search: a query to ranked moments, read through a
+                     `Database` -- it names no table
   aggregates/      TIER 2: answers over what video_rag extracted; never the video
-    driver.py        answer() · aggregate(), the pipeline · the summary vector
-    record           a record (a video's folder) opened as a Context
-    base             the protocols · Context · DefinitionRunner
-    inputs (the selection grammar) · rendering (how rows read to a model)
-    definitions/     prompts and link profiles, as data
+    driver.py        answer() · aggregate(), the pipeline
+    core/            what every aggregator shares: base (the protocols,
+                     Context, DefinitionRunner) · inputs (the selection
+                     grammar) · record (a folder as a Context) · rendering
+    database/        export (an answer -> rows and embedded units) · search
+                     (`aggregates.search`, one level at a time)
+    definitions/     prompts and link profiles, as data, and their writers
+                     (`add_prompt`, `add_profile`, published on `aggregates`)
       definitions.json  BUILT-IN summary · chapters · events · people · objects · text
     select/          record + selection -> an Excerpt or Sightings file
     one component per aggregator, each one input -> one answer:
     stats/ speakers/ coverage/        free:  a record in
     ner/ sentiment/                   local: an excerpt in
     prompt/                           llm:   an excerpt in, any prompt by name
-      fold/ spans/ items/               the runner per prompt kind
+      fold/ spans/ items/               the runner per prompt kind; spans/segment
+                                        places chapter boundaries by embeddings
     entities/      sightings in · linking (who is who, no model)
-    combination      several videos' documents laid end to end, one record
-api/               main (routes) · service (dispatch) · jobs (one worker)
-                   browse (read-only queries over the rows a run wrote)
-web/               the client at /app. No build step: index.html · app.js ·
-                   app.css. Every form generated from /capabilities. Pages:
-                   video rag · aggregates · prompts · search · data
+    combination/   several videos' documents laid end to end, one record
+example.py         the pipeline with a question of its own, then search with it
+eval/              library_check (the whole library, checked, exits 1 on a
+                   failure) · linkers + attributes (the people-linking bench,
+                   against hand labels) · harness + cases (retrieval, live db)
 recovery/          STANDALONE: recreate.py, imports nothing from the pipeline
 db/
-  supabase/        install.sql · reset.sql
+  supabase/        video_rag.sql (vr_ tables) · aggregates.sql (ag_, after it) · reset.sql
   wipe.py          delete every video, locally and in Supabase
   json/            document schemas, generated from the dataclasses
 data/              everything a run writes; gitignored
   out/<id>/        media, transcript.raw, cuts, timeline, manifest, store,
                    transcript, descriptions, embedded, aggregates/
-  uploads/         what the API parked until a run read it
-  prompts.json     custom questions, added through the API
+  prompts.json     custom questions
+  aggregates.json  custom aggregate prompts and link profiles
   providers.json   model endpoints added or overridden; names key variables, never keys
 weights/           detector and embedder checkpoints; a cache, not output
-docs/ROUTES.md     the HTTP surface
 ```
 
-126 Python files, ~17.0k lines.
+144 Python files in the package, ~18.5k lines.
 
 ## Commands
 
@@ -88,40 +94,41 @@ python -m falconvar.workflow samples/x.mp4 --no-audio --sampler uniform:text
 python -m falconvar.workflow samples/x.mp4 --tier llm --database supabase
 
 # one tier at a time
-python -m falconvar.video_rag samples/x.mp4 --sampler clip   # extract: media -> embed
+python -m falconvar.video_rag samples/x.mp4 data/out --sampler clip   # extract: media -> embed
 python -m falconvar.aggregates data/out/<id> --out data/out/<id>/aggregates \
     --previous data/out/<id>/aggregates --ner --summary transcript+clip:activity   # only those two
 python -m falconvar.aggregates data/out/<id> --out D --tier llm   # everything up to a cost
 python -m falconvar.aggregates data/out/a data/out/b --out D --stats --entities-people   # combined first
 python -m falconvar.aggregates --list                            # every flag, cost, default data
 
-# one component at a time; per-stage tuning lives on these, not on workflow
-python -m falconvar.video_rag.media samples/x.mp4
-python -m falconvar.video_rag.media samples/x.mp4 --on-conflict replace   # not clip-2
-python -m falconvar.video_rag.audio <id> --transcriber whisper --diarizer pyannote
-python -m falconvar.video_rag.boundaries <id> --policy scene --evidence --stride 5 --threshold 27
-python -m falconvar.video_rag.boundaries <id> --evidence --detect-width 160   # cheaper pass
-python -m falconvar.video_rag.boundaries <id> --calibrate        # sweep, no decode
-python -m falconvar.video_rag.boundaries <id> --retune 45        # rethreshold cached scores
-python -m falconvar.video_rag.boundaries <id> --policy scene --chunk-duration 30
-python -m falconvar.video_rag.video <id> --sampler "clip:[text,scene]"   # one pass, two questions
-python -m falconvar.video_rag.video <id> --sampler clip:text+scene       # same, no brackets
-python -m falconvar.video_rag.video <id> --sampler yolo --per-second 4 --min-interval 3
-python -m falconvar.video_rag.video <id> --sampler objects --vocabulary "crate,pallet"
-python -m falconvar.video_rag.video <id> --sampler objects --confidence 0.55   # detector, not change
-python -m falconvar.video_rag.video <id> --sampler text --languages en,de
-python -m falconvar.video_rag.audio <id> --no-vad-filter --compute-type int8
-python -m falconvar.video_rag.audio <id> --overlaps      # keep overlapping speech
-python -m falconvar.video_rag.describe <id> --max-tokens 4000   # re-describes everything
-python -m falconvar.video_rag.video <id> --prune-store           # irreversible, opt-in
-python -m falconvar.video_rag.cut <id>
-python -m falconvar.video_rag.describe <id> --describer openai --limit 5   # costs money
-python -m falconvar.video_rag.describe <id> --describer ollama/gemma3:4b   # any provider, provider/model
-python -m falconvar.aggregates data/out/<id> --out D --summary --llm anthropic
-python -m falconvar.video_rag.embed <id> --embedder local   # no key needed
-python -m falconvar.video_rag.video <id> --sampler uniform:safety   # a custom question
-python -m falconvar.video_rag.retrieve "..." <id> --sampler clip:text   # one pairing
+# one component at a time: each takes the files it reads and the one it writes
+# (D = a video's folder). Per-stage tuning lives on these, not on workflow.
+python -m falconvar.video_rag.media samples/x.mp4 data/out
+python -m falconvar.video_rag.media samples/x.mp4 data/out --on-conflict replace   # not clip-2
+python -m falconvar.video_rag.media samples/x.mp4 data/out --name "Dock 3" --recorded-at 2026-10-01T14:00:00+02:00
+python -m falconvar.video_rag.audio D/media.json D/transcript.raw.json --transcriber whisper --diarizer pyannote
+python -m falconvar.video_rag.audio D/media.json D/transcript.raw.json --no-vad-filter --compute-type int8
+python -m falconvar.video_rag.audio D/media.json D/transcript.raw.json --overlaps   # keep overlapping speech
+python -m falconvar.video_rag.boundaries D/media.json D/cuts.json --policy scene --evidence --stride 5 --threshold 27
+python -m falconvar.video_rag.boundaries D/media.json D/cuts.json --evidence --detect-width 160   # cheaper pass
+python -m falconvar.video_rag.boundaries D/media.json D/cuts.json --calibrate      # sweep, no decode
+python -m falconvar.video_rag.boundaries D/media.json D/cuts.json --retune 45      # rethreshold cached scores
+python -m falconvar.video_rag.boundaries D/media.json D/timeline.json --policy scene --cuts D/cuts.json --chunk-duration 30
+python -m falconvar.video_rag.video D/media.json D/timeline.json D/manifest.json --sampler "clip:[text,scene]"   # one pass, two questions
+python -m falconvar.video_rag.video D/media.json D/timeline.json D/manifest.json --sampler clip:text+scene   # same, no brackets
+python -m falconvar.video_rag.video D/media.json D/timeline.json D/manifest.json --sampler yolo --per-second 4 --min-interval 3
+python -m falconvar.video_rag.video D/media.json D/timeline.json D/manifest.json --sampler objects --vocabulary "crate,pallet"
+python -m falconvar.video_rag.video D/media.json D/timeline.json D/manifest.json --sampler objects --confidence 0.55   # detector, not change
+python -m falconvar.video_rag.video D/media.json D/timeline.json D/manifest.json --sampler text --languages en,de
+python -m falconvar.video_rag.video D/media.json D/timeline.json D/manifest.json --prune-store   # irreversible, opt-in
+python -m falconvar.video_rag.cut D/timeline.json D/transcript.raw.json D/transcript.json
+python -m falconvar.video_rag.describe D/manifest.json D/timeline.json D/store D/descriptions.json --describer openai --limit 5   # costs money
+python -m falconvar.video_rag.describe D/manifest.json D/timeline.json D/store D/descriptions.json --describer ollama/gemma3:4b
+python -m falconvar.video_rag.describe D/manifest.json D/timeline.json D/store D/descriptions.json --max-tokens 4000   # re-describes everything
+python -m falconvar.video_rag.embed D/embedded.json --descriptions D/descriptions.json --transcript D/transcript.json --embedder local   # no key needed
+python -m falconvar.video_rag.retrieve "..." <id> --sampler clip:text   # one pairing; reads a database
 python -m falconvar.video_rag.retrieve "..." <id> --question text       # across samplers
+python -m falconvar.aggregates data/out/<id> --out D --summary --llm anthropic
 # the aggregates one component at a time: select what to read, then answer it
 python -m falconvar.aggregates.select data/out/<id> in.json ner --selection transcript
 python -m falconvar.aggregates.ner in.json ner.json --labels person,product
@@ -130,9 +137,8 @@ python -m falconvar.aggregates.select data/out/<id> people.json entities:people
 python -m falconvar.aggregates.entities people people.json entities.people.json
 python -m falconvar.aggregates.stats data/out/<id> stats.json   # a record in, no selection
 python -m falconvar.aggregates.combination data/out/a data/out/b --out data/out/ab   # several videos, one record
-python -m eval.entities                         # grade linking against hand labels
+python -m eval.linkers                          # people linking vs hand labels, every variant
 python -m eval.attributes                       # prototype: people by attributes (test.md)
-python -m eval.tracking --errors 3              # prototype: tracking veto / merge variants
 
 # as a library, not a CLI
 pip install falconvar            # core: uniform + an API model
@@ -141,18 +147,14 @@ pip install "falconvar[audio]"   # whisper + pyannote
 pip install "falconvar[all]"
 python -m pip wheel --no-deps -w dist .      # build it
 
-python example.py                # the whole library, checked: exits 1 on any failure
-python example.py --llm           # + the paid aggregates (a summary, entities)
-python example.py --database supabase   # + export and search -- WRITES to it
-python example.py --keep out/     # keep what it wrote
+python example.py samples/x.mp4   # a custom question, the pipeline, then search (paid)
+python -m eval.library_check      # the whole library, checked: exits 1 on any failure
+python -m eval.library_check --llm          # + the paid aggregates
+python -m eval.library_check --database supabase   # + export and search -- WRITES
 
 python -m falconvar.shared.contracts.schemas --check     # CI: are the schemas stale
-python -m falconvar.shared.contracts.reference           # regenerate TYPES.txt
-python -m falconvar.shared.contracts.reference --check   # CI: is TYPES.txt stale
-python -m falconvar.shared.contracts.reference --undocumented   # fields with no `#:`
 python -m recovery.recreate data/out/<id>/manifest.json --verify data/out/<id>/store
 #      ^ from the checkout root: recovery/ is not an installed package, on purpose
-python -m uvicorn api.main:app --port 8000     # the app at /, /docs for the schema
 ```
 
 **Everything a run writes lives under `data/out/<video-id>/`.** Grouped by
@@ -354,7 +356,7 @@ named frame was present and byte-identical. A false FAIL is the worst answer
 the oracle can give, because a real one means the change is wrong and is
 supposed to stop everything.
 
-**Paths are anchored to the checkout, found by marker.** `shared/paths.py`
+**Paths are anchored to the checkout, found by marker.** `shared/config/paths.py`
 searches upward for `pyproject.toml` rather than counting parents — a parent
 count is a fact about a file's depth in the tree, which is exactly what a
 reorganisation changes. It broke twice this way: `WEIGHTS_DIR` at
@@ -370,7 +372,8 @@ returned **their** root: the library imported fine and resolved `DATA_ROOT` and
 338 MB of checkpoints there with nothing reporting it. Worse than the bare
 case, which at least raised `RuntimeError` from `import falconvar` and so could
 not be shipped at all. A candidate counts only when
-`root/falconvar/shared/paths.py` resolves to that very file.
+`root/falconvar/shared/config/paths.py` resolves to that very file -- which
+is why moving it into `config/` meant editing the marker it checks for.
 
 **The roots resolve on first use, not at import.** As module constants they
 were computed before a caller could say where its data should go — an
@@ -378,18 +381,67 @@ installed copy raised from the import itself. `paths.configure(data_root=...)`
 now works after the import that triggers it, and PEP 562 keeps every reader
 spelling it `paths.OUT_ROOT` while the value is computed per access. Four
 module-level captures had to go with them (`SCHEMA_DIR`, the two weights
-caches, the API's uploads directory): captured at import, they ignore a later
+caches, the API's uploads directory, since removed): captured at import, they ignore a later
 `configure()` and put the checkpoints in the old place.
 
 Precedence: `configure()`, then `FALCONVAR_DATA` / `FALCONVAR_WEIGHTS`, then
 the checkout, then `~/.falconvar`. `configure()` wins because an embedding
 application must be able to guarantee where it writes; the variables are for
-when you do not control the calling code. Neither is a `.env` key: `.env` is
-read when a key is needed, which can be earlier or later than a path is, and a
-root that moved depending on which module was touched first would be worse than
-one that cannot live there at all. `.env` itself is the checkout's from a
-checkout and the working directory's from an install — the only file a
-consumer would expect to be read.
+when you do not control the calling code. Neither is a `.env` key: a root
+that moved depending on whether a file had been read yet would be worse than
+one that cannot live there at all.
+
+**The library reads keys from the environment and never reads `.env` by
+itself.** It used to, on the first key lookup: the checkout's from a
+checkout, the working directory's from an install. The second is wrong for a
+library -- the working directory is not where the caller is (a service
+started from `/`, a notebook kernel, `python app/run.py` from elsewhere),
+and it can be another project's `.env`, whose keys are then used with
+nothing saying so. Every SDK it calls reads `os.environ` only. So `.env` is
+read by entry points -- each CLI's `main()` calls `env.load()` first, and
+`example.py` calls `falconvar.configure(env_file=".env")` -- or by a caller
+who asks. Never over a variable already set.
+
+Three places for a credential, one each, every one optional and falling back
+to its variable:
+
+    Models(keys={"openai": ...})      a model call; per call, so per tenant
+    Supabase(url=, key=, read_key=)   the database
+    configure(hf_token=...)           downloading gated weights; per process
+
+`Models.keys` is `{provider: key}` -- a key belongs to an account, and one
+account serves every role it is named for. It outranks the environment, never
+appears in `repr`, `resolved()` or any document, and reaches the call that
+needs it through a context variable (`providers.keys`), set by `video_rag`,
+`aggregate`, `workflow` and `search` for the length of their call and by
+`with models:` for a caller driving components. Not through the signatures:
+a component takes a provider *name*, and a key threaded through eight of
+them, `Produced` and the resume configs would be one `as_dict()` from a
+file. `asyncio` tasks copy the context they are created in, and nothing here
+calls a model from a thread.
+
+**The Hugging Face token is for downloading, not running.** pyannote's 3.1
+pipeline is gated: the first download needs a token from an account that
+accepted its terms, and after that it loads from the Hugging Face cache with
+none -- measured, no token in the environment, none configured and no saved
+login, and it diarized Chernobyl into the same 18 turns. The backend used to
+refuse before trying whenever `HF_TOKEN` was unset, which made a machine that
+had the weights unable to diarize and ignored `hf auth login`. It now passes
+whatever it has (given, `configure`, the variables) or None, which leaves
+Hugging Face's own lookup, and explains only when the load actually fails.
+Those weights live in Hugging Face's cache (`HF_HOME`), not `weights/`.
+
+**Verified as an installed package** (2026-10-04): the wheel built with
+`pip wheel`, installed into a new venv in an empty folder holding a decoy
+`.env`. Core only, dependencies from PyPI: `pip check` clean; 21/21 --
+installed-not-checkout, the shipped questions, the decoy `.env` not read,
+keys refused then given in code, a custom question, `video_rag` with OpenAI,
+search, a summary, `clip` failing on `No module named 'torch'`, a Supabase
+read with keys given in code. With `[local]` and `[audio]` borrowed from the
+project venv as a plain path entry (so the editable install stays inactive):
+10/10 -- vad grid, whisper and pyannote with no token, clip and yolo, the
+local embedder, search, stats/speakers/ner/summary, and an uncached gated
+model refused with the three ways to give a token.
 
 **A leading underscore under `data/out/` marks a directory that is not a
 video.** Written for the embedded Qdrant store, which lived at `_qdrant`
@@ -461,11 +513,34 @@ the receipt rather than trusting what it passed in. Verified end to end -- a
 second `clip.mp4` ran the whole pipeline under `clip-2` while `clip` kept its
 own artifacts.
 
-Not done, deliberately: the API still writes uploads to `uploads/{id}{suffix}`
-before `media` can say what the id is, so the *file* is still overwritten on a
-collision, and `jobs.submit` records the pre-run id. And `videos` in Postgres
-has no `source` column -- that needs a section 10 migration, and a replaced id
+Not done: `vr_videos` in Postgres has no `source` column -- that needs a migration, and a replaced id
 leaves its old rows behind, which `db/wipe.py` is the tool for.
+
+**A video has a name and a recording time, and neither is its identity.**
+`Media.name` is the filename (`clip.mp4`) and `Media.recorded_at` the
+container's own tag (`com.apple.quicktime.creationdate`, then
+`creation_time`, `date_recorded`, `date`, container before streams), as ISO
+8601 -- or None. `media(..., name=, recorded_at=)` replaces either, and
+`video_rag`, `workflow` and all three CLIs pass them through. Neither is in
+`source`, so renaming a video never makes it a different file.
+
+**A re-run that gives neither keeps what an earlier run was given.** `media`
+runs on every pipeline pass, so falling back to the default would let the next
+run that forgot `name=` undo it silently, in the file and then in `videos`.
+The cost is that a given time cannot be cleared back to None, only replaced.
+
+A tag at or before 1970, a bare year and a date with no time all read as None:
+an MP4 whose clock was never set says 1904 or 1970, and `date` is often a
+release year. None of the samples carry a creation time -- each was
+re-encoded once, which drops it -- so `library_check` remuxes one that does.
+
+**Not a settings value like `Models` or `Database`.** Those exist because one
+value must reach several calls -- the embedder that built an index is the one
+a search must use; one client shared by every export. A name and a time are
+facts about one file, read by one component once, so a class would be two
+keyword arguments in a box plus a "given twice" rule. If per-video metadata
+grows past a handful of fields, the shape is a dataclass in `documents.py`
+that `Media` carries, not a third pipeline-wide value.
 
 **A missing input names the component that makes it.** Components hand off
 through files, so getting the order wrong is the ordinary mistake on the
@@ -489,7 +564,7 @@ traceback. `boundaries` keeps its own hand-written version, because it can say
 more: which *policy* wants the cuts and which half of `evidence` produces them.
 
 **A requirement is required.** Nothing falls back when a package in
-`requirements.txt` is missing or older, or when `install.sql` was never run:
+`requirements.txt` is missing or older, or when `video_rag.sql` was never run:
 no hand-parsed `.env` without `python-dotenv`, no plain Supabase client for an
 old SDK, no Python ranking when the search RPC is absent, no `transformers`
 stand-in for `sentence-transformers`. Each of those was a second code path that
@@ -685,6 +760,27 @@ dropped at load time as well, because the file is hand-editable and a shadowed
 built-in is the one failure that would change a shipped question's meaning
 silently. The alternative is a deployment whose `yolo` means something other
 than every other deployment's, with nothing in the repo saying so.
+
+**`describe.add_question` is how a caller adds one**, with `remove_question`,
+`question` and `questions` beside it. They are on `describe` because the
+vocabulary is what describe asks, and `library.add` -- the API's writer --
+had stayed machinery when the API went, so the only way left to add a
+question was hand-editing the file. Three choices on top of `add`:
+
+- **No fields and no shape is `prose`, not `scene`.** `add` defaulted to the
+  general shape, so a question asking for the mood answered seven fields
+  nobody wanted, paid for at ~3x the length of prose.
+- **`shape=` is a shipped shape only.** A custom shape is stored under its own
+  question's name and dies with it; a second question borrowing it would fall
+  back to `scene` in silence when the first was removed.
+- **`summary=` needs `fields=`.** A shipped shape already says how long its
+  prose is, and a setting that changes nothing is refused rather than ignored.
+
+Exercised in `example.py`: a `checkout` question with a `one_of` payment
+field, asked in clip's own pass as `clip,clip:checkout`, then searched with
+`question="checkout"` and `structured={"payment": "cash"}`. On test.mp4 that
+returned chunks 6 and 8 for cash -- chunk 8 being the one whose `clip` answer
+independently says "he holds money in both hands... suggesting a cash payment".
 
 **A single shared schema was tried and is wrong.** Every field being present
 means the model may fill any of them, and it does — asked about people it
@@ -891,7 +987,7 @@ units at 0.1294. The three answers are different, which is the point.
 
 Neither column cost a re-embedding: `text_hash` is over the content, so
 existing rows were backfilled from `sampler_id` with an `update` (since removed
-from `install.sql`: 0 of 49 rows still needed it). Qdrant was the exception,
+from the schema file: 0 of 49 rows still needed it). Qdrant was the exception,
 and the reason is worth keeping for any store that behaves like it: payload is
 written only on upsert, so points predating a field need a forced re-index
 where a table can be backfilled in place.
@@ -1101,9 +1197,24 @@ that folder held NER and sentiment.
 So each aggregator is a folder with its own `driver.py`, as a video_rag
 component is. Most hold one file today, which is the point -- `entities/` needed
 two the day it was written, and the next aggregator that needs three has
-somewhere to put them. What every aggregator shares stays at the root, the way
+somewhere to put them. What every aggregator shares is in `core/`, the way
 video_rag's components share `falconvar/shared/`: `base` (the protocols,
-`Context` and `DefinitionRunner`), `inputs` and `rendering`.
+`Context` and `DefinitionRunner`), `inputs`, `record` and `rendering`.
+
+**Nothing loose at a package root but its driver** (2026-10-05). `aggregates/`
+had ten files at the top and `shared/` six, read by everything and grouped by
+nothing. Now the root of each holds only what makes it a package -- the
+registry and the pipeline for `aggregates`, nothing for `shared` -- and
+every other file sits with what it is for: `core/` (shared by every
+aggregator), `database/` (export and search), `combination/` (a component,
+so a folder like the rest), `config/` (paths, env, settings) and `reporting/`
+(errors, logs, progress). Moved, not rewritten: every import that named one
+was rewritten by resolving it at its old location and writing it back,
+relative if it was relative, so nothing else in those lines changed. Two
+things named a location as data and had to be edited by hand -- the lazy
+`.database.search` in `aggregates/__init__`, and `paths`' own checkout
+marker. 124 modules import, every moved CLI runs, schemas and TYPES.txt are
+current.
 
 `DefinitionRunner` moved out of `llm/__init__.py` for the reason `Sampler` is in
 `samplers/base.py`: a base class inside a package's `__init__` is reached by
@@ -1196,6 +1307,58 @@ The module is `combination` and not `combine` for `boundaries.grid`'s reason:
 a package attribute and a submodule of one name are one slot, and the first
 version recursed forever in `__getattr__`.
 
+**Two schema files, one per tier, and a table's prefix says which.**
+`video_rag.sql` holds the ten tables `video_rag` exports and searches, each
+`vr_` -- `vr_videos`, `vr_timelines`, `vr_chunks`, `vr_transcripts`,
+`vr_transcript_chunks`, `vr_manifests`, `vr_chunk_samplers`,
+`vr_descriptions`, `vr_embeddings`, `vr_prompts` -- every one hanging off
+`vr_videos`, with `vr_search` the moment search. `aggregates.sql`, run after
+it, holds six `ag_` tables, generic over every aggregator so a new one adds
+rows and never tables, with `ag_search` over the aggregate index:
+
+    ag_sources      one per source: a video, or several end to end --
+                    `video_ids text[]` and each member's offsets
+    ag_answers      one per answer, payload whole
+    ag_items        one per thing an answer places in time: a chapter, an
+                    event, a name `ner` found, a linked entity
+    ag_mentions     one per sighting, pointing at its entity's item
+    ag_embeddings   the summary, each chapter, each entity -- `level`
+                    source | span | entity, searched one level at a time
+    ag_definitions  what a prompt or profile said, per version
+
+Elsewhere in this file a table is often named without its prefix --
+`embeddings`, `chunks`, `descriptions` -- in passages written before the
+prefixes (2026-10-05); the prefix is the only difference. The files were
+rewritten clean at the rename, with no migration section: the live database
+was reset (`reset.sql`) and re-exported from the local answer files, which is
+what makes every row a copy.
+
+A source, not a video, is what an answer belongs to, and `video_ids` is an
+array, so nothing is foreign-keyed to `videos`: an answer is writable whether
+or not its videos were exported, and deleting a video never deletes a paid
+answer. Items, mentions and vectors are unpacked from their answer and go with
+it (cascade). The rows are built in `aggregates/database/export.py`, not a backend,
+because what a payload means is this tier's knowledge; `aggregate(...,
+database=)` writes them, and `workflow` just hands its database on.
+
+`records` went with them (2026-10-04). It was one parent row for a video *or*
+a collection of videos, so a combination's answers had somewhere to hang:
+`timelines` and every answer table pointed at it, `write_timeline` wrote a
+collection's members into `record_members`, and two views (`record_videos`,
+`chunk_origins`) mapped a combined chunk back to its video. Nothing exported a
+combination, and video_rag never makes one -- so for this tier it was a
+second id table beside `videos`. A combination's grid is now refused by the
+key from `timelines` to `videos`. If collections come back, they come back in
+the aggregates schema, where the answers that need a parent live; the
+reasoning against an array of member ids still holds -- a foreign key cannot
+reach into an array, and it cannot say where each member sits on the
+combined clock.
+
+Video ids are not namespaced, deliberately: one machine writes a database and
+any number read it, so two writers exporting their own `test` is not a case to
+design for. `cuts` is not a table -- boundary evidence is a local cache
+`retune` reads from the file, and no query ever read the table.
+
 **A tier is a cost, and the pipeline runs cheapest first.** A tier no longer
 selects anything -- naming an aggregator does -- but whatever was named runs
 free, then local, then llm, so a run that dies partway has produced the free
@@ -1211,7 +1374,7 @@ on another now.
 `rendering.pick_sources` listed `transcript`, `clip`, `uniform` by preference and
 fell back to everything, so what a summary read depended on what the samplers
 happened to be called -- test1's `clip:topic` and `clip:activity` matched none
-of them. `aggregates/inputs.py` is a grammar with three operators:
+of them. `aggregates/core/inputs.py` is a grammar with three operators:
 
     ,        separate inputs -- one answer each
     +        sources joined into one input
@@ -1247,20 +1410,78 @@ it wrote. No free-form kind: an answer without citations is a fold. Verified: a
 custom `incident_report` fold over `clip:hazards[severity,hazards]` on Chernobyl,
 reused on the second run, deleted with its answer left in place.
 
+**`aggregates.add_prompt` and `add_profile` are how a caller adds one**
+(2026-10-05), with `remove_prompt`, `remove_profile` and `definition` beside
+them -- describe's `add_question` for this tier. The writer, `definitions.add`,
+had been reachable only through the API, so after the API went the only way to
+add a prompt was hand-editing `data/aggregates.json`, and a dead-code sweep
+found it uncalled. They are thin: every argument is a key of the entry, `None`
+leaves a key out so the profile defaults still apply, and the checks are the
+ones `load` already runs on a hand-edited file plus the vocabulary, so an input
+naming a question nobody defined is refused when it is added, not when it runs.
+`inputs=` is the entry's `inputs` on a prompt and its `from` on a profile,
+because `from` cannot be a keyword. Exercised in `example.py`: a
+`checkout_report` fold over `clip:checkout` on test.mp4 reported cash around
+chunks 6 and 8 and a card at 10 -- what the structured filter returns.
+
 **A colon cannot be in a Windows filename.** `entities:people` is stored as
 `entities.people.json`, and the API's aggregate URLs use the stem. No
 definition name or label contains a `.`, so the mapping reverses.
 
 **Nothing is cut to fit.** `chunk_rows` stopped at 400 rows and `sentiment`
 scored a chunk's first 480 characters as its tone. `items` now asks per
-100-line window, concurrently. `spans` folds chunks into parts until they fit
-one call and cites part ids, because dividing windows separately would force a
-chapter break at every window edge -- exercised on Chernobyl with the window
-shrunk to 4: 3 chapters over folded parts, every chunk covered. The local models
+100-line window, concurrently. `spans` places its boundaries without a model
+call, so it has no window at all (below). The local models
 cut text at sentence ends into pieces each reads whole, and sentiment weights
 them by length. On Chernobyl NER went from 27 entities to 55 and mean sentiment
 from -0.37 to -0.67 -- but the default input widened at the same time, so
 neither is a like-for-like measurement of the pieces.
+
+**Chapters are placed by embeddings; the model only names them.** `spans`
+embeds every part of every row (each account of a chunk apart, then averaged
+-- a joined row is ~2,000 characters, past bge's 512 tokens), compares the two
+chunks either side of every gap, and breaks at valleys deeper than mean -
+std/2 of this video's valley depths (TextTiling's liberal cutoff, read off the
+video rather than a similarity that would be a fact about one embedder).
+`max_spans` caps the count: while there are more, the two neighbouring spans
+with the most alike centroids merge. Then one call per span fills the
+definition's fields from that span alone. Boundaries, their similarity and
+depth, the first-pass count and the merges are all in `payload.segmentation`.
+The model key carries the embedder and the cap, so changing either recomputes.
+
+It replaced one call asked to divide the whole video, which had three faults.
+**Over 100 chunks the chunks were folded into fixed blocks of 25** before the
+model saw them, so a chapter could break only every 25 chunks whatever the
+content did, and a block straddling a change was summarised as one blend.
+**The count was the model's mood**: test.mp4 came back as 15 chapters for 15
+chunks. And **its chunk ids were never checked against the grid**: on test the
+model cited *seconds* -- "chunks 0-19, 20-39 ... 279-299" on a 15-chunk video --
+and `range(first, last + 1)` accepted them, `covers_all_chunks` read true
+because the ids were a superset, and `resolve_span` quietly dropped the ones
+that did not exist. Measured boundaries come from the grid, so none of the
+three can happen.
+
+Measured on the same inputs (local bge, gpt-5.4-mini naming), 2026-10-05:
+
+| | old, one call | embeddings | `max_spans=3` / `=2` |
+|---|---|---|---|
+| Chernobyl, 14 chunks | 0-2 · 3-5 · 6-9 · 10-13 | 0 · 1-2 · 3-6 · 7-13 | 0 · 1-2 · 3-13 |
+| test, 15 chunks | 15, on invented ids | 0-8 · 9-11 · 12-13 · 14 | 0-13 · 14 |
+
+What it gives up is judgement -- similarity is about wording, so a visual cut
+that keeps the subject can read as a change.
+
+**A floor as well as a ceiling, as the grid has.** Merging by similarity alone
+kept an outlier to the end: a title card (Chernobyl chunk 0, 6 s) or an odd
+last chunk (test chunk 14) is unlike its neighbours by definition, so it
+survived every merge as a one-chunk chapter while long similar spans fused --
+in the uncapped run too, where no merge happens at all. `min_span_s` (default
+30 s, seconds because chunk lengths vary 6-30 s on one `vad` grid) merges the
+shortest span into its more alike neighbour until none is under it, before the
+cap. With it: Chernobyl 0-6 · 7-13, test 0-8 · 9-11 · 12-14. Chernobyl lost
+more than predicted -- the title card joined the map, 27 s together, still
+under the floor, so both joined the reactor chapter. On a 205 s video 30 s is
+coarse; `min_span_s` is a setting, and 0 turns it off.
 
 **Ask for a word count, not "several sentences".** Once structured fields
 arrived the model sized the summary as one field among many: 105 median words
@@ -1274,20 +1495,26 @@ chunk and the whole file, so it is kept. Indexing them would return the same
 moment two or three times over under different wordings — the count-bias
 failure the moment aggregation guards against, one level up.
 
-The final summary goes somewhere else: `workflow` asks
-`aggregates.index_summary` for it when a run names a `database`, and one unit
-per video lands in `video_embeddings` rather than `embeddings`. `embeddings`
-answers *which twenty seconds*, a summary answers *which video*, and a video
-is not a moment you can play -- so the two never share a ranking, and
-`/search` reaches the second only as `level=video`. Postgres only, and
-best-effort: a vector that fails to write does not fail the aggregates.
-Verified after the tier split: Chernobyl, `--tier llm`, `video_units: 1`.
+**Three things are embedded, each at its own level.** The final summary
+(`source`: which video), each chapter (`span`: which part, with a playable
+range) and each linked entity's account (`entity`: who, across every video;
+one seen once has no account and is embedded by the identity string it was
+linked on). Events, names and the counts are not: an event restates a chunk
+the moment index already holds, a name wants exact matching, a count is a
+number. `aggregates.search(query, level=...)` reads them -- the same hybrid as
+the moment index in Postgres (`search_aggregates`), dense-only from a
+`Folder`. It replaced `retrieve.videos`, the one place `video_rag` read
+something the aggregates tier wrote.
 
-It used to be gated on an `index` parameter of `aggregates.run`, which meant
-the tier could not be run at all without naming a destination -- the same
-component-owns-the-database shape the sink removal undid everywhere else.
-Making the *vector* still the tier's work and the *write* the pipeline's is
-the split: `index_summary` embeds and upserts, and only `workflow` calls it.
+**One table, never one ranking.** Every search filters on `embedder` and
+`level` before a distance is taken: a whole video's summary ranked beside a
+chapter would let one long text crowd out every shorter one, the count-bias
+failure moment aggregation guards against, two levels up -- and none of them
+ranks against a moment in `embeddings`.
+
+The vectors are made when a run names a database, as the summary vector was:
+the tier embeds, the pipeline writes, and a `Folder` keeps them per embedder in
+`aggregate_units.json` in the source's folder.
 
 **Spans are resolved through the timeline, never trusted from the model.** It
 is asked for chunk ids, which it can copy; times it would invent.
@@ -1314,7 +1541,9 @@ only, since a key the profile does not name is a different profile. Moving it
 re-described nothing, because identity was never in a prompt hash. test1's
 labels are on the custom `activity` question, so `data/aggregates.json` carries
 an `actors` profile: after the move test1 linked into **the same groups**, and
-`eval.entities` printed the same table as below.
+`eval.entities` printed the same table as below. (`eval/entities.py` and
+its labels were removed on 2026-09-29: the `activity` run of test1 it reads is
+no longer on disk. Both are in git at b3f5986.)
 
 **Whole values need a threshold.** A profile over a text field, the prose or the
 transcript yields one mention per answer, so nothing in the video is provably
@@ -1375,7 +1604,7 @@ tracking + merge (worst B3 0.88 but precision 0.90); **pairing a chunk's two
 answers first** (precision 1.00 on both videos, but only with place words read
 from `action`, which helped OpenAI and hurt bge); a lower second bar for
 stragglers; and **a model merging whole rule-built groups**
-(`eval/llm_merge.py`), which moved B3 -0.02 to +0.02 run to run and proposed
+(`eval/llm_merge.py`, since removed), which moved B3 -0.02 to +0.02 run to run and proposed
 4-9 merges per run between people it had been told were on screen together.
 
 **test2 was not part of the choice, and it is the weakest of the three.** 60 s,
@@ -1431,7 +1660,7 @@ the change: 3 doubts, the cream coat among them, 0 members lost.
 **A score that skips doubtful labels hides exactly the wrong merges.** The
 first real run scored precision 1.00 while merging a dark puffy coat and a
 cream coat into the woman in the gray top -- every one of those mentions was
-labelled unsure, so no pair of them was scored. `eval/entities.py` now counts
+labelled unsure, so no pair of them was scored. `eval/entities.py` counted
 links touching unsure mentions as `unchecked`, and `different` labels rule a
 mention out of a group. Still linked, unscored: the dark-coat and cream-coat
 women (now flagged by the check), and two women linked on "entering" (not
@@ -1445,7 +1674,8 @@ the check test1 was not tuned on. A direction, not a result.
 **Attribute tracking is a prototype in `eval/`, not the linker.** test.md's
 proposal -- the `people` shape answering in fixed vocabularies, a weighted
 distance over them, Hungarian assignment over answers in time order -- lives in
-`eval/attributes.py` and `eval/tracking.py`, reading test1 re-described under
+`eval/attributes.py` (and `eval/tracking.py`, since removed -- its best
+variant is `track` in `eval/linkers.py`), reading test1 re-described under
 `data/eval/people` so the real test1's `activity` labels were untouched.
 Attributes separate same from different people at AUC 0.970 against 0.862 for
 word overlap. The one fix that helped is a **merge pass** joining tracks that
@@ -1573,13 +1803,13 @@ is "not obviously worse, and free". The 12x latency is the network round trip.
 Indexing all 49 units took 2.0 s after a 34.5 s first load, download included.
 
 **Supabase's vector columns were `vector(1536)`** -- OpenAI's width written into
-the schema, refusing any other embedder at the first upsert. `install.sql`
+the schema, refusing any other embedder at the first upsert. The schema file
 alters both to unconstrained `vector` and drops the HNSW index, which needs a
 fixed width. Every query filters on `embedder`, whose key carries the width,
 before a distance is taken, so two widths never meet. On a corpus this size the
 exact scan is milliseconds; one space with millions of rows would want a
 partial expression index back. `SupabaseIndex` turns "expected 1536
-dimensions" into "re-run install.sql".
+dimensions" into "re-run video_rag.sql".
 
 **Verified as far as this machine reaches.** Real: OpenAI on both protocols
 (including gpt-5.4-mini refusing `max_tokens` on Chat Completions and the retry
@@ -1657,8 +1887,10 @@ component published the verb that does its work on objects:
     cut         run load apply
     describe    run load answer      available DescriberUnavailable
                                      StoreUnavailable
+                add_question remove_question question questions
+                                     PromptError ProtectedPrompt
     embed       run      encode      available EmbedderUnavailable  Unit
-    retrieve    search videos        Moment
+    retrieve    search               Moment
 
 Three tests for staying: a second way *in* that no naming collapses into `run`
 (`evidence`, `retune`, `search`, and now each component's verb), an exception a
@@ -1760,10 +1992,10 @@ written still fires. `Unavailable` is the branch worth catching on its own --
 no package, no weights, no key, no server, none of it fixed by retrying.
 Two names collided: `ModelUnavailable` existed twice with *different* bases,
 so `except ModelUnavailable` silently covered half of what it looked like it
-covered (now one class in `shared/errors.py`), and `Protected` is now
+covered (now one class in `shared/reporting/errors.py`), and `Protected` is now
 `ProtectedDefinition` and `ProtectedPrompt`.
 
-**The rule was asserted, not held, until `example.py` checked it.** Its first
+**The rule was asserted, not held, until `eval/library_check.py` checked it.** Its first
 run found seven of the refusals a caller meets first -- a setting no backend
 takes, a floor above the ceiling, `limit=0`, `batch=0`, an unknown question --
 raising a bare `ValueError`, and a sweep found 63 deliberate builtin raises
@@ -1788,7 +2020,7 @@ so all nine custom shapes in `data/prompts.json` were dropped at every load
 and each of their questions answered in the fallback `scene` shape, reporting
 nothing. Found by pyflakes (undefined name), not by any run. It calls
 `compile_fields` now, a dropped shape logs a WARNING with the reason, and
-`example.py` adds a custom question and checks its schema. Found the same
+`eval/library_check.py` adds a custom question and checks its schema. Found the same
 way: `fields.check_fields` still checked an `identity` key nothing defines,
 a leftover from when identity lived on shapes -- a `NameError` for any custom
 field with `of`.
@@ -1875,6 +2107,70 @@ and `MemoryFrames` is sized, so an empty one is falsy -- and it is always empty
 at the line that records `frame_store` in the manifest config. Truthiness wrote
 `frame_store: null` into every in-memory manifest. `is not None` throughout.
 
+**Models and a database are values a caller builds once and hands in.**
+
+    models = Models(describer="openai", embedder="local", llm="anthropic")
+    db = Supabase()                       # or Supabase(url=..., key=...)
+    video_rag("x.mp4", "data/out", models=models, database=db)
+    aggregates.aggregate(home, out, models=models, summary=True)
+    search("the reactor", "x", models=models, database=db)
+
+The embedder is why. It must be one model wherever a space is built or read:
+`embed` builds the index in it, `search` queries it, the people linker
+measures identity in it. A string per call let a search with `openai` meet an
+index built with `local` and come back empty -- and `example.py` had exactly
+that: `local` for the index, the default `openai` for the linker. The
+database is the other half: `"supabase"` only named one because the URL and
+keys came from `.env`, and a second project, another key or one client held
+across a run had nowhere to live.
+
+Neither is required. Every call still takes `describer=` / `embedder=` /
+`llm=` strings and `database="supabase"`; `Models` holds what was *given*,
+never what it resolves to, so a default is still chosen when the call is
+made. A role set on `Models` *and* as a keyword is refused (`unpack`), not
+ranked. A role that is named is checked at construction -- unknown provider,
+wrong role, no key -- and one left `None` is not, so a caller who never
+summarises needs no llm key to build one. `Supabase()` checks that a URL and
+a key exist and connects on first use.
+
+**Pipelines take the values; components do not.** `video_rag`, `aggregate`,
+`workflow` and `search` unpack them; `describe` still takes a describer and
+`embed` an embedder, because a signature is a component's whole surface and
+`/capabilities` builds forms from it -- a `Models` parameter publishes nothing
+a form can use. A `Database` is never handed below a pipeline, as before.
+
+**`Database` is the seam a second backend needs, reads included.** Eight
+methods: `write` per artifact, `write_prompts`, `write_definitions`,
+`write_video_unit`, and `search`, `search_videos`, `spans`, `video_ids`.
+The readers were in `retrieve/postgres.py` and `retrieve/driver.py`, naming
+`chunks`, `timelines` and `video_embeddings` from inside a tier; they are in
+`supabase.py` now, which is the module that knows table names, and
+`postgres.py` is gone. **One module per backend**: `supabase.py` holds the
+row writers, the readers and the `Supabase` class over them -- everything the
+pipeline calls between components -- and `database.py` only the base class
+and the name registry, which points at each backend by dotted path because
+the backend imports the base. A Postgres or SQL backend is a sibling module
+and a row in `database.DATABASES`. `export` asks the backend, not
+`supabase.writer_for`, whether a document has rows: `write` answers False. A run builds its database once, before `media`, so a
+name missing its settings fails before the first step, and every export
+shares one client -- it used to open one per document.
+
+Found on the way: `write_video_unit` took an `api` and never passed it on,
+so the whole-video vector always went through a fresh default client.
+
+Verified with a recording `Database` double, nothing sent anywhere: all eight
+artifacts and the prompt rows exported from a `video_rag` run, the answers,
+definitions and summary vector from the workflow export, a search and
+`videos()` read through it, both refusals, and `Models` refusing an unknown
+provider, a wrong role, a missing key and an empty spec (32 checks).
+Not run against the live database.
+
+That double is kept now: `eval.library_check` carries a `MemoryDatabase` that
+stores what it is sent and ranks it by cosine, so the seam is checked on every
+run rather than once -- export from `video_rag` and `workflow`, a unit's own
+text finding its own chunk with the grid read from the database, a sampler
+filter, every-video scope, `videos()`, and each refusal. 117/117 free.
+
 **There is no per-thread data root any more, and that is deliberate.** A
 `Workspace` -- a `ContextVar` that outranked `configure()` -- was written when
 every component found its files by video id under the data root, so "two
@@ -1935,13 +2231,14 @@ collided with the function's own parameter and took the run down from inside a
 logging call. A logging call must never be the thing that fails a stage that has
 already done its work.
 
-**TYPES.txt is generated, and `--check` fails on a stale copy.** The argument is
-`schemas.py`'s, for the same reason: a restated field list drifts, and plan.txt
-proved it by naming `Media.fingerprint` (it is `source`), `Cuts.cut_points` (it
-is `cuts`) and a `Manifest.frames` that does not exist. Python keeps no
-per-attribute docstring at runtime, so `reference.py` parses the module with
-`ast` and reads both spellings already used here -- `#:` above a field and a
-bare string below one. `--undocumented` listed 78 fields; it lists none now.
+**There is no TYPES.txt** (removed 2026-10-05). It was a field reference
+generated from the dataclasses by `shared/contracts/reference.py`, with a
+`--check` against drift. Nothing read it, and the two things it restated are
+kept anyway: the `#:` note on each field in `documents.py`, and the JSON
+Schemas in `db/json/`, which `schemas --check` holds to the dataclasses. If a
+readable reference comes back, generate it from those, never by hand -- a
+restated field list drifts, as plan.txt's `Media.fingerprint` and
+`Manifest.frames` showed.
 
 **The sink table was derived, and then there was no table.** `sinks.support()`
 read `BACKENDS`, `rows.WRITERS` and each component's signature, because written
@@ -1987,218 +2284,20 @@ an `ImportError` for whoever installs it. `recovery/` stays excluded and
 
 ---
 
-## API
+## The API was removed
 
-**Every component has the same signature, so one route runs any of them.**
-`POST /videos/{id}/run/{component}` — `service.COMPONENTS` is a dispatch table,
-and adding a component adds a row. A route and a handler per stage is what the
-uniform signature removes. `params` is passed through as keyword arguments, so
-**every component setting is reachable over HTTP** without the route knowing
-any of them.
+`api/` (FastAPI, 26 routes, one job worker), `web/` (the client at `/app`) and
+`docs/ROUTES.md` were deleted on 2026-09-29: out of scope while the library
+settles. All three, and this file's sections on them, are in git at
+**b3f5986**.
 
-**`POST /videos` runs the whole pipeline; `run=false` registers and stops.**
-The workflow deliberately carries no per-stage tuning — a scene grid with a
-30 s floor, a uniform stride of 5, an `objects` vocabulary — so a caller
-wanting those drives the components itself. Without `run=false` it had to run
-the pipeline once on defaults first, paying for a describe it was about to
-redo. `run=false` runs `media` and nothing else, answered rather than queued
-because it is a container probe, and returns **201** with the id. `media` is
-the one component the run route cannot reach: until it has run there is no id
-to address.
-
-**`/capabilities` publishes each component's parameters**, read off the
-signature — name, type, default, required. Introspected for the reason
-`defaults` is read off `workflow.Options`: a restated list drifts, and a
-drifted one offers a parameter the component does not take or hides one it
-does. That is the contract a configuration UI builds against.
-
-**A signature says what a component accepts, not when a setting means
-anything.** `boundaries.evidence` takes `stride` and `silence_s` together, and a
-form built from the signature alone offered `silence_s` beside `policy: scene`,
-where it is silently ignored. `service.conditions()` adds a `when` to each such
-parameter -- another parameter and the values under which this one applies,
-or for a sampler spec the sampler names that read it -- with the values read off
-`POLICIES`, the sampler registry and `TRANSCRIBERS`. The client hides what does
-not apply and never sends a hidden value, so a `stride` typed before switching
-to `vad` does not ride along.
-
-**An annotation is the published type, so `Any` publishes nothing.**
-`retrieve.search` took `video_id: Any` -- true, since it accepts a string or a
-sequence -- and a generated form had nothing to build a widget from. It is
-`Optional[str | Sequence[str]]` now, which is what it always meant.
-
-**A published type is the annotation as written, and the client reads its
-shape.** `/capabilities` restates nothing, so a parameter's type arrives as
-`Optional[float]` or `str | Sequence[str]`. The client matched those strings
-*exactly* to pick a widget, so every `Optional[...]` field fell through to a
-text box and was sent as text: `threshold` reached a sampler as `"0.9"` and
-raised on its range check, and `vocabulary` arrived as a string that `list()`
-turned into one entry per letter. `kindOf` strips the wrapper, takes a union's
-first member -- which is why `str | Sequence[str]` stays one text box holding a
-spec the component parses itself -- and a sequence is split on commas for every
-such parameter rather than for `samplers` alone. Nine parameters were affected
-before the two `Optional[bool]` ones existed to make it visible.
-
-**The API calls components, never drivers.** A driver is argparse; importing
-one to reach the work behind it would make a server depend on a CLI.
-
-**Slow work is queued, one job at a time.** Every heavy stage contends for the
-same 8 GiB GPU: CLIP and YOLO in the video pass, Whisper and pyannote in the
-audio one. Two videos at once doubles the resident weights and invites an
-allocator failure halfway through the more expensive one.
-
-**Validation is synchronous even though the work is not.** `workflow.validate`
-returns problems as a list, so a contradiction is a 422 the caller sees at once
-rather than a job that fails a minute later. What cannot be known without
-opening the file — whether a track carries speech — still fails inside the job,
-because that is a property of the media rather than of the request.
-
-**Job records die with the process; artifacts do not.** `GET /jobs` says so.
-`GET /videos` reads the directory rather than remembering.
-
-**`stage` is what is running; `history` is what has finished.** The workflow
-announces each component twice -- once by name before it runs, once with its
-`Produced` after -- because a `stage` set only on completion names the
-*previous* component throughout the longest stage of the run. Observed: a
-poller read `stage: "cut"` for the whole of describe, four minutes of OpenAI
-calls, which is indistinguishable from being stuck on cut. The before-name is
-the caller's word for the step, since `boundaries.evidence` only reveals
-itself as `boundaries.audio` or `boundaries.scenes` once it has run.
-
-**A single-component job has no progress callback**, because components do not
-take one — they are one step, and a step emitting its own progress would be
-reporting to itself. The runner records the returned `Produced` instead, so a
-one-component job ends with the same shape a workflow job builds up.
-
-**Adding a prompt runs nothing, so it is not queued.** `POST /prompts` writes
-one file and returns 201; the queue exists for work that contends for the GPU.
-Deleting a question does not touch the descriptions it produced — a description
-cost a paid call and records the question it was asked, so removing the question
-does not make the answer untrue, it only stops new runs asking it.
-
-**A placeholder is checked at write time, not at call time.** `{frames}` in an
-instruction would raise inside `str.format` — after the frames are read, with
-the request about to be paid for. `check()` parses the instruction against
-`{n}`, `{span}`, `{vocabulary}` when it is submitted.
-
-**The export surface lists what exists, not what could exist.** An audio-only
-video advertises no manifest rather than offering a link that 404s — a broken
-link reads as breakage, not as a stage that never ran.
-
-**A form built from a registry defaults to whatever sorts first**, and that was
-`stub`: an audio-only run completed in 10.6 s, reported 42 segments and 205
-words, and wrote a transcript of `[stub0.0][stub0.1]`. Nothing was wrong enough
-to report. `/capabilities` publishes `defaults` read off `workflow.Options`, so
-the default lives in the dataclass the pipeline actually uses -- and, for the
-three model roles, `providers.defaults()`, since those fields stay `None` until
-a run resolves them.
-
----
-
-## Building a client
-
-Nothing about the pipeline needs to be hardcoded in a UI. `GET /capabilities`
-publishes every registry, the defaults, and each component's parameters, so a
-form is generated from it rather than kept in step with it.
-
-**Two ways to run a video, and the choice is about tuning.**
-
-    POST /videos                          upload + the whole pipeline.  202
-      policy sampler use_video use_audio describer embedder tier database
-      -> workflow defaults for everything per-stage
-
-    POST /videos  run=false               upload, probe, stop.          201
-      -> then POST /videos/{id}/run/{component} with `params`, in order:
-         audio · boundaries.evidence · boundaries · video · cut ·
-         describe · embed · aggregate
-
-The second is the one a configuration UI wants: `min_s`, `every_n`,
-`threshold`, `vocabulary`, `per_second` and the rest live on the component that
-owns them, and `/capabilities.parameters` names them with their types and
-defaults. `boundaries.evidence` returns a `Produced` with `skipped: [evidence]`
-when the policy needs none, rather than nothing -- **from the component
-itself**, not from a wrapper. It used to return `None` and `api/service.py`
-assembled the `Produced`, so one call answered differently depending on whether
-it arrived over HTTP or from an `import`, and the library's half was the one a
-caller had to special-case. A policy needing no precursor is an answer, not an
-absence, and every component returns `Produced` at both levels now -- which is
-the claim the uniform signature rests on. The wrapper is gone.
-
-**Order is the caller's responsibility on that path.** `workflow.py` is the
-reference for it; the dependencies are real — `boundaries` under `vad` or
-`speaker` needs `audio` to have run, under `scene` needs
-`boundaries.evidence`, and `cut`/`video` need the grid.
-
-**Progress.** `stage` is what is running, `history` what has finished, and a
-job's `detail` is the last `Produced`. Records die with the process; artifacts
-do not, so a restarted server still lists every video from disk.
-
-**Displaying results.** A search moment carries `descriptions` and `questions`
-keyed by answer id, so grouping by sampler or by question needs no id parsing.
-`GET /videos/{id}` lists only the artifacts that exist. Frames are
-`GET /videos/{id}/frames/{index}` by the read index a manifest names.
-
-**A score is a rank fusion, not a similarity.** `1/(k+best) + 0.5/(k+second)`
-at k=10, so 0.1326 is the ceiling for a chunk contributing two units and means
-"best ranked first, second ranked second" — never "this matched well". Measured:
-a nonsense query scores identically to the best real one, because dense always
-returns nearest neighbours and there is no relevance floor. If a UI shows a
-number, show the ranks beside it — the CLI prints `clip(v7,t1)
-uniform:text(v9,tNone)`, and `tNone` is how a reader sees the lexical half was
-silent. The API carries them as `moments[].ranks`.
-
-**Prompts are editable at runtime.** `GET/POST/DELETE /prompts`; a custom
-question names a shape or brings its own, built-ins refuse edits with 409, and
-adding a question invalidates nothing already described.
-
-**`/search` narrows nine ways, and `/capabilities.search` publishes them** --
-`sampler` (a pairing), `question`, `strategy` (one sampler's whole output),
-`chunk_ids`, `window`, `after`/`before`, `structured`, `candidates`. None costs
-a re-embedding: `text_hash` is over content alone, so every one of them is a
-query-layer change over payload the unit already carries. Measured across both
-backends, all six filters tried select **identical chunk sets**; rank order
-differs on two, which is the lexical halves diverging.
-
-**Time is resolved to chunk ids through the grid, never stored beside a
-vector.** It needs no column and no migration, so nothing already stored
-becomes unreachable.
-
-**`structured` is only useful with `one_of`.**
-`/capabilities.search.structured_fields` reads the shapes and lists exactly the
-fields whose values are a vocabulary, so a form offers `severity: severe` and
-not a free-text box that would match three different things.
-
-**A moment carries the ranks.** `ranks[sampler_id] = {dense, text}`, `text:
-null` meaning the lexical half was silent. Measured on the four-video corpus: a
-nonsense query scores **0.1136** against a real one's **0.1294**, so there is no
-relevance floor and the number alone says nothing. The ranks are the signal, and
-the CLI printed them long before the API did.
-
-**Scope is a set of videos, and that is one endpoint.** `video_ids` names them,
-omitting it searches every one, and `video_id` is the one-element shorthand.
-Searching one video, three, or all is the same question over a different set, so
-a second route for "all" was a distinction the data never had.
-
-**A search's notes are top-level, not only on its moments.** They rode on each
-moment, so an empty result -- the case "nothing matched those filters" exists
-for -- had nowhere to put them and reached the caller as a bare `[]`. Found by
-searching with an embedder that had never indexed the video: a silent 200. The
-note now names the embedder key, because that is exactly how such a search
-comes back empty.
-
-**Moments are keyed by `(video_id, chunk_id)`.** A chunk id indexes *one*
-video's grid. Grouping on the id alone fused chunk 0 of two videos into one
-moment with two unrelated accounts, and the agreement bonus scored that
-collision above either real answer -- invisible while the scope was one video,
-which is why it was written that way.
-
-**`level` picks granularity and never mixes the two.** `moment` ranks chunks;
-`video` ranks whole videos by their summary out of `video_embeddings`, which
-`aggregates` fills from its `summary` (Postgres only; 4/4 on the test
-corpus, winner 0.40-0.50 against runners-up of 0.05-0.32). One endpoint, but
-never one ranking: a whole-video "moment" beside real ones is not something you
-can play. At `level=video` the moment filters are reported under `ignored`
-rather than silently dropped, because they narrow *inside* a video.
+Mentions of `/capabilities`, routes, forms and a 422 elsewhere in this file
+are the reasons behind rules that still hold -- a signature is a component's
+whole surface, a setting no backend reads is refused, validation happens
+before work -- not a surface that exists. If the API comes back, its
+dispatch table (`service.COMPONENTS`), `conditions()` and the capability
+publishing are in that commit, and `providers.catalog()` is still here for
+it.
 
 ---
 
@@ -2261,34 +2360,43 @@ loads each by absolute path with `ctypes.WinDLL` first. The version is a
 contract — this project's torch is cu130 and ships `cublas64_13.dll`, which is
 not a substitute.
 
+It finds them where Python would import `nvidia` from
+(`find_spec("nvidia").submodule_search_locations`, a namespace package),
+before the environment's own site-packages. Searching only the latter -- as
+it did -- brought the same error back for any install holding `nvidia`
+elsewhere: `--user`, `--target`, a shared path entry. Found by the installed-
+package test, whose heavy extras sat on such a path.
+
 **pyannote 4.x returns `DiarizeOutput`, not `Annotation`.** The 3.x recipe
 `pipeline(audio).itertracks(yield_label=True)` raises `AttributeError`. The
 annotation is `.speaker_diarization`; `.exclusive_speaker_diarization` has
 overlaps resolved, which is what this uses — a word cannot belong to two
 speakers.
 
-**`create table if not exists` never changes a table.** `install.sql` is re-run
+**`create table if not exists` never changes a table.** Each schema file is re-run
 against live databases, so a column added, dropped or retyped only inside the
 `create` is simply not applied on every deployment that already had the table
 -- and the first statement to reference it fails, or worse, a writer sends a
 column PostgREST does not know. This bit three times: `structured`, then
 `chunk_samplers.questions`, then `embeddings.sampler`/`question`.
 
-So the `create`s hold the current shape and **section 10 holds the change**
-for a live database -- an `alter`, a `drop ... if exists` -- each a no-op once
-applied, and removed once every deployment has run it. Those migrations had
-accumulated to about a third of the file before being cleared out: dropped
-columns long gone, a backfill 0 rows needed, three superseded RPC signatures.
+So the `create`s hold the current shape and **a migration block holds the
+change** for a live database -- an `alter`, a `drop ... if exists`, placed
+after the `create`s (or before, for a table whose old shape would otherwise be
+kept) -- each a no-op once applied, and removed once every deployment has run
+it. Those migrations had accumulated to about a third of the file before being
+cleared out: dropped columns long gone, a backfill 0 rows needed, three
+superseded RPC signatures. Both files are clean as of the prefix rename.
 
-An audit is cheap and worth running after editing the file: parse the `create
+An audit is cheap and worth running after editing a file: parse the `create
 table` bodies, diff them against PostgREST's deployed column list, and check
-that every difference is covered in section 10.
+that every difference is covered by a migration.
 
 **A generated column is not repaired by `add column if not exists`.** It is a
 no-op when the column *exists*, so an `fts` built by an earlier expression
 survived a re-run and the lexical half quietly stopped indexing the terms it is
-best at. Changing `fts` means `drop column if exists fts` then the add, in
-section 10; the column is generated, so nothing is lost.
+best at. Changing `fts` means `drop column if exists fts` then the add, in a
+migration block; the column is generated, so nothing is lost.
 
 **A `vector` column comes back from PostgREST as a *string*.** `vector(1536)`
 arrives as the text `"[-0.0342,0.0450,...]"`, not a list. A cosine written
@@ -2360,8 +2468,9 @@ CLIP, YOLO, `gpt-5.4-mini`, `text-embedding-3-small`, GLiNER, DistilBERT —
 writing every document to a file, and a copy to Postgres when a run names a
 `database`.
 
-**The API figures below predate the sink and Qdrant removal**, and were taken
-when every component took a `sink` and `embed` wrote to a vector store. The
+**The API figures below predate the sink and Qdrant removal, and the API
+itself** -- they were taken when every component took a `sink`, `embed` wrote
+to a vector store and there was an HTTP surface. The
 run itself has been re-verified since, locally and on the component path
 (`data root -> 8 components -> embedded.json`, resume 0/8 on a second pass,
 299/299 on recreate, all three oracles); what has *not* been re-run since is
@@ -2388,30 +2497,33 @@ firing by query type on a 55-unit corpus: literal 14/20 rows, paraphrase 20/20,
 narration 20/20, nonsense **0/20**.
 
 `shared.contracts.schemas --check` proves the dataclasses and the generated JSON
-Schema still agree. The API serves **26 routes**; `docs/ROUTES.md` is the
-reasoning and `/docs` the authority on shapes. The web client at `/app` drives
-every route a run or a question needs, generating each form from
-`/capabilities` rather than restating it.
+Schema still agree.
+
+**As of 2026-09-29**, `eval.library_check` passes 117/117 on the free path.
+The paid path (`--llm`, and `example.py`) did not run: the OpenAI key in
+`.env` is refused with a 401, *Incorrect API key*. `Models(llm="openai")`
+still builds, because a named role checks that a key exists, not that it
+works -- that would be a network call at construction.
 
 **The live deployment, as of 2026-09-15** -- facts about one database, not the
 code, and worth re-checking before trusting:
 
-- `install.sql` is current, including the aggregates redesign. Verified on
+- The schema (then one `install.sql`) was current, including the aggregates redesign. Verified on
   test1 with the secret key: 8 `aggregates` rows carrying `inputs`, `version`
   and `stats.model`; `entities:actors` as 23 `entities` and 39
   `entity_mentions` (3 with a `doubt`); 4 `aggregate_definitions`. A planted
   stale entity and mention were deleted by the next write, and "who is in
   chunk 2" is one equality on `entity_mentions`.
 - The publishable key in `.env` is refused with a 401 while the secret key
-  works, so every read that goes through `db.client(write=False)` -- the
-  `/db/*` routes, `video_embeddings`, the grid fallback in `retrieve` -- fails
+  works, so every read that goes through `db.client(write=False)` --
+  `video_embeddings`, the grid fallback in `retrieve` -- fails
   there. The code has not changed; the key needs re-copying from Settings >
   API. The "exact under both keys" result above predates it.
 
 ## Not built
 
 - **Tests.** No suite. Verification is recreate's byte-comparison, the schema
-  check, `reference --check`, and ad-hoc scripts that are not kept -- which
+  check, `eval.library_check`, and ad-hoc scripts that are not kept -- which
   now includes the two oracles this factoring rests on, the `run`-vs-verb
   equivalence and the no-filesystem chain. Those two are worth keeping and are
   not kept.
@@ -2435,7 +2547,7 @@ code, and worth re-checking before trusting:
   mock server's recording of the request, not against the real thing.
 - **An answering model in-process.** Local answers go through a server --
   Ollama, LM Studio, llama.cpp, vLLM. Nothing loads a VLM into this process.
-- **Supabase at any width, run.** `install.sql` drops the fixed width and the
+- **Supabase at any width, run.** `video_rag.sql` has no fixed width and the
   live database has had it, but no non-OpenAI embedder has written there yet.
 - **Spans and items on a video longer than one window.** Both paths were
   exercised with the window shrunk to 4 chunks, never on a video that needs it.
