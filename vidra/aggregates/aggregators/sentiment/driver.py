@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ...shared.contracts.documents import fingerprint_of
-from ..core.base import Context, ModelUnavailable
-from ..core.inputs import Input, Read, read
-from ..core.rendering import pieces, plain
+from ....shared.contracts.documents import fingerprint_of
+from ...core.base import Context, ModelUnavailable
+from ...core.inputs import Input, Read, read
+from ...core.rendering import pieces, plain
 
 DEFAULT_SENTIMENT_MODEL = "distilbert-base-uncased-finetuned-sst-2-english"
 
@@ -80,20 +80,5 @@ class SentimentAggregator:
         }
 
 
-def sentiment(excerpt: Any, out: Any, previous: Any = None,
-              model: Optional[str] = None) -> Any:
-    """Tone per chunk of the excerpt file at `excerpt`, and where it turns,
-    into the answer file `out`."""
-    from ..driver import run_one
-    return run_one("sentiment", excerpt, out, previous, settings={"model": model})
 
-
-def main(argv: Any = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    from ..driver import component_main
-    return component_main(argv, "Tone per chunk of an excerpt, and where it turns.",
-                          aggregator="sentiment")
-
-
-__all__ = ["SentimentAggregator", "main", "sentiment"]
+__all__ = ["SentimentAggregator"]

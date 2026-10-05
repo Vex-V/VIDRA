@@ -141,8 +141,8 @@ PRODUCED_BY: dict[str, str] = {
     "store": "video",
     "aggregates": "aggregates",
     # Aggregate inputs and answers, which live wherever their caller says.
-    "excerpt": "aggregates.select",
-    "sightings": "aggregates.select",
+    "excerpt": "record.excerpt(out=...)",
+    "sightings": "record.sightings(out=...)",
     "aggregate": "aggregates",
 }
 

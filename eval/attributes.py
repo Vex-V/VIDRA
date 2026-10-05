@@ -51,10 +51,10 @@ class Corpus:
     """One video's people mentions, its labels, and the answers in time order."""
 
     def __init__(self, video: str = "test1", labels: Path = LABELS, data: Path = DATA):
-        from vidra.aggregates import context
+        from vidra.aggregates.core.record import context
         from vidra.aggregates.definitions import Selection
         from vidra.aggregates.core.inputs import Source
-        from vidra.aggregates.entities.linking import mentions_of
+        from vidra.aggregates.aggregators.entities.linking import mentions_of
 
         self.labels = json.loads(labels.read_text(encoding="utf-8"))
         self.truth = {m: person for person, ms in self.labels.items() for m in ms}

@@ -1,27 +1,27 @@
 """aggregates -- higher-level answers over what video_rag extracted.
 
-Reads the documents video_rag wrote, never the video. Tiers, cheapest first:
-`free` (arithmetic), `local` (local models), `llm` (model calls); the
-model-backed ones are imported only when used.
+Reads the documents video_rag wrote, never the video. Name the files once, build
+each input from them explicitly, then run one aggregator or several:
 
-Aggregators written as code: `stats`, `speakers`, `coverage`, `ner`,
-`sentiment`. From data: every prompt and link profile in `definitions`
-(`summary`, `chapters`, `events`, `entities:people`, and custom ones). Each is
-a component with one input and one answer:
+    video = aggregates.record(timeline=..., transcript=..., descriptions=...)
+    said = video.excerpt(transcript=True)
+    seen = video.excerpt(answers={"clip:activity": ["summary", "actors"]})
+    people = video.sightings(profile="people", answers=["yolo"])
 
-    select.select(record, out, "ner", "transcript")    -> an excerpt file
-    ner.ner(excerpt, out)                              -> ner.json
-    stats.stats(record, out)                           -> stats.json
-    prompt.prompt("summary", excerpt, out)             -> summary.json
-    entities.entities("people", sightings, out)        -> entities.people.json
+    aggregates.summary(input=said, out="answers/summary.json", models=models)
+    aggregates.aggregate(out="answers", models=models, summary=said, ner=said,
+                         entities_people=people, stats=video)
 
-    aggregate(record, out, ner="transcript", sentiment=True)   # only those two
+Tiers, cheapest first: `free` (arithmetic: `stats`, `speakers`, `coverage`),
+`local` (local models: `ner`, `sentiment`), `llm` (model calls: `summary`,
+`chapters`, `events`, custom prompts, and the link profiles
+`entities:people` / `objects` / `text`). The model-backed ones are imported
+only when used.
 
 `add_prompt` and `add_profile` add definitions of your own (`remove_prompt`,
 `remove_profile`, `definition` beside them); they run like the built-ins.
-
-`combine` lays several videos end to end as one record. `core/` holds what
-every aggregator shares; `database/` the export and `search`.
+`combine` lays several records end to end as one. `aggregators/` holds the
+implementations, `core/` what they share, `database/` the export and `search`.
 """
 
 from __future__ import annotations
@@ -33,9 +33,10 @@ from . import definitions
 from .definitions import (DefinitionError, ProtectedDefinition, add_profile,
                           add_prompt, definition, remove_profile, remove_prompt)
 from .core.base import TIERS, Context, missing
-from .coverage import CoverageAggregator
-from .speakers import SpeakersAggregator
-from .stats import StatsAggregator
+from .core.record import Record, RecordError, record
+from .aggregators.coverage import CoverageAggregator
+from .aggregators.speakers import SpeakersAggregator
+from .aggregators.stats import StatsAggregator
 from vidra.shared.reporting.errors import Refused
 
 REGISTRY: dict[str, Any] = {
@@ -45,18 +46,18 @@ REGISTRY: dict[str, Any] = {
 
 #: name -> ("module:Class", tier, about), imported on first use.
 _LAZY: dict[str, tuple[str, str, str]] = {
-    "ner": ("ner:NERAggregator", "local",
+    "ner": ("aggregators.ner:NERAggregator", "local",
             "named entities, and which chunks each appears in"),
-    "sentiment": ("sentiment:SentimentAggregator", "local",
+    "sentiment": ("aggregators.sentiment:SentimentAggregator", "local",
                   "tone per chunk, and where it turns"),
 }
 
 #: kind -> the runner every definition of that kind is built with.
 RUNNERS: dict[str, str] = {
-    "fold": "fold:FoldAggregator",
-    "spans": "spans:SpansAggregator",
-    "items": "items:ItemsAggregator",
-    "link": "entities:EntitiesAggregator",
+    "fold": "aggregators.fold:FoldAggregator",
+    "spans": "aggregators.spans:SpansAggregator",
+    "items": "aggregators.items:ItemsAggregator",
+    "link": "aggregators.entities:EntitiesAggregator",
 }
 
 
@@ -156,9 +157,11 @@ def build(name: str, llm: Optional[str] = None, embedder: Optional[str] = None,
     return runner(name, llm, **who, **settings)
 
 
-from .driver import (Inapplicable, aggregate, answer, answers,  # noqa: E402
-                     context, definition_rows, load, load_all,
-                     load_input, up_to, validate)
+from .driver import (AggregateError, Inapplicable, aggregate,  # noqa: E402
+                     answer, answers, definition_rows, load, load_all,
+                     load_input, validate)
+from .components import (chapters, coverage, entities, events, ner,  # noqa: E402
+                         prompt, sentiment, speakers, stats, summary)
 
 
 def __getattr__(name: str) -> Any:
@@ -169,10 +172,13 @@ def __getattr__(name: str) -> Any:
         return importlib.import_module(".database.search", __name__).search
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__all__ = ["REGISTRY", "RUNNERS", "TIERS", "Context", "DefinitionError", "Inapplicable",
-           "ProtectedDefinition", "about", "add_profile", "add_prompt", "aggregate",
-           "answer", "answers", "available", "build", "combine", "context",
-           "definition", "definition_rows", "kind_of", "load", "load_all",
-           "load_input", "merge", "missing", "remove_profile", "remove_prompt",
-           "settings_of", "search", "takes_inputs", "tier_of", "up_to",
-           "uses_embedder", "validate"]
+
+__all__ = ["REGISTRY", "RUNNERS", "TIERS", "AggregateError", "Context",
+           "DefinitionError", "Inapplicable", "ProtectedDefinition", "Record",
+           "RecordError", "about", "add_profile", "add_prompt", "aggregate",
+           "answer", "answers", "available", "build", "chapters", "combine",
+           "coverage", "definition", "definition_rows", "entities", "events",
+           "kind_of", "load", "load_all", "load_input", "merge", "missing", "ner", "prompt",
+           "record", "remove_profile", "remove_prompt", "search", "sentiment",
+           "settings_of", "speakers", "stats", "summary", "takes_inputs",
+           "tier_of", "uses_embedder", "validate"]

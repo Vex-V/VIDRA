@@ -15,10 +15,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Optional
 
-from .. import definitions
-from ..core.base import WINDOW, DefinitionRunner, schema
+from ... import definitions
+from ...core.base import WINDOW, DefinitionRunner, schema
 from ..fold import fold
-from ..core.rendering import resolve_span
+from ...core.rendering import resolve_span
 from .segment import segment
 
 #: Texts per embedding request, as `embed` sends them.
@@ -32,13 +32,13 @@ class SpansAggregator(DefinitionRunner):
                  min_span_s: float = 30.0) -> None:
         super().__init__(definition_id, llm)
         if max_spans is not None and (type(max_spans) is not int or max_spans < 1):
-            from ...shared.reporting.errors import Refused
+            from ....shared.reporting.errors import Refused
             raise Refused(f"max_spans must be a whole number, 1 or more; "
                           f"got {max_spans!r}")
         if not isinstance(min_span_s, (int, float)) or min_span_s < 0:
-            from ...shared.reporting.errors import Refused
+            from ....shared.reporting.errors import Refused
             raise Refused(f"min_span_s must be 0 or more seconds; got {min_span_s!r}")
-        from ...shared.models import embedders
+        from ....shared.models import embedders
         self.embedder = embedders.build(embedder)
         self.max_spans = max_spans
         self.min_span_s = float(min_span_s)

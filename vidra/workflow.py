@@ -5,6 +5,11 @@
 
 This file calls the two drivers and nothing below them. `Options` is flat:
 both tiers' settings in one record.
+
+The library reads nothing by default; a run is where the choice is made. Every
+aggregator up to `tier` runs on everything extraction produced: the counters
+on the record, each text aggregator on the transcript and every answer's prose,
+each link profile on every answer.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from . import aggregates
 from .shared.config import paths
@@ -70,13 +75,38 @@ def extraction(options: Options) -> video_rag.Options:
         embedder=chosen["embedder"], database=options.database)
 
 
-def chosen(options: Options) -> dict[str, bool]:
-    """The aggregators a run hands data to: every one up to its tier, on its
-    default data.
-    """
+def chosen(options: Options) -> list[str]:
+    """The aggregators a run uses: every one whose cost is at most its tier."""
     if options.tier not in aggregates.TIERS:
-        return {}
-    return aggregates.up_to(options.tier)
+        return []
+    ceiling = aggregates.TIERS.index(options.tier)
+    return [name for name in aggregates.available()
+            if aggregates.TIERS.index(aggregates.tier_of(name)) <= ceiling]
+
+
+def inputs_for(names: list[str], home: Path) -> tuple[dict[str, Any], dict[str, str]]:
+    """What each aggregator reads in a run, built from the folder extraction
+    wrote, and why any could not run."""
+    at = video_rag.layout(home)
+    video = aggregates.record(**{kind: at[kind] for kind in
+                                 ("timeline", "transcript", "descriptions", "manifest")
+                                 if at[kind].exists()})
+    prose = {answer: ["summary"] for answer in video.answer_ids()}
+    handed: dict[str, Any] = {}
+    skipped: dict[str, str] = {}
+    for name in names:
+        reads = aggregates.driver.wants(name)
+        try:
+            if reads == "a record":
+                handed[name] = video
+            elif reads == "sightings":
+                handed[name] = video.sightings(profile=name, answers=list(prose))
+            else:
+                handed[name] = video.excerpt(transcript="transcript" in video.paths,
+                                             answers=prose)
+        except aggregates.RecordError as why:
+            skipped[name] = str(why)
+    return handed, skipped
 
 
 def validate(options: Options) -> list[str]:
@@ -88,8 +118,14 @@ def validate(options: Options) -> list[str]:
         used = roles(options)
     except Refused as exc:
         return [str(exc)]
-    return (video_rag.validate(extraction(options))
-            + aggregates.validate(chosen(options), used["llm"], used["embedder"]))
+    from .shared.models import providers
+    names = chosen(options)
+    problems = video_rag.validate(extraction(options))
+    if any(aggregates.tier_of(n) == "llm" for n in names):
+        problems += providers.problems("llm", used["llm"])
+    if any(aggregates.uses_embedder(n) for n in names):
+        problems += providers.problems("embed", used["embedder"])
+    return problems
 
 
 def process(options: Options,
@@ -118,9 +154,13 @@ def _process(options: Options,
     # answers there are reused while current.
     say("aggregate", None)
     answers = video_rag.layout(run.home)["aggregates"]
+    handed, cannot = inputs_for(chosen(options), run.home)
     produced = aggregates.aggregate(
-        run.home, answers, previous=answers, llm=used["llm"],
-        embedder=used["embedder"], aggregators=chosen(options), database=database)
+        out=answers, previous=answers, llm=used["llm"], embedder=used["embedder"],
+        database=database, **{name.replace(":", "_"): data
+                              for name, data in handed.items()})
+    produced.stats["skipped"] = {**cannot, **produced.stats.get("skipped", {})}
+    produced.skipped = sorted(produced.stats["skipped"])
     run.steps.append(produced)
     run.problems += produced.stats.get("problems") or []
     say(produced.component, produced)

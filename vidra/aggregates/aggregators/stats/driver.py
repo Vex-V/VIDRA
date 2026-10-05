@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..core.base import Context
+from ...core.base import Context
 
 class StatsAggregator:
     name = "stats"
@@ -48,20 +48,5 @@ class StatsAggregator:
         }
 
 
-def stats(source: Any, out: Any, previous: Any = None) -> Any:
-    """Count the record at `source` -- a video's folder, a combination's, or a
-    mapping of documents -- into the answer file `out`. `previous` is an
-    earlier answer's file, reused if the record has not changed."""
-    from ..driver import run_one
-    return run_one("stats", source, out, previous)
 
-
-def main(argv: Any = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    from ..driver import component_main
-    return component_main(argv, "Counts over a record: chunks, samplers, words, "
-                                "frames.", aggregator="stats")
-
-
-__all__ = ["StatsAggregator", "main", "stats"]
+__all__ = ["StatsAggregator"]

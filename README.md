@@ -41,21 +41,22 @@ macOS have not been run.
 ## Install
 
 ```bash
-pip install vidra              # core: uniform sampling, API models
-pip install "vidra[local]"     # clip, yolo, objects, text samplers; local embedder, NER, sentiment
-pip install "vidra[audio]"     # Whisper transcription, pyannote speaker diarization
-pip install "vidra[all]"       # both
+git clone https://github.com/Vex-V/FalCONvar.git
+cd FalCONvar
+pip install -r requirements.txt
 ```
 
-On an NVIDIA GPU, install PyTorch's CUDA build: pip's default build on Windows
-is CPU-only.
+On an NVIDIA GPU, add PyTorch's CUDA index; pip's default PyTorch build on
+Windows is CPU-only:
 
 ```bash
-pip install "vidra[all]" --extra-index-url https://download.pytorch.org/whl/cu130
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
 ```
 
-From a checkout, `pip install -e ".[all]"` installs it editable;
-`requirements.txt` pins the exact versions it was developed against.
+`requirements.txt` installs every dependency, pinned to the versions the
+library was developed against. `vidra` itself is not installed, so run
+`python -m vidra...` and your own scripts from the repository root, or add
+the root to `PYTHONPATH`.
 
 ## Configuration
 
@@ -114,9 +115,15 @@ moments, notes = search("a customer paying in cash", run.video_id,
 for m in moments:
     print(m.chunk_id, m.start_ts, m.end_ts, m.hits[0]["content"][:80])
 
-# Whole-video answers, also exported to the database
-done = aggregates.aggregate(run.home, run.home / "aggregates",
-                            models=models, database=db, summary=True, chapters=True)
+# Whole-video answers: name the files, choose what each aggregator reads, run.
+d = run.home
+video = aggregates.record(timeline=d / "timeline.json",
+                          transcript=d / "transcript.json",
+                          descriptions=d / "descriptions.json")
+said = video.excerpt(transcript=True)
+
+done = aggregates.aggregate(out=d / "aggregates", models=models, database=db,
+                            summary=said, chapters=said)
 print(aggregates.load(done.artifacts["summary"]).payload["summary"])
 
 # Search the summaries and chapters
@@ -140,8 +147,8 @@ python -m vidra.video_rag video.mp4 data/out --sampler clip
 # Search
 python -m vidra.video_rag.retrieve "a customer paying" <video_id> --embedder local --database folder
 
-# Aggregates
-python -m vidra.aggregates data/out/<video_id> --out data/out/<video_id>/aggregates --summary --ner
+# Aggregates: a JSON spec of the files, the inputs and what reads each
+python -m vidra.aggregates spec.json
 python -m vidra.aggregates --list
 ```
 
@@ -205,13 +212,13 @@ what the vision model is asked about them. Any sampler pairs with any
 question as `sampler:question`. With no question, the sampler's own name
 is used.
 
-| Sampler | Keeps a frame when | Extra |
-|---|---|---|
-| `uniform` | every Nth frame (`every_n`) | core |
-| `clip` | the scene changes (CLIP embedding) | `[local]` |
-| `yolo` | the people in view change (YOLO) | `[local]` |
-| `objects` | detected objects change (YOLO-World, `vocabulary=`) | `[local]` |
-| `text` | on-screen text changes (EasyOCR, `languages=`) | `[local]` |
+| Sampler | Keeps a frame when |
+|---|---|
+| `uniform` | every Nth frame (`every_n`) |
+| `clip` | the scene changes (CLIP embedding) |
+| `yolo` | the people in view change (YOLO) |
+| `objects` | detected objects change (YOLO-World, `vocabulary=`) |
+| `text` | on-screen text changes (EasyOCR, `languages=`) |
 
 Every chunk keeps at least one frame. `max_per_chunk` and `min_interval_s`
 cap how many are kept.
@@ -242,7 +249,8 @@ be redefined.
 
 ## Aggregates
 
-Each aggregator writes one answer file and runs only when named.
+An aggregator answers a question about the whole video and writes one answer
+file. Nothing runs, and nothing is read, unless you name it.
 
 | Cost | Aggregator | Answers |
 |---|---|---|
@@ -259,37 +267,112 @@ Each aggregator writes one answer file and runs only when named.
 Linking in `entities:*` is done by rules over embeddings; the model only
 writes the account of each linked entity.
 
-Text aggregators read a selection, by default `transcript+*` (the transcript
-and every description):
-
-| Selection | Means |
-|---|---|
-| `transcript` | the transcript only |
-| `clip:safety` | one sampler's answers to one question |
-| `clip:safety[severity,hazards]` | two fields of those answers |
-| `a+b` | `a` and `b` read as one input |
-| `a,b` | two separate answers |
+### 1. Name the files: a record
 
 ```python
-aggregates.aggregate(run.home, run.home / "aggregates", models=models,
-                     summary=True, ner="transcript", sentiment=True)
+d = run.home                                   # data/out/<video_id>
+video = aggregates.record(
+    timeline=d / "timeline.json",              # required: the chunk grid
+    transcript=d / "transcript.json",          # optional
+    descriptions=d / "descriptions.json",      # optional
+    manifest=d / "manifest.json",              # optional; only stats reads it
+)
 ```
 
-Several videos can be aggregated as one: `aggregates.aggregate([home_a, home_b], out, ...)`
-places them on one clock first.
+Documents from another video, or cut on a different grid, are refused.
 
-A custom aggregate prompt is stored in `data/aggregates.json` and runs like
-the built-ins:
+### 2. Choose what each aggregator reads
+
+| Input | Built with | Read by |
+|---|---|---|
+| record | `aggregates.record(...)` | `stats`, `coverage`, `speakers` |
+| excerpt | `video.excerpt(transcript=..., answers=...)` | `ner`, `sentiment`, `summary`, `chapters`, `events`, custom prompts |
+| sightings | `video.sightings(profile=..., answers=[...])` | `entities` |
+
+```python
+said = video.excerpt(transcript=True)
+seen = video.excerpt(answers={"clip:activity": ["summary", "actors"]})
+said_and_seen = video.excerpt(transcript=True,
+                              answers={"clip:activity": ["summary", "actors"]})
+people = video.sightings(profile="people", answers=["yolo"])
+```
+
+- An **excerpt** is text per chunk: the transcript, and/or chosen fields of
+  chosen answers. A key of `answers` is an answer id as `descriptions.json`
+  stores it (`clip:activity`, or `yolo` for a sampler asked its own question),
+  and its value lists the fields to read; `summary` is the answer's prose.
+- **Sightings** are one entry per thing a list field mentions, such as each
+  person in `yolo`'s `people`, for linking. `keys=["clothing"]` narrows what
+  identifies an entry.
+- An answer, field or profile the record does not have is refused at this
+  step, before anything is paid for. `out=` also writes the input to a file.
+
+### 3a. Run one aggregator
+
+```python
+aggregates.stats(record=video, out="answers/stats.json")
+aggregates.coverage(record=video, out="answers/coverage.json")
+aggregates.speakers(record=video, out="answers/speakers.json")
+
+aggregates.ner(input=said, out="answers/ner.json", labels=["person", "product"])
+aggregates.sentiment(input=said, out="answers/sentiment.json")
+
+aggregates.summary(input=said_and_seen, out="answers/summary.json", models=models)
+aggregates.chapters(input=said, out="answers/chapters.json", models=models, max_spans=4)
+aggregates.events(input=said_and_seen, out="answers/events.json", models=models)
+
+aggregates.entities(profile="people", input=people, out="answers/people.json",
+                    models=models)
+```
+
+`input=` also accepts the path of an input written with `out=`. `previous=`
+is an earlier answer file, reused unchanged if it would be computed the same
+way. Each call returns a receipt; `aggregates.load(path)` reads an answer.
+
+### 3b. Run several: the pipeline
+
+```python
+done = aggregates.aggregate(
+    out=d / "aggregates",
+    models=models,
+    database=db,                                 # optional copy
+    previous=d / "aggregates",                   # reuse answers still current
+    summary=said_and_seen,
+    chapters=said,
+    ner=said,
+    sentiment={"spoken": said, "seen": seen},    # two answers: sentiment~spoken, ~seen
+    entities_people=people,
+    stats=video,
+    settings={"ner": {"labels": ["person"]}, "chapters": {"max_spans": 4}},
+)
+```
+
+It runs exactly the aggregators named, cheapest first, and keeps what each
+one read in `out/inputs/`.
+
+### Several videos
+
+```python
+both = aggregates.combine(records=[monday, tuesday], out="data/out/both")
+```
+
+This lays the videos end to end on one clock and returns a record, used like
+any other.
+
+### Custom prompts
+
+A custom prompt is stored in `data/aggregates.json`:
 
 ```python
 aggregates.add_prompt(
     "incident_report", "Write an incident report for this video.",
     fields={"report": {"type": "text", "about": "What happened, in order."},
             "severity": {"type": "text", "about": "How serious.",
-                         "one_of": ["none", "minor", "major"]}},
-    inputs="clip:safety")
-aggregates.aggregate(run.home, run.home / "aggregates", models=models,
-                     incident_report=True)
+                         "one_of": ["none", "minor", "major"]}})
+
+aggregates.prompt(name="incident_report", input=seen, out="answers/incident.json",
+                  models=models)
+# or, in the pipeline: aggregates.aggregate(out=..., incident_report=seen)
 ```
 
 `kind="fold"` (the default) gives one answer, `"spans"` a set of time spans,
@@ -349,7 +432,7 @@ are checked against a mock server that records requests.
 Each PyTorch model uses CUDA if available, then Apple's `mps`, then the CPU.
 Whisper uses CUDA or the CPU, since its backend (CTranslate2) has no `mps`
 support. The `mps` path has not been run on a Mac. Intel Macs cannot install
-`[local]`: PyTorch publishes no Intel Mac builds after 2.2.
+the PyTorch in `requirements.txt`: there are no Intel Mac builds after 2.2.
 
 Measured with `eval.library_check --local` on an RTX 4060 laptop, and on the
 same machine with the GPU hidden:
@@ -370,8 +453,8 @@ python -m eval.library_check --local     # + Whisper, pyannote and the model-bac
 python -m eval.library_check --llm       # + a real describer, embedder and llm aggregates (paid)
 ```
 
-It exits non-zero if any check fails. On 2026-10-05, an installed `[all]` wheel
-passed every check on Python 3.11, 3.12, 3.13 and 3.14.
+It exits non-zero if any check fails. On 2026-10-05 every check passed on
+Python 3.11, 3.12, 3.13 and 3.14, with all dependencies installed.
 
 Two further checks run from a checkout:
 
@@ -386,7 +469,8 @@ python -m recovery.recreate D/manifest.json --verify D/store   # rebuild the fra
 vidra/
   workflow.py     both tiers in one call
   video_rag/      tier 1: media, audio, boundaries, video, cut, describe, embed, retrieve
-  aggregates/     tier 2: select, one folder per aggregator, combination, definitions
+  aggregates/     tier 2: record and inputs, the aggregator functions, the pipeline,
+                  combination, definitions
   shared/         config, errors and logging, document types, storage backends, model providers
 eval/             library_check, and benchmarks for linking and retrieval
 recovery/         rebuilds a frame store from a manifest and the video; imports nothing from vidra

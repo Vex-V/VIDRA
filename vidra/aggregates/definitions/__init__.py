@@ -49,10 +49,10 @@ CHECKS = ("flag", "off")
 MAX_INSTRUCTION = 4000
 MAX_NARRATIVES = 50
 
-PROMPT_KEYS = frozenset({"kind", "about", "instruction", "fields", "inputs",
+PROMPT_KEYS = frozenset({"kind", "about", "instruction", "fields",
                          "key", "fold_instruction"})
 PROFILE_DEFAULTS: dict[str, Any] = {
-    "identity": [], "story": [], "transcript": False, "from": "*",
+    "identity": [], "story": [], "transcript": False,
     "threshold": None, "rule": "max", "mutual": True, "check": "flag",
     "min_appearances": 2, "max_narratives": 12,
 }
@@ -185,14 +185,6 @@ def version_of(section: str, name: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def default_selection(definition_id: str) -> str:
-    section, name = locate(definition_id)
-    entry = get(section, name)
-    if section == "profiles":
-        return entry.get("from") or "*"
-    return entry.get("inputs") or inputs_mod.DEFAULT
-
-
 @dataclass(frozen=True)
 class Selection:
     """What one link runs over: which answers, which field, which keys."""
@@ -203,18 +195,17 @@ class Selection:
     keys: tuple[str, ...]
 
 
-def selection(name: str, override: Optional[inputs_mod.Input] = None) -> Selection:
-    """A profile's selection, narrowed by an input if given: `yolo[people.clothing]`
-    reads only yolo's answers and links on clothing. An input may narrow the
-    identity keys, never widen them.
+def selection(name: str, chosen: inputs_mod.Input) -> Selection:
+    """A profile's selection over the answers `chosen` names, narrowed by its
+    fields if it has any: `people.clothing` links on clothing alone. An input
+    may narrow the identity keys, never widen them.
     """
     entry = get("profiles", name)
     field = entry["field"]
     identity = tuple(entry.get("identity") or ())
-    chosen = override or inputs_mod.parse(entry.get("from") or "*")[0]
     keys = identity
     asked = [f for s in chosen.sources for f in s.fields]
-    if override is not None and asked:
+    if asked:
         if not identity:
             raise inputs_mod.InputError(
                 f"profile {name!r} links whole `{field}` values; its input takes no fields")
@@ -259,25 +250,9 @@ def _check_fields(fields: Any, owned: frozenset[str]) -> list[str]:
     return problems
 
 
-def _check_selection(text: Any, vocabulary: Optional[dict[str, Any]],
-                     single: bool = False) -> list[str]:
-    try:
-        parsed = inputs_mod.parse(str(text))
-    except inputs_mod.InputError as exc:
-        return [str(exc)]
-    problems = []
-    if single and (len(parsed) != 1 or any(s.fields for s in parsed[0].sources)):
-        problems.append("`from` is one input of sources without fields; the "
-                        "profile's `field` and `identity` say what is read")
-    if vocabulary is not None:
-        problems += inputs_mod.check(parsed, vocabulary)
-    return problems
-
-
 def check_prompt(name: str, entry: dict[str, Any],
                  vocabulary: Optional[dict[str, Any]] = None) -> list[str]:
-    """Everything wrong with a proposed prompt. `vocabulary` checks its
-    `inputs` against what exists; None checks syntax alone."""
+    """Everything wrong with a proposed prompt."""
     problems = _check_name(name)
     unknown = set(entry) - PROMPT_KEYS - {"builtin"}
     if unknown:
@@ -296,8 +271,6 @@ def check_prompt(name: str, entry: dict[str, Any],
         elif not FIELD_NAME.match(str(entry["key"])):
             problems.append(f"`key` must match {FIELD_NAME.pattern}")
     problems += _check_fields(entry.get("fields"), OWNED.get(kind, frozenset()))
-    if entry.get("inputs") is not None:
-        problems += _check_selection(entry["inputs"], vocabulary)
     return problems
 
 
@@ -374,7 +347,7 @@ def check_profile(name: str, entry: dict[str, Any],
             "answer is provably different from anything else, so no threshold "
             "can be read off the video -- give `threshold`")
     problems += _check_measures(entry, identity)
-    from ..entities.linking import RULES
+    from ..aggregators.entities.linking import RULES
     if entry.get("rule") not in RULES:
         problems.append(f"`rule` must be one of {', '.join(RULES)}")
     if entry.get("check") not in CHECKS:
@@ -389,8 +362,6 @@ def check_profile(name: str, entry: dict[str, Any],
         problems.append(f"`max_narratives` is a whole number, 0 to {MAX_NARRATIVES}")
     problems += _check_text(entry.get("instruction"), "instruction")
     problems += _check_fields(entry.get("fields"), OWNED["link"])
-    if field != "transcript":
-        problems += _check_selection(entry.get("from") or "*", vocabulary, single=True)
 
     if vocabulary is not None and field not in (inputs_mod.PROSE, "transcript"):
         shapes = list(vocabulary["questions"].values())
@@ -446,7 +417,7 @@ def remove(section: str, name: str) -> None:
 
 
 def add_prompt(name: str, instruction: str, fields: dict[str, Any], *,
-               kind: str = "fold", inputs: Optional[str] = None,
+               kind: str = "fold",
                key: Optional[str] = None, fold_instruction: Optional[str] = None,
                about: str = "") -> dict[str, Any]:
     """Add an aggregate prompt of your own, or replace one you added. Returns
@@ -460,8 +431,8 @@ def add_prompt(name: str, instruction: str, fields: dict[str, Any], *,
                 "severity": {"type": "text", "about": "how serious",
                              "one_of": ["none", "minor", "major"]},
             },
-            inputs="clip:hazards[severity,hazards]")
-        aggregate(record, out, incident_report=True)
+        )
+        aggregates.prompt(name="incident_report", input=excerpt, out=...)
 
     `kind` is how it is asked:
 
@@ -471,21 +442,20 @@ def add_prompt(name: str, instruction: str, fields: dict[str, Any], *,
 
     `fields` uses describe's builder: `type` is `text` or `list`, `about` is what
     the model is told to put there, `one_of` fixes the values, `of` makes a
-    list's entries objects. `inputs` is the default selection (`transcript+*`
-    when None); `key` names the list a spans or items answer is under (the kind
-    when None); `fold_instruction` is how a fold merges partial summaries.
+    list's entries objects. `key` names the list a spans or items answer is
+    under (the kind when None); `fold_instruction` is how a fold merges partial summaries.
     Saved in `aggregates.json` under the data root. A built-in's name raises
     `ProtectedDefinition`; anything else wrong raises `DefinitionError`.
     """
     add("prompts", name, {"kind": kind, "about": about, "instruction": instruction,
-                          "fields": fields, "inputs": inputs, "key": key,
+                          "fields": fields, "key": key,
                           "fold_instruction": fold_instruction})
     return definition(name)
 
 
 def add_profile(name: str, field: str, instruction: str, fields: dict[str, Any], *,
                 identity: Optional[list[str]] = None, story: Optional[list[str]] = None,
-                inputs: Optional[str] = None, transcript: Optional[bool] = None,
+                transcript: Optional[bool] = None,
                 threshold: Optional[float] = None, rule: Optional[str] = None,
                 mutual: Optional[bool] = None, check: Optional[str] = None,
                 min_appearances: Optional[int] = None,
@@ -504,11 +474,12 @@ def add_profile(name: str, field: str, instruction: str, fields: dict[str, Any],
             "order. Say what it is and who used it for what.",
             fields={"use": {"type": "text", "about": "who used it, for what"}},
             identity=["object", "appearance"], story=["context"])
-        aggregate(record, out, entities_tools=True)
+        aggregates.entities(profile="tools", input=video.sightings(
+            profile="tools", answers=["objects"]), out=...)
 
     `field` is the answer field whose entries are linked; `identity` the entry
     keys that say who is who, `story` the keys the account reads besides.
-    `inputs` picks which answers are read (`*` when None). `instruction` and
+    `instruction` and
     `fields` describe the account written for each linked entity. The rest
     tune linking and default as the built-in profiles do: `threshold` (needed
     without `identity`), `rule` (`max`, `q95`), `mutual`, `check` (`flag`,
@@ -517,7 +488,7 @@ def add_profile(name: str, field: str, instruction: str, fields: dict[str, Any],
     """
     add("profiles", name, {
         "about": about, "field": field, "instruction": instruction, "fields": fields,
-        "identity": identity, "story": story, "from": inputs, "transcript": transcript,
+        "identity": identity, "story": story, "transcript": transcript,
         "threshold": threshold, "rule": rule, "mutual": mutual, "check": check,
         "min_appearances": min_appearances, "max_narratives": max_narratives,
         "weights": weights, "attributes": attributes, "near": near, "shared": shared})
@@ -554,6 +525,6 @@ def _write(doc: dict[str, Any]) -> None:
 
 __all__ = ["CHECKS", "DefinitionError", "KINDS", "PROFILE_PREFIX", "ProtectedDefinition",
            "Selection", "add", "add_profile", "add_prompt", "check_profile",
-           "check_prompt", "default_selection", "definition", "get", "ids",
+           "check_prompt", "definition", "get", "ids",
            "kind_text", "load", "locate", "profiles", "prompts", "remove",
            "remove_profile", "remove_prompt", "selection", "system", "version_of"]

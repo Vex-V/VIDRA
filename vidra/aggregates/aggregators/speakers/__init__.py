@@ -1,8 +1,8 @@
 """`speakers` -- who spoke, for how long, and how often the voice changed.
 
-    speakers.speakers(record, out)      a record in, one answer out
+    aggregates.speakers(record=video, out=...)      a record in, one answer out
 """
 
-from .driver import SpeakersAggregator, speakers
+from .driver import SpeakersAggregator
 
-__all__ = ["SpeakersAggregator", "speakers"]
+__all__ = ["SpeakersAggregator"]

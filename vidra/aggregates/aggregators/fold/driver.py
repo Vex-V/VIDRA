@@ -9,10 +9,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from ...shared.models.llm import Model
-from .. import definitions
-from ..core.rendering import batched, resolve_span
-from ..core.base import BATCH, DefinitionRunner, schema
+from ....shared.models.llm import Model
+from ... import definitions
+from ...core.rendering import batched, resolve_span
+from ...core.base import BATCH, DefinitionRunner, schema
 
 
 async def fold(context: Any, llm: Model, parts: list[tuple[list[int], str]],

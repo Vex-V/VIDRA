@@ -4,7 +4,7 @@
                     keys={"openai": vault.get("oa")})
 
     video_rag("x.mp4", "data/out", models=models)
-    aggregates.aggregate(home, out, models=models, summary=True)
+    aggregates.aggregate(out=out, models=models, summary=video.excerpt(transcript=True))
     search("the reactor", "x", models=models)
 
 Three roles: the describer (frames -> answers), the embedder (text -> vectors,

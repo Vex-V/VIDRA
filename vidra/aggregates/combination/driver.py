@@ -1,9 +1,10 @@
 """Several videos' documents -> one record in the same format, to aggregate over.
 
-    combine(["data/out/monday", "data/out/tuesday"], "data/out/week")
+    week = combine(records=[monday, tuesday], out="data/out/week")
 
 Writes a `Timeline`, `Descriptions`, `Transcript` and `Manifest` under the
-usual filenames, so every aggregator reads it as it reads a video. Grids are
+usual filenames and returns them as a record, so every aggregator reads it
+as it reads a video. Grids are
 laid end to end: chunks renumbered after the previous video's, times shifted
 onto one clock. `Timeline.params["combined"]` lists each source (its id,
 first chunk, chunk count and clock offset); `origin` maps a combined chunk
@@ -16,16 +17,16 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from ...shared.reporting import logs
 from ...shared.config import paths
-from ...shared.contracts.documents import (Descriptions, Manifest, Produced, Timeline,
+from ...shared.contracts.documents import (Descriptions, Manifest, Timeline,
                                            Transcript, fingerprint_of, same_video)
 from ...shared.reporting.errors import VidraError
 from ...shared.storage import files
 #: The documents a combination carries.
-from ..core.record import KINDS, documents_of
+from ..core.record import KINDS, Record
 
 #: Manifest stats that are counts, and so add up across videos.
 _COUNTS = ("frames_decimated", "frames_sampled", "chunks", "chunks_with_frames",
@@ -206,19 +207,16 @@ def origin(timeline: Timeline, chunk_id: int) -> Optional[dict[str, Any]]:
     return None
 
 
-def combine(sources: Sequence[str | Path | Mapping[str, str | Path]],
-            out: str | Path, video_id: Optional[str] = None) -> Produced:
-    """`merge` with a read at each end. Each source is a video's folder or a
-    `{"timeline": ..., "descriptions": ..., ...}` mapping; `out` gets the
-    combination under the usual filenames.
+def combine(*, records: Sequence["Record"], out: str | Path,
+            video_id: Optional[str] = None) -> "Record":
+    """Several records laid end to end on one clock: `merge` with a read at each
+    end. The combination is written to `out` under the usual filenames and
+    returned as a record, which takes the place of any one video's.
     """
-    parts = []
-    for source in sources:
-        found = documents_of(source)
-        if "timeline" not in found:
-            raise CombineError(f"{source}: no timeline -- a source needs its grid")
-        parts.append(Part(**{kind: files.read(where, KINDS[kind])
-                             for kind, where in found.items()}))
+    from ..core.record import record
+
+    parts = [Part(**{kind: files.read(where, KINDS[kind])
+                     for kind, where in r.paths.items()}) for r in records]
     with logs.timed("combine") as done:
         combined = merge(parts, video_id)
         folder = Path(out)
@@ -226,55 +224,9 @@ def combine(sources: Sequence[str | Path | Mapping[str, str | Path]],
                    for kind, document in combined.documents().items()}
         done(video_id=combined.timeline.video_id, sources=len(parts),
              chunks=len(combined.timeline))
-    return Produced(
-        video_id=combined.timeline.video_id, component="combine",
-        artifacts=written,
-        stats={"sources": [p.video_id for p in parts],
-               "chunks": len(combined.timeline),
-               "duration_s": round(combined.timeline.duration_s, 3),
-               "documents": sorted(written),
-               "out": str(folder)},
-        skipped=sorted(set(KINDS) - set(written)))
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-    import json
-
-    ap = argparse.ArgumentParser(
-        description="Lay several videos' documents end to end as one record, "
-                    "for the aggregates to run over.")
-    ap.add_argument("sources", nargs="+", help="each video's output folder")
-    ap.add_argument("--out", required=True, help="the folder to write the combination to")
-    ap.add_argument("--video-id", default=None,
-                    help="what to call the combination; default derived from "
-                         "the sources")
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-    try:
-        produced = combine(args.sources, args.out, args.video_id)
-    except (ValueError, FileNotFoundError) as exc:
-        print(f"error: {exc}")
-        return 1
-    if args.json:
-        print(json.dumps(produced.as_dict(), indent=2))
-        return 0
-    s = produced.stats
-    print(f"{produced.video_id}   {len(s['sources'])} videos, {s['chunks']} chunks, "
-          f"{s['duration_s']} s")
-    print(f"  from        {', '.join(s['sources'])}")
-    print(f"  documents   {', '.join(s['documents'])}")
-    if produced.skipped:
-        print(f"  none of     {', '.join(produced.skipped)}")
-    print(f"\ncombined -> {s['out']}")
-    return 0
+    return record(**{kind: Path(where) for kind, where in written.items()})
 
 
 __all__ = ["CombineError", "Combined", "KINDS", "Part", "combine", "default_id",
            "merge", "origin"]
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

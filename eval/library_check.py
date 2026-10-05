@@ -169,6 +169,15 @@ def read(path: Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def record_of(home: Path) -> Any:
+    """A video's folder as a record, every document it holds named."""
+    from vidra import aggregates
+    return aggregates.record(**{kind: home / f"{kind}.json"
+                                for kind in ("timeline", "transcript", "descriptions",
+                                             "manifest")
+                                if (home / f"{kind}.json").exists()})
+
+
 # ------------------------------------------------------------ 1 · video_rag
 
 def models_() -> None:
@@ -626,8 +635,9 @@ def database_(into: Path) -> MemoryDatabase:
     # chapters written by hand (no llm here) to check what is embedded and how
     # each level is searched.
     answers = run.home / "aggregates"
-    done = aggregates.aggregate(run.home, answers, models=models, database=memory,
-                                stats=True, ner=True)
+    video = record_of(run.home)
+    done = aggregates.aggregate(out=answers, models=models, database=memory,
+                                stats=video, ner=video.excerpt(transcript=True))
     names = [i for _, a, items, _ in memory.answers if a["aggregator"] == "ner"
              for i in items]
     check(not done.stats["problems"] and run.video_id in memory.sources
@@ -715,87 +725,102 @@ def search_(home: Path, database: str) -> None:
 # ----------------------------------------------------------- 2 · aggregates
 
 def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
-    """Every aggregator as a component: one input in, one answer out."""
-    from vidra.aggregates import (Inapplicable, coverage, entities, ner, prompt,
-                                      select, sentiment, speakers, stats)
+    """Every aggregator alone: a record, then an input built from it, then one
+    answer."""
+    from vidra import Models, aggregates
+    from vidra.aggregates import Inapplicable
 
-    section("10 aggregates, one component at a time")
+    section("10 aggregates, one at a time")
     out = scratch / "components"
-    s = select.select(home, out / "in.json", "sentiment")
-    excerpt = read(out / "in.json")
-    check(s.stats["excerpt"] > 0 and excerpt["timeline"]["chunks"],
-          f"select -> an excerpt: {s.stats['excerpt']} rows of "
-          f"`{excerpt['selection']}`, with its grid inside")
+    video = record_of(home)
+    check(video.video_id == home.name and set(video.paths) == {
+        "timeline", "transcript", "descriptions", "manifest"},
+        f"record(timeline=..., ...) names {', '.join(video.paths)}")
+    said = video.excerpt(transcript=True, out=out / "in" / "said.json")
+    check(said.rows and (out / "in" / "said.json").exists(),
+          f"excerpt(transcript=True, out=) -> {len(said.rows)} rows, and the file")
+    seen = video.excerpt(answers={"uniform:scene": ["summary", "setting"]})
+    check(seen.answers == ["uniform:scene"]
+          and all(part[0] == "uniform:scene" for r in seen.rows for part in r["parts"]),
+          "excerpt(answers={'uniform:scene': [...]}) reads that answer and nothing else")
 
-    sentiment.sentiment(out / "in.json", out / "sentiment.json")
+    aggregates.sentiment(input=said, out=out / "sentiment.json")
     tone = read(out / "sentiment.json")["payload"]
-    check(len(tone["per_chunk"]) == s.stats["excerpt"],
-          f"sentiment(excerpt) -> a tone per chunk, mean {tone['mean']}")
-    ner.ner(out / "in.json", out / "ner.json", labels=("person", "object"))
+    check(len(tone["per_chunk"]) == len(said.rows),
+          f"sentiment(input=excerpt) -> a tone per chunk, mean {tone['mean']}")
+    aggregates.ner(input=out / "in" / "said.json", out=out / "ner.json",
+                   labels=["person", "object"])
     found = read(out / "ner.json")["payload"]
     check(found["labels"] == ["person", "object"],
-          f"ner(excerpt, labels=...) -> {found['count']} entities; the labels reached the model")
-    reused = ner.ner(out / "in.json", out / "ner2.json", previous=out / "ner.json",
-                     labels=("person", "object"))
+          f"ner(input=<file>, labels=...) -> {found['count']} entities; the labels "
+          f"reached the model")
+    reused = aggregates.ner(input=said, out=out / "ner2.json", previous=out / "ner.json",
+                            labels=["person", "object"])
     check(reused.stats["reused"], "previous= -> the earlier answer, not recomputed")
-    changed = ner.ner(out / "in.json", out / "ner3.json", previous=out / "ner.json",
-                      labels=("person",))
+    changed = aggregates.ner(input=said, out=out / "ner3.json",
+                             previous=out / "ner.json", labels=["person"])
     check(not changed.stats["reused"], "other labels -> recomputed: the label set is the version")
 
-    for component, name in ((stats.stats, "stats"), (coverage.coverage, "coverage"),
-                            (speakers.speakers, "speakers")):
-        component(home, out / f"{name}.json")
-        check((out / f"{name}.json").exists(), f"{name}(record) -> {name}.json")
+    for component, name in ((aggregates.stats, "stats"), (aggregates.coverage, "coverage"),
+                            (aggregates.speakers, "speakers")):
+        component(record=video, out=out / f"{name}.json")
+        check((out / f"{name}.json").exists(), f"{name}(record=video) -> {name}.json")
     counted = read(out / "stats.json")["payload"]
-    check(counted["words"] > 0 and counted["chunks"] == excerpt["timeline"]["chunk_count"],
+    check(counted["words"] > 0 and counted["chunks"] == len(video.timeline),
           f"stats counts the record: {counted['chunks']} chunks, {counted['words']} words")
 
     # The stub describer names no people, so there is nobody to link.
-    select.select(home, out / "people.json", "entities:people")
+    nobody = video.sightings(profile="people", answers=["uniform:scene"])
     try:
-        entities.entities("people", out / "people.json", out / "entities.json",
-                          embedder="local")
+        aggregates.entities(profile="people", input=nobody, out=out / "entities.json",
+                            embedder="local")
         check(False, "entities over no mentions says so")
     except Inapplicable as why:
         check(True, f"entities over no mentions is Inapplicable: {str(why)[:70]}")
 
-    refused("ner handed a record", lambda: ner.ner(home, out / "x.json"), "select")
-    refused("stats handed an excerpt file", lambda: stats.stats(out / "in.json",
-                                                                out / "x.json"), "folder")
-    refused("an excerpt named as a record's timeline",
-            lambda: stats.stats({"timeline": out / "in.json"}, out / "x.json"),
-            "holds `excerpt`, not `timeline`")
-    refused("a selection for a counter",
-            lambda: select.select(home, out / "x.json", "stats"), "whole record")
+    refused("ner handed a record", lambda: aggregates.ner(input=video, out=out / "x.json"),
+            "excerpt")
+    refused("stats handed an excerpt",
+            lambda: aggregates.stats(record=said, out=out / "x.json"), "record")
+    refused("entities handed an excerpt",
+            lambda: aggregates.entities(profile="people", input=said, out=out / "x.json"),
+            "sightings")
     refused("a link profile run as a prompt",
-            lambda: prompt.prompt("entities:people", out / "people.json", out / "x.json"),
-            "link profile")
-    refused("an excerpt handed to entities",
-            lambda: entities.entities("people", out / "in.json", out / "x.json"), "sightings")
+            lambda: aggregates.prompt(name="entities:people", input=said,
+                                      out=out / "x.json"), "link profile")
+    refused("an excerpt of nothing", lambda: video.excerpt(), "transcript=True")
+    refused("an answer the record does not have",
+            lambda: video.excerpt(answers={"clip:text": ["summary"]}), "uniform:scene")
+    refused("a field the question has not",
+            lambda: video.excerpt(answers={"uniform:scene": ["setings"]}), "setings")
+    refused("an answer with no fields named",
+            lambda: video.excerpt(answers={"uniform:scene": []}), "list of fields")
+    refused("`*` for fields", lambda: video.excerpt(answers={"uniform:scene": ["*"]}),
+            "name the fields")
+    refused("a profile nobody has",
+            lambda: video.sightings(profile="pets", answers=["uniform:scene"]), "pets")
+    refused("sightings with no answers named",
+            lambda: video.sightings(profile="people"), "name the answers")
+    refused("a folder where a file goes",
+            lambda: aggregates.record(timeline=home), "name the file")
 
     # A component takes `models=`; the refusal comes before any call.
-    from vidra import Models
     keyed = Models(llm="openai", keys={"openai": "sk-test-not-real"})
-    import inspect
-    from vidra.aggregates import answer
-    check(all("models" in inspect.signature(f).parameters
-              for f in (prompt.prompt, entities.entities, answer)),
-          "prompt(), entities() and answer() take models=")
     refused("an llm on models= and as llm=",
-            lambda: prompt.prompt("summary", out / "in.json", out / "x.json",
-                                  llm="anthropic", models=keyed), "twice")
+            lambda: aggregates.summary(input=said, out=out / "x.json", llm="anthropic",
+                                       models=keyed), "twice")
 
     # Chapter boundaries from made-up vectors with three clear topics, then a cap.
     import random
-    from vidra.aggregates import settings_of, uses_embedder, validate
-    from vidra.aggregates.spans.segment import segment
+    from vidra.aggregates import settings_of, uses_embedder
+    from vidra.aggregates.aggregators.spans.segment import segment
     rng = random.Random(1)
     topics = [[[(1.0 if i == axis else 0.0) + rng.gauss(0, 0.15) for i in range(8)]
                for _ in range(size)] for axis, size in ((0, 5), (1, 4), (2, 6))]
     vectors = [v for topic in topics for v in topic]
-    found = segment(vectors)
-    check([g[0] for g in found.groups] == [0, 5, 9],
-          f"segment finds the topic changes, at chunk precision: {[g[0] for g in found.groups]}")
+    found_ = segment(vectors)
+    check([g[0] for g in found_.groups] == [0, 5, 9],
+          f"segment finds the topic changes, at chunk precision: {[g[0] for g in found_.groups]}")
     capped = segment(vectors, most=2)
     check(len(capped.groups) == 2 and capped.merged == 1
           and sum(len(g) for g in capped.groups) == len(vectors),
@@ -803,63 +828,92 @@ def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
     check(settings_of("chapters") == ["max_spans", "min_span_s"] and uses_embedder("chapters")
           and not uses_embedder("summary"),
           "chapters takes max_spans, min_span_s and an embedder; summary takes none")
-    refused("max_spans=0", lambda: prompt.prompt("chapters", out / "in.json", out / "x.json",
-                                                 embedder="local", max_spans=0), "1 or more")
-    check(any("max_spans" in p for p in validate(summary={"data": True, "max_spans": 2})),
+    refused("max_spans=0", lambda: aggregates.chapters(input=said, out=out / "x.json",
+                                                       embedder="local", max_spans=0),
+            "1 or more")
+    check(any("max_spans" in p for p in aggregates.validate(
+              settings={"summary": {"max_spans": 2}}, summary=said)),
           "max_spans on a prompt that is not spans is refused before anything runs")
 
     if llm:
-        select.select(home, out / "summary_in.json", "summary")
-        made = prompt.prompt("summary", out / "summary_in.json", out / "summary.json")
+        made = aggregates.summary(input=said, out=out / "summary.json")
         words = read(out / "summary.json")["payload"].get("word_count")
-        check(words, f"prompt('summary') -> {words} words by {made.stats.get('model')}")
-        prompt.prompt("chapters", out / "summary_in.json", out / "chapters.json",
-                      embedder="local", max_spans=2)
+        check(words, f"summary(input=excerpt) -> {words} words by {made.stats.get('model')}")
+        aggregates.chapters(input=said, out=out / "chapters.json", embedder="local",
+                            max_spans=2)
         chapters = read(out / "chapters.json")["payload"]
         check(chapters["count"] <= 2 and chapters["covers_all_chunks"],
-              f"prompt('chapters', max_spans=2) -> {chapters['count']} chapters covering "
-              f"every chunk, first pass {chapters['segmentation']['first_pass']}")
+              f"chapters(max_spans=2) -> {chapters['count']} chapters covering every "
+              f"chunk, first pass {chapters['segmentation']['first_pass']}")
 
 
 def aggregate_pipeline(home: Path, scratch: Path, llm: bool) -> None:
-    """aggregate() -- runs what it is handed data for, and nothing else."""
-    from vidra.aggregates import aggregate, validate
+    """aggregate() -- runs what it is handed an input for, and nothing else."""
+    from vidra import aggregates
+    from vidra.aggregates.driver import from_spec
 
     section("11 aggregate() -- the pipeline")
     out = scratch / "answers"
-    handed = {"stats": True, "coverage": True, "sentiment": True,
-              "ner": {"data": "transcript+*", "labels": ["person", "object"]}}
-    made = aggregate(home, out, **handed)
+    video = record_of(home)
+    said = video.excerpt(transcript=True)
+    seen = video.excerpt(answers={"uniform:scene": ["summary"]})
+    handed = {"stats": video, "coverage": video, "sentiment": said, "ner": said}
+    tuned = {"ner": {"labels": ["person", "object"]}}
+    made = aggregates.aggregate(out=out, settings=tuned, **handed)
     check(set(made.stats["aggregates"]) == set(handed),
           f"handed four -> ran exactly those: {', '.join(made.stats['aggregates'])}")
     check(sorted(p.name for p in (out / "inputs").iterdir()) == ["ner.json", "sentiment.json"],
           "what each text aggregator read is kept in inputs/")
-    again = aggregate(home, out, previous=out, **handed)
+    check(read(out / "ner.json")["payload"]["labels"] == ["person", "object"],
+          "settings={'ner': {'labels': ...}} reached ner")
+    again = aggregates.aggregate(out=out, previous=out, settings=tuned, **handed)
     check(again.stats["computed"] == 0 and again.stats["current"] == 4,
           "previous= -> 4 reused, 0 computed")
 
-    two = aggregate(home, scratch / "two",
-                    summary="transcript,uniform:overview" if llm else None,
-                    sentiment="transcript,uniform:scene")
-    check({"sentiment~transcript", "sentiment~uniform-scene"} <= set(two.stats["aggregates"]),
-          f"`a,b` -> two answers: {', '.join(two.stats['aggregates'])}")
-    from_file = aggregate(None, scratch / "from_file",
-                          sentiment=str(out / "inputs" / "sentiment.json"))
+    two = aggregates.aggregate(out=scratch / "two", sentiment={"spoken": said, "seen": seen},
+                               **({"summary": said} if llm else {}))
+    check({"sentiment~spoken", "sentiment~seen"} <= set(two.stats["aggregates"]),
+          f"a dict of inputs -> one answer each: {', '.join(two.stats['aggregates'])}")
+    from_file = aggregates.aggregate(out=scratch / "from_file",
+                                     sentiment=out / "inputs" / "sentiment.json")
     check(from_file.stats["aggregates"] == ["sentiment"],
-          "handed an excerpt file instead of a selection, with no record at all")
+          "handed the file an excerpt was written to, instead of the object")
 
-    check(validate() and "nothing would run" in validate()[0], "handing nothing is refused")
-    check(validate(stats="transcript"), "a selection for a counter is refused")
-    check(validate(nerr=True), "an aggregator nobody has is refused")
-    check(validate(ner={"data": True, "colour": "red"}), "a setting it does not take is refused")
-    check(validate(summary="clip:nope"), "a question nobody defined is refused")
+    problems = aggregates.validate
+    check(problems() and "nothing would run" in problems()[0], "handing nothing is refused")
+    check(any("reads a record" in p for p in problems(stats=said)),
+          "an excerpt for a counter is refused")
+    check(any("unknown aggregator" in p for p in problems(nerr=said)),
+          "an aggregator nobody has is refused")
+    check(any("colour" in p for p in problems(settings={"ner": {"colour": "red"}}, ner=said)),
+          "a setting it does not take is refused")
+    check(any("not handed" in p for p in problems(settings={"ner": {}}, stats=video)),
+          "settings for an aggregator not handed an input are refused")
+    check(any("label" in p for p in problems(sentiment={"Two Words": said})),
+          "a label that cannot name a file is refused")
+
+    # The CLI's spec, as data: the same run, every path relative to the spec.
+    spec = {"out": "spec_answers",
+            "record": {kind: str(where) for kind, where in video.paths.items()},
+            "inputs": {"said": {"excerpt": {"transcript": True}},
+                       "seen": {"excerpt": {"answers": {"uniform:scene": ["summary"]}}}},
+            "run": {"stats": "record", "ner": "said", "sentiment": {"seen": "seen"}},
+            "settings": {"ner": {"labels": ["person"]}}}
+    ran = from_spec(spec, base=scratch)
+    check(set(ran.stats["aggregates"]) == {"stats", "ner", "sentiment~seen"}
+          and (scratch / "spec_answers" / "ner.json").exists(),
+          f"from_spec (the CLI's input) -> {', '.join(ran.stats['aggregates'])}")
+
     if llm:
         people = Path("data/eval/people/out/test")
         if people.exists():
-            linked = aggregate(people, scratch / "people", entities_people=True,
-                               embedder="local")
+            crowd = record_of(people)
+            linked = aggregates.aggregate(
+                out=scratch / "people", embedder="local",
+                entities_people=crowd.sightings(profile="people",
+                                                answers=crowd.answer_ids()))
             e = read(Path(linked.artifacts["entities:people"]))["payload"]
-            check(e["count"], f"entities_people=True -> {e['count']} entities, "
+            check(e["count"], f"entities_people=sightings -> {e['count']} entities, "
                               f"{e['narrated']} with an account")
 
 
@@ -879,8 +933,9 @@ def custom_prompts(home: Path, scratch: Path, llm: bool) -> None:
           and "incident_report" in aggregates.available()
           and aggregates.tier_of("incident_report") == "llm",
           "add_prompt -> a fold prompt listed in available(), tier llm")
-    check(not aggregates.validate(incident_report=True),
-          "validate(incident_report=True) passes: it runs as a keyword like summary")
+    said = record_of(home).excerpt(transcript=True)
+    check(not aggregates.validate(incident_report=said),
+          "validate(incident_report=excerpt) passes: it runs as a keyword like summary")
     steps = aggregates.add_prompt("steps_demo", "List each step of the procedure.",
                                   {"step": {"type": "text", "about": "the step"}},
                                   kind="items", key="steps")
@@ -892,7 +947,7 @@ def custom_prompts(home: Path, scratch: Path, llm: bool) -> None:
         {"use": {"type": "text", "about": "who used it, for what"}},
         identity=["object", "appearance"], story=["context"])
     check(profile["name"] == "entities:tools_demo" and profile["kind"] == "link"
-          and profile["rule"] == "max",
+          and profile["rule"] == "max" and "from" not in profile,
           "add_profile -> entities:tools_demo, the built-in defaults filled in")
     check(aggregates.definition("summary")["builtin"]
           and aggregates.definition("entities:people")["kind"] == "link",
@@ -910,17 +965,16 @@ def custom_prompts(home: Path, scratch: Path, llm: bool) -> None:
     refused("a key the kind writes",
             lambda: aggregates.add_prompt("z", "x", {"chunk_id": one["a"]}, kind="items"),
             "written by the kind")
-    refused("an input naming no question",
-            lambda: aggregates.add_prompt("z", "x", one, inputs="nope_q"), "nope_q")
     refused("a profile over a field no shape has",
             lambda: aggregates.add_profile("z", "nofield", "x", one, identity=["q"]),
             "nofield")
 
     if llm:
-        made = aggregates.aggregate(home, scratch / "custom", incident_report=True)
+        made = aggregates.prompt(name="incident_report", input=said,
+                                 out=scratch / "custom" / "incident_report.json")
         answer = read(Path(made.artifacts["incident_report"]))["payload"]
         check(answer.get("report") and answer.get("severity") in ("none", "minor", "major"),
-              f"aggregate(incident_report=True) -> severity {answer.get('severity')!r}, "
+              f"prompt(name='incident_report') -> severity {answer.get('severity')!r}, "
               f"{len(str(answer.get('report')).split())} words of report")
 
     for name in ("incident_report", "steps_demo"):
@@ -929,34 +983,38 @@ def custom_prompts(home: Path, scratch: Path, llm: bool) -> None:
     check(not {"incident_report", "steps_demo", "entities:tools_demo"}
           & set(aggregates.available()),
           "remove_prompt / remove_profile take them back out")
-    check(aggregates.validate(incident_report=True),
+    check(aggregates.validate(incident_report=said),
           "...and a run naming a removed prompt is refused")
     refused("removing a built-in", lambda: aggregates.remove_prompt("summary"), "built in")
 
 
 def several(home: Path, second: Path, scratch: Path) -> None:
     """Two videos combined into one record, then aggregated."""
-    from vidra.aggregates import aggregate, combine
+    from vidra import aggregates
     from vidra.aggregates.combination import origin
-    from vidra.video_rag import boundaries
 
     section("13 several videos")
-    both = combine([home, second], scratch / "both")
-    grid = boundaries.load(scratch / "both" / "timeline.json")
-    parts = [len(boundaries.load(h / "timeline.json")) for h in (home, second)]
-    check(len(grid) == sum(parts), f"combine -> {len(grid)} chunks = {parts[0]} + {parts[1]}")
-    where = origin(grid, parts[0])
+    first, other = record_of(home), record_of(second)
+    both = aggregates.combine(records=[first, other], out=scratch / "both")
+    parts = [len(first.timeline), len(other.timeline)]
+    check(isinstance(both, aggregates.Record) and len(both.timeline) == sum(parts),
+          f"combine(records=[...]) -> a record of {len(both.timeline)} chunks = "
+          f"{parts[0]} + {parts[1]}")
+    where = origin(both.timeline, parts[0])
     check(where["video_id"] == second.name and where["chunk_id"] == 0
           and where["start_ts"] == 0.0,
           f"origin(chunk {parts[0]}) -> {where['video_id']} chunk 0 at 0.0s")
-    made = aggregate([home, second], scratch / "together", stats=True, coverage=True)
+    made = aggregates.aggregate(out=scratch / "together", stats=both, coverage=both)
     counted = read(Path(made.artifacts["stats"]))["payload"]
-    check(counted["chunks"] == len(grid) and counted["derived_from"] == "combined",
-          f"aggregate([a, b]) combines first: {counted['chunks']} chunks, "
-          f"record kept in together/record")
-    refused("one video named twice", lambda: combine([home, home], scratch / "twice"),
+    check(counted["chunks"] == len(both.timeline) and counted["derived_from"] == "combined",
+          f"aggregate(stats=combined) counts {counted['chunks']} chunks, derived_from "
+          f"combined")
+    refused("one video named twice",
+            lambda: aggregates.combine(records=[first, first], out=scratch / "twice"),
             "more than once")
-    _ = both
+    refused("inputs from two videos in one run",
+            lambda: aggregates.aggregate(out=scratch / "mixed", stats=first, coverage=other),
+            "different videos")
 
 
 # ----------------------------------------------------------- 3 · whole run
@@ -1089,36 +1147,37 @@ def helpers(at: dict[str, Path], home: Path, memory: Any, scratch: Path) -> None
           "a window past the end -> no moments and a note saying why")
 
     # The aggregates' registry, as data.
-    from vidra import aggregates
-    from vidra.aggregates import combination, select
-    check(set(aggregates.up_to("free")) == {"stats", "speakers", "coverage"},
-          f"up_to('free') -> {sorted(aggregates.up_to('free'))}")
-    local = set(aggregates.up_to("local"))
+    from vidra import aggregates, workflow
+    from vidra.aggregates import combination
+    free = workflow.chosen(workflow.Options(source=SECOND, tier="free"))
+    check(set(free) == {"stats", "speakers", "coverage"},
+          f"workflow --tier free runs {sorted(free)}")
+    local = set(workflow.chosen(workflow.Options(source=SECOND, tier="local")))
     check(local == {"stats", "speakers", "coverage", "ner", "sentiment"},
-          f"up_to('local') adds the local models: {sorted(local)}")
+          f"--tier local adds the local models: {sorted(local)}")
     check((aggregates.kind_of("summary"), aggregates.kind_of("chapters"),
            aggregates.kind_of("events"), aggregates.kind_of("entities:people"),
            aggregates.kind_of("stats")) == ("fold", "spans", "items", "link", None),
           "kind_of: fold, spans, items, link -- and None for code")
     check(aggregates.takes_inputs("ner") and not aggregates.takes_inputs("stats"),
-          "takes_inputs: ner reads a selection, stats the record")
+          "takes_inputs: ner reads an excerpt, stats the record")
     check(aggregates.tier_of("stats") == "free" and aggregates.tier_of("ner") == "local",
           "tier_of: what each costs")
 
-    ctx = aggregates.context(at["timeline"], descriptions=at["descriptions"],
-                             transcript=at["transcript"], manifest=at["manifest"])
-    bare = aggregates.context(at["timeline"])
+    ctx = aggregates.record(timeline=at["timeline"], descriptions=at["descriptions"],
+                            transcript=at["transcript"], manifest=at["manifest"]).context
+    bare = aggregates.record(timeline=at["timeline"]).context
     why = aggregates.missing(aggregates.build("speakers"), bare)
     check(why and "transcript" in why and aggregates.missing(aggregates.build("speakers"), ctx) is None,
           f"missing(speakers): None with a transcript, and without one: {why}")
-    excerpt = select.pick(ctx, "ner")
-    check(len(excerpt.rows) > 0, f"pick(record, 'ner') -> an excerpt of {len(excerpt.rows)} rows")
-    counted = aggregates.answer("stats", ctx)
+    video = aggregates.record(timeline=at["timeline"], transcript=at["transcript"],
+                              descriptions=at["descriptions"], manifest=at["manifest"])
+    counted = aggregates.answer("stats", video)
     check(counted.payload["chunks"] == len(boundaries.load(at["timeline"])),
-          "answer('stats', Context) on objects, nothing written")
+          "answer('stats', record) on objects, nothing written")
 
-    made = aggregates.aggregate(home, out / "answers", stats=True, coverage=True,
-                                sentiment=True)
+    made = aggregates.aggregate(out=out / "answers", stats=video, coverage=video,
+                                sentiment=video.excerpt(transcript=True))
     loaded = aggregates.load_all(out / "answers")
     check(set(loaded) == set(made.stats["aggregates"]),
           f"load_all(folder) -> every answer by id: {sorted(loaded)}")
@@ -1222,8 +1281,9 @@ def local_models(at: dict[str, Path], scratch: Path) -> None:
               f"{policy} grid -> {len(grid)} chunks tiling {duration:.1f}s, none over 30s")
 
     cut.cut(out / "vad.json", out / "raw.json", out / "transcript.json")
-    record = {"timeline": out / "vad.json", "transcript": out / "transcript.json"}
-    aggregates.speakers.speakers(record, out / "speakers.json")
+    aggregates.speakers(record=aggregates.record(timeline=out / "vad.json",
+                                                 transcript=out / "transcript.json"),
+                        out=out / "speakers.json")
     who = read(out / "speakers.json")["payload"]
     check(who["speakers"] == len(speakers) and who["speech_ratio"] > 0.5,
           f"speakers(record) over real turns -> {who['speakers']} speaker(s), "
@@ -1272,7 +1332,7 @@ def paid_models(home: Path, scratch: Path) -> None:
     """A real describer and embedder, the items kind, and linking real people.
     Costs a few cents.
     """
-    from vidra.aggregates import entities, prompt, select
+    from vidra import aggregates
     from vidra.video_rag import boundaries, describe, embed, media, video
 
     section("17 paid models: a real describer, embedder, events and linking")
@@ -1304,22 +1364,25 @@ def paid_models(home: Path, scratch: Path) -> None:
     check(units and all(len(u["vector"]) == 1536 for u in units),
           f"embed(openai) -> {len(units)} units of 1536 dimensions")
 
-    select.select(h, out / "people.json", "entities:people")
-    linked = entities.entities("people", out / "people.json", out / "entities.json",
-                               embedder="local")
+    shop = record_of(h)
+    seen_people = shop.sightings(profile="people", answers=["yolo"])
+    linked = aggregates.entities(profile="people", input=seen_people,
+                                 out=out / "entities.json", embedder="local")
     e = read(out / "entities.json")["payload"]
-    check(e["count"] and e["count"] <= len(people),
-          f"entities('people') over {len(people)} sightings -> {e['count']} entities, "
-          f"{e.get('narrated')} with an account ({linked.stats.get('model')})")
+    check(len(seen_people.mentions) == len(people) and e["count"]
+          and e["count"] <= len(people),
+          f"entities(profile='people') over {len(people)} sightings -> {e['count']} "
+          f"entities, {e.get('narrated')} with an account ({linked.stats.get('model')})")
 
-    select.select(h, out / "events_in.json", "events")
-    prompt.prompt("events", out / "events_in.json", out / "events.json")
+    told = shop.excerpt(answers={"yolo": ["summary", "people"],
+                                 "uniform:overview": ["summary"]})
+    aggregates.events(input=told, out=out / "events.json")
     ev = read(out / "events.json")["payload"]
-    grid = read(out / "events_in.json")["timeline"]
-    ids = {c["chunk_id"] for c in grid["chunks"]}
+    ids = {c["chunk_id"] for c in told.timeline["chunks"]}
     check(ev["count"] and all(x["chunk_id"] in ids and x["end_ts"] > x["start_ts"]
                               for x in ev["events"]),
-          f"prompt('events') -> {ev['count']} events, every one on a real chunk and timed by the grid")
+          f"events(input=excerpt) -> {ev['count']} events, every one on a real chunk "
+          f"and timed by the grid")
 
 
 # ------------------------------------------------------------------ main

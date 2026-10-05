@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..core.base import Context
+from ...core.base import Context
 
 class CoverageAggregator:
     name = "coverage"
@@ -40,19 +40,5 @@ class CoverageAggregator:
         }
 
 
-def coverage(source: Any, out: Any, previous: Any = None) -> Any:
-    """Which chunks of the record at `source` have an account, from which
-    modality, into the answer file `out`."""
-    from ..driver import run_one
-    return run_one("coverage", source, out, previous)
 
-
-def main(argv: Any = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    from ..driver import component_main
-    return component_main(argv, "Which chunks of a record have an account, and "
-                                "from which modality.", aggregator="coverage")
-
-
-__all__ = ["CoverageAggregator", "coverage", "main"]
+__all__ = ["CoverageAggregator"]

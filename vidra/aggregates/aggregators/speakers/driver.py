@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..core.base import Context
+from ...core.base import Context
 
 class SpeakersAggregator:
     name = "speakers"
@@ -47,19 +47,5 @@ class SpeakersAggregator:
         }
 
 
-def speakers(source: Any, out: Any, previous: Any = None) -> Any:
-    """Who spoke in the record at `source`, into the answer file `out`. Needs
-    a transcript; a record without one raises `Inapplicable`, saying so."""
-    from ..driver import run_one
-    return run_one("speakers", source, out, previous)
 
-
-def main(argv: Any = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    from ..driver import component_main
-    return component_main(argv, "Who spoke in a record, for how long, and how "
-                                "often the voice changed.", aggregator="speakers")
-
-
-__all__ = ["SpeakersAggregator", "main", "speakers"]
+__all__ = ["SpeakersAggregator"]

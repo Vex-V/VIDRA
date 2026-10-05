@@ -9,9 +9,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from .. import definitions
-from ..core.rendering import batched, resolve_span
-from ..core.base import WINDOW, DefinitionRunner, listing, schema
+from ... import definitions
+from ...core.rendering import batched, resolve_span
+from ...core.base import WINDOW, DefinitionRunner, listing, schema
 
 
 class ItemsAggregator(DefinitionRunner):

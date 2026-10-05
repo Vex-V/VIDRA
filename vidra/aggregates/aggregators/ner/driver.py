@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Optional
 
-from ...shared.contracts.documents import fingerprint_of
-from ..core.base import Context, ModelUnavailable
-from ..core.inputs import Input, Read, read
-from ..core.rendering import pieces, plain
+from ....shared.contracts.documents import fingerprint_of
+from ...core.base import Context, ModelUnavailable
+from ...core.inputs import Input, Read, read
+from ...core.rendering import pieces, plain
 
 #: What to look for: the label set is the configuration.
 DEFAULT_LABELS = ("person", "organisation", "location", "product",
@@ -83,23 +83,5 @@ class NERAggregator:
         }
 
 
-def ner(excerpt: Any, out: Any, previous: Any = None, model: Optional[str] = None,
-        labels: tuple[str, ...] = DEFAULT_LABELS, threshold: float = 0.5) -> Any:
-    """Named entities in the excerpt file at `excerpt`, into `out`. `labels` is part
-    of the answer's version, so changing it recomputes.
-    """
-    from ..driver import run_one
-    return run_one("ner", excerpt, out, previous,
-                   settings={"model": model, "labels": tuple(labels),
-                             "threshold": threshold})
 
-
-def main(argv: Any = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    from ..driver import component_main
-    return component_main(argv, "Named entities in an excerpt, and which chunks "
-                                "each appears in.", aggregator="ner")
-
-
-__all__ = ["NERAggregator", "main", "ner"]
+__all__ = ["NERAggregator"]

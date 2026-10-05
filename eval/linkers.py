@@ -392,7 +392,7 @@ class _Cached:
 def shipped(c: Corpus, embedder: str, profile: str = "people") -> Score:
     """The production linker, run as `entities` runs it."""
     from vidra.aggregates import definitions
-    from vidra.aggregates.entities.linking import link_similar, similarity
+    from vidra.aggregates.aggregators.entities.linking import link_similar, similarity
 
     entry = definitions.get("profiles", profile)
     sim, _ = similarity(c.mentions, _Cached(embedder), entry)

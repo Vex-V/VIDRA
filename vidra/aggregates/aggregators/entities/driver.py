@@ -14,11 +14,11 @@ import asyncio
 from itertools import combinations
 from typing import Any, Optional
 
-from .. import definitions
-from ..core import inputs
+from ... import definitions
+from ...core import inputs
 from .linking import Mentions, link_similar, mentions_of, similarity
-from ..core.rendering import resolve_span
-from ..core.base import DefinitionRunner, listing, schema
+from ...core.rendering import resolve_span
+from ...core.base import DefinitionRunner, listing, schema
 
 
 class EntitiesAggregator(DefinitionRunner):
@@ -26,7 +26,7 @@ class EntitiesAggregator(DefinitionRunner):
                  embedder: Optional[str] = None) -> None:
         super().__init__(definition_id, llm)
         # The same embedder resolution `embed` uses.
-        from ...shared.models import embedders
+        from ....shared.models import embedders
         self.embedder = embedders.build(embedder)
 
     @property
@@ -159,25 +159,5 @@ def profile_id(profile: str) -> str:
             else definitions.PROFILE_PREFIX + profile)
 
 
-def entities(profile: str, sightings: Any, out: Any, previous: Any = None,
-             llm: Optional[str] = None, embedder: Optional[str] = None,
-             models: Optional[Any] = None) -> Any:
-    """Link the sightings file under `profile` (`people` or `entities:people`) and
-    write each entity's account into `out`. `llm` writes the accounts, `embedder`
-    measures identity; `models` carries both and their keys.
-    """
-    from ..driver import run_one
-    return run_one(profile_id(profile), sightings, out, previous, llm, embedder,
-                   models=models)
 
-
-def main(argv: Any = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    from ..driver import component_main
-    return component_main(argv, "Who is who across chunks, from a sightings file, "
-                                "and an account of each.",
-                          named="the link profile, e.g. people")
-
-
-__all__ = ["EntitiesAggregator", "entities", "main", "profile_id"]
+__all__ = ["EntitiesAggregator", "profile_id"]
