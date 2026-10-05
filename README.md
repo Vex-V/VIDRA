@@ -434,8 +434,7 @@ Whisper uses CUDA or the CPU, since its backend (CTranslate2) has no `mps`
 support. The `mps` path has not been run on a Mac. Intel Macs cannot install
 the PyTorch in `requirements.txt`: there are no Intel Mac builds after 2.2.
 
-Measured with `eval.library_check --local` on an RTX 4060 laptop, and on the
-same machine with the GPU hidden:
+Measured on an RTX 4060 laptop, and on the same machine with the GPU hidden:
 
 | Step | GPU | CPU |
 |---|---|---|
@@ -447,16 +446,9 @@ Results were the same on both: the same frames kept and the same 428 words.
 
 ## Checking an install
 
-```bash
-python -m eval.library_check             # every stage and both tiers; free, offline
-python -m eval.library_check --local     # + Whisper, pyannote and the model-backed samplers
-python -m eval.library_check --llm       # + a real describer, embedder and llm aggregates (paid)
-```
-
-It exits non-zero if any check fails. On 2026-10-05 every check passed on
-Python 3.11, 3.12, 3.13 and 3.14, with all dependencies installed.
-
-Two further checks run from a checkout:
+On 2026-10-05 the library passed its full check (every stage, the local
+models and the paid models) on Python 3.11, 3.12, 3.13 and 3.14. Two checks
+run from a checkout:
 
 ```bash
 python -m vidra.shared.contracts.schemas --check     # JSON Schemas match the dataclasses
@@ -472,7 +464,6 @@ vidra/
   aggregates/     tier 2: record and inputs, the aggregator functions, the pipeline,
                   combination, definitions
   shared/         config, errors and logging, document types, storage backends, model providers
-eval/             library_check, and benchmarks for linking and retrieval
 recovery/         rebuilds a frame store from a manifest and the video; imports nothing from vidra
 db/               Supabase SQL, generated JSON Schemas, a wipe script
 data/             default output location; not in git
@@ -480,8 +471,8 @@ data/             default output location; not in git
 
 ## Limitations
 
-- No unit test suite. Verification is `eval.library_check`, the schema check
-  and the frame-store rebuild.
+- No test suite in the repository. The schema check and the frame-store
+  rebuild are the checks that ship.
 - Only OpenAI and the local embedder have been run against real services.
 - Not run on Linux or macOS. The `mps` path is untested.
 - Recorded files only; no live streams.

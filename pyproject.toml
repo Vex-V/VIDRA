@@ -12,7 +12,7 @@ name = "vidra"
 version = "3.0.0"
 description = "Video and audio in, searchable moments out."
 readme = "README.md"
-# Measured: the wheel passes `eval.library_check --local --llm` on 3.11 to 3.14.
+# Measured: the wheel passes the full library check on 3.11 to 3.14.
 # numpy 2.5 has already dropped 3.11 (pip resolves 2.4 there). Nothing
 # checks the floor but a run on 3.11, and 3.12-only syntax broke it once.
 requires-python = ">=3.11"
