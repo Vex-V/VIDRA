@@ -116,7 +116,7 @@ for m in moments:
     print(m.chunk_id, m.start_ts, m.end_ts, m.hits[0]["content"][:80])
 
 # Whole-video answers: name the files, choose what each aggregator reads, run.
-d = run.home
+d = run.folder
 video = aggregates.record(timeline=d / "timeline.json",
                           transcript=d / "transcript.json",
                           descriptions=d / "descriptions.json")
@@ -270,7 +270,7 @@ writes the account of each linked entity.
 ### 1. Name the files: a record
 
 ```python
-d = run.home                                   # data/out/<video_id>
+d = run.folder                                   # data/out/<video_id>
 video = aggregates.record(
     timeline=d / "timeline.json",              # required: the chunk grid
     transcript=d / "transcript.json",          # optional

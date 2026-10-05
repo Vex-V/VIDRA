@@ -169,13 +169,13 @@ def read(path: Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def record_of(home: Path) -> Any:
+def record_of(folder: Path) -> Any:
     """A video's folder as a record, every document it holds named."""
     from vidra import aggregates
-    return aggregates.record(**{kind: home / f"{kind}.json"
+    return aggregates.record(**{kind: folder / f"{kind}.json"
                                 for kind in ("timeline", "transcript", "descriptions",
                                              "manifest")
-                                if (home / f"{kind}.json").exists()})
+                                if (folder / f"{kind}.json").exists()})
 
 
 # ------------------------------------------------------------ 1 · video_rag
@@ -255,9 +255,9 @@ def media_(into: Path) -> tuple[Path, dict[str, Path]]:
 
     section("1 media")
     produced = media.media(PRIMARY, into)
-    home = Path(produced.stats["home"])
-    at = layout(home)
-    check(at["media"].exists(), f"media(source, into) wrote {at['media'].name} in {home.name}/")
+    folder = Path(produced.stats["folder"])
+    at = layout(folder)
+    check(at["media"].exists(), f"media(source, into) wrote {at['media'].name} in {folder.name}/")
     described = media.load(at["media"])
     check(described.has_video and described.has_audio,
           f"load -> Media: {described.duration_s:.1f}s, both streams")
@@ -287,7 +287,7 @@ def media_(into: Path) -> tuple[Path, dict[str, Path]]:
     refused("an id that hides itself", lambda: media.media(PRIMARY, into, "_hidden"))
     refused("a conflict rule nobody has",
             lambda: media.media(PRIMARY, into, None, "nope"), "on_conflict")
-    shutil.rmtree(Path(minted.stats["home"]))
+    shutil.rmtree(Path(minted.stats["folder"]))
 
     # Name and recording time: defaults, given values, and a re-run keeping them.
     check(described.name == PRIMARY.name and described.recorded_at is None,
@@ -313,7 +313,7 @@ def media_(into: Path) -> tuple[Path, dict[str, Path]]:
     refused("a time that is not one",
             lambda: media.media(PRIMARY, named, recorded_at="yesterday"), "recorded_at")
     shutil.rmtree(stamped.parent)
-    return home, at
+    return folder, at
 
 
 def _stamp(source: Path, out: Path, creation_time: str) -> None:
@@ -583,7 +583,7 @@ def pipeline_(into: Path) -> Path:
           f"validate: a policy from a stream it is not reading -> {problems[0][:70]}")
     problems = validate(Options(source=SECOND, into=into, sampler="yolo:overvew"))
     check(any("overvew" in p for p in problems), "validate: a typo'd question, before any work")
-    return run.home
+    return run.folder
 
 
 def database_(into: Path) -> MemoryDatabase:
@@ -634,8 +634,8 @@ def database_(into: Path) -> MemoryDatabase:
     # The aggregates' copy: the free and local ones for real, then a summary and
     # chapters written by hand (no llm here) to check what is embedded and how
     # each level is searched.
-    answers = run.home / "aggregates"
-    video = record_of(run.home)
+    answers = run.folder / "aggregates"
+    video = record_of(run.folder)
     done = aggregates.aggregate(out=answers, models=models, database=memory,
                                 stats=video, ner=video.excerpt(transcript=True))
     names = [i for _, a, items, _ in memory.answers if a["aggregator"] == "ner"
@@ -647,7 +647,7 @@ def database_(into: Path) -> MemoryDatabase:
           f"ner's {len(names)} names became items, each timed by the grid")
     check(done.stats["exported_units"] == 0,
           "stats and ner embed nothing: a count and a name are not vectors")
-    grid = files.read_json(run.home / "timeline.json")["chunks"]
+    grid = files.read_json(run.folder / "timeline.json")["chunks"]
     last = len(grid) - 1
     files.write_json(answers / "summary.json", {
         "document": "aggregate", "version": 1, "video_id": run.video_id,
@@ -666,7 +666,7 @@ def database_(into: Path) -> MemoryDatabase:
     from vidra.aggregates.database.export import export
     from vidra.shared.contracts.documents import Timeline
     problems, units = export(run.video_id,
-                             Timeline.from_dict(files.read_json(run.home / "timeline.json")),
+                             Timeline.from_dict(files.read_json(run.folder / "timeline.json")),
                              {"summary": str(answers / "summary.json"),
                               "chapters": str(answers / "chapters.json")},
                              {}, memory, embedder="local")
@@ -709,22 +709,22 @@ def database_(into: Path) -> MemoryDatabase:
     return memory
 
 
-def search_(home: Path, database: str) -> None:
+def search_(folder: Path, database: str) -> None:
     """retrieve.search -- ranked in Postgres, so only with --database."""
     from vidra.video_rag import layout, search, video_rag
 
     section("9b export + search, live")
-    run = video_rag(PRIMARY, home.parent, sampler="uniform:[overview,scene]",
+    run = video_rag(PRIMARY, folder.parent, sampler="uniform:[overview,scene]",
                     database=database, **FREE)
     check(not run.problems, f"every artifact exported to {database}: {run.problems or 'no problems'}")
     moments, notes = search("people in a shop", run.video_id, embedder="local",
-                            grids={run.video_id: layout(run.home)["timeline"]})
+                            grids={run.video_id: layout(run.folder)["timeline"]})
     check(moments, f"search -> {len(moments)} moments; notes: {notes}")
 
 
 # ----------------------------------------------------------- 2 · aggregates
 
-def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
+def aggregate_components(folder: Path, scratch: Path, llm: bool) -> None:
     """Every aggregator alone: a record, then an input built from it, then one
     answer."""
     from vidra import Models, aggregates
@@ -732,8 +732,8 @@ def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
 
     section("10 aggregates, one at a time")
     out = scratch / "components"
-    video = record_of(home)
-    check(video.video_id == home.name and set(video.paths) == {
+    video = record_of(folder)
+    check(video.video_id == folder.name and set(video.paths) == {
         "timeline", "transcript", "descriptions", "manifest"},
         f"record(timeline=..., ...) names {', '.join(video.paths)}")
     said = video.excerpt(transcript=True, out=out / "in" / "said.json")
@@ -802,7 +802,7 @@ def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
     refused("sightings with no answers named",
             lambda: video.sightings(profile="people"), "name the answers")
     refused("a folder where a file goes",
-            lambda: aggregates.record(timeline=home), "name the file")
+            lambda: aggregates.record(timeline=folder), "name the file")
 
     # A component takes `models=`; the refusal comes before any call.
     keyed = Models(llm="openai", keys={"openai": "sk-test-not-real"})
@@ -847,14 +847,14 @@ def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
               f"chunk, first pass {chapters['segmentation']['first_pass']}")
 
 
-def aggregate_pipeline(home: Path, scratch: Path, llm: bool) -> None:
+def aggregate_pipeline(folder: Path, scratch: Path, llm: bool) -> None:
     """aggregate() -- runs what it is handed an input for, and nothing else."""
     from vidra import aggregates
     from vidra.aggregates.driver import from_spec
 
     section("11 aggregate() -- the pipeline")
     out = scratch / "answers"
-    video = record_of(home)
+    video = record_of(folder)
     said = video.excerpt(transcript=True)
     seen = video.excerpt(answers={"uniform:scene": ["summary"]})
     handed = {"stats": video, "coverage": video, "sentiment": said, "ner": said}
@@ -917,7 +917,7 @@ def aggregate_pipeline(home: Path, scratch: Path, llm: bool) -> None:
                               f"{e['narrated']} with an account")
 
 
-def custom_prompts(home: Path, scratch: Path, llm: bool) -> None:
+def custom_prompts(folder: Path, scratch: Path, llm: bool) -> None:
     """add_prompt / add_profile: definitions of your own, run like the built-ins."""
     from vidra import aggregates
     from vidra.aggregates import DefinitionError, ProtectedDefinition
@@ -933,7 +933,7 @@ def custom_prompts(home: Path, scratch: Path, llm: bool) -> None:
           and "incident_report" in aggregates.available()
           and aggregates.tier_of("incident_report") == "llm",
           "add_prompt -> a fold prompt listed in available(), tier llm")
-    said = record_of(home).excerpt(transcript=True)
+    said = record_of(folder).excerpt(transcript=True)
     check(not aggregates.validate(incident_report=said),
           "validate(incident_report=excerpt) passes: it runs as a keyword like summary")
     steps = aggregates.add_prompt("steps_demo", "List each step of the procedure.",
@@ -988,13 +988,13 @@ def custom_prompts(home: Path, scratch: Path, llm: bool) -> None:
     refused("removing a built-in", lambda: aggregates.remove_prompt("summary"), "built in")
 
 
-def several(home: Path, second: Path, scratch: Path) -> None:
+def several(folder: Path, second: Path, scratch: Path) -> None:
     """Two videos combined into one record, then aggregated."""
     from vidra import aggregates
     from vidra.aggregates.combination import origin
 
     section("13 several videos")
-    first, other = record_of(home), record_of(second)
+    first, other = record_of(folder), record_of(second)
     both = aggregates.combine(records=[first, other], out=scratch / "both")
     parts = [len(first.timeline), len(other.timeline)]
     check(isinstance(both, aggregates.Record) and len(both.timeline) == sum(parts),
@@ -1045,7 +1045,7 @@ def whole_run(scratch: Path) -> None:
     outside = paths.data_root()
     vidra.configure(data_root=scratch / "elsewhere")
     run = workflow.process(workflow.Options(source=SECOND, use_audio=False, **FREE))
-    check(run.home.parent == paths.out_root() == scratch / "elsewhere" / "out",
+    check(run.folder.parent == paths.out_root() == scratch / "elsewhere" / "out",
           f"configure(): into=None wrote under {paths.out_root()}")
     vidra.configure(data_root=outside)
     check(paths.data_root() == outside, "...and configuring it back restores it")
@@ -1053,7 +1053,7 @@ def whole_run(scratch: Path) -> None:
 
 # ------------------------------------------- 4 · extension points and helpers
 
-def helpers(at: dict[str, Path], home: Path, memory: Any, scratch: Path) -> None:
+def helpers(at: dict[str, Path], folder: Path, memory: Any, scratch: Path) -> None:
     """A sampler of your own, the rate limits, progress callbacks, search's
     filters, and the helpers the registries publish.
     """
@@ -1204,7 +1204,7 @@ def helpers(at: dict[str, Path], home: Path, memory: Any, scratch: Path) -> None
                             files.read(at["transcript"], Transcript),
                             files.read(at["manifest"], Manifest))
     other = scratch / "out"
-    second = next(p for p in other.iterdir() if p.is_dir() and p != home
+    second = next(p for p in other.iterdir() if p.is_dir() and p != folder
                   and (p / "embedded.json").exists())
     merged = combination.merge([part, combination.Part(
         files.read(second / "timeline.json", Timeline),
@@ -1291,13 +1291,13 @@ def local_models(at: dict[str, Path], scratch: Path) -> None:
 
     # Every model-backed sampler, on a minute of a shop.
     shop = media.media(Path("samples/test2.mp4"), out / "videos")
-    home = Path(shop.stats["home"])
-    boundaries.boundaries(home / "media.json", home / "timeline.json", "uniform")
+    folder = Path(shop.stats["folder"])
+    boundaries.boundaries(folder / "media.json", folder / "timeline.json", "uniform")
     started = time.perf_counter()
-    made = video.video(home / "media.json", home / "timeline.json", home / "manifest.json",
-                       store=home / "store", sampler="clip,yolo,objects",
+    made = video.video(folder / "media.json", folder / "timeline.json", folder / "manifest.json",
+                       store=folder / "store", sampler="clip,yolo,objects",
                        vocabulary=["person", "shelf", "bottle", "basket"])
-    manifest = video.load(home / "manifest.json")
+    manifest = video.load(folder / "manifest.json")
     runs = [r["name"] for r in manifest.config["samplers"]]
     per = {r: [c["samplers"][r]["frame_count"] for c in manifest.chunks] for r in runs}
     check(runs == ["clip", "yolo", "objects"] and all(min(v) >= 1 for v in per.values()),
@@ -1308,15 +1308,15 @@ def local_models(at: dict[str, Path], scratch: Path) -> None:
           f"a frame two samplers kept is stored once")
 
     from recovery.recreate import recreate, verify
-    rebuilt = recreate(home / "manifest.json", out / "rebuilt")
+    rebuilt = recreate(folder / "manifest.json", out / "rebuilt")
     names = {f"{f['index']:07d}.jpg" for c in manifest.chunks
              for r in c["samplers"].values() for f in r["frames"]}
-    same = verify(out / "rebuilt", home / "store", names)
+    same = verify(out / "rebuilt", folder / "store", names)
     check(not rebuilt["missing"] and len(same["identical"]) == same["compared"] == len(names),
           f"recovery.recreate rebuilt the store {len(same['identical'])}/{len(names)} byte-identical")
 
     slides = media.media(Path("samples/fixtures/slides.mp4"), out / "videos")
-    sh = Path(slides.stats["home"])
+    sh = Path(slides.stats["folder"])
     boundaries.boundaries(sh / "media.json", sh / "timeline.json", "uniform")
     started = time.perf_counter()
     video.video(sh / "media.json", sh / "timeline.json", sh / "manifest.json",
@@ -1328,7 +1328,7 @@ def local_models(at: dict[str, Path], scratch: Path) -> None:
     return None
 
 
-def paid_models(home: Path, scratch: Path) -> None:
+def paid_models(folder: Path, scratch: Path) -> None:
     """A real describer and embedder, the items kind, and linking real people.
     Costs a few cents.
     """
@@ -1338,7 +1338,7 @@ def paid_models(home: Path, scratch: Path) -> None:
     section("17 paid models: a real describer, embedder, events and linking")
     out = scratch / "paid"
     shop = media.media(Path("samples/test2.mp4"), out)
-    h = Path(shop.stats["home"])
+    h = Path(shop.stats["folder"])
     boundaries.boundaries(h / "media.json", h / "timeline.json", "uniform")
     video.video(h / "media.json", h / "timeline.json", h / "manifest.json",
                 store=h / "store", sampler="yolo,uniform:overview", every_n=5)
@@ -1426,7 +1426,7 @@ def main() -> int:
     try:
         into = scratch / "out"
         step(models_)
-        home, at = media_(into)          # everything after reads what this wrote
+        folder, at = media_(into)          # everything after reads what this wrote
         step(audio_, at)
         step(boundaries_, at, scratch)
         step(video_, at, scratch)
@@ -1437,19 +1437,19 @@ def main() -> int:
         second = step(pipeline_, into)
         memory = step(database_, scratch / "db")
         if args.database:
-            step(search_, home, args.database)
-        step(aggregate_components, home, scratch, args.llm)
-        step(aggregate_pipeline, home, scratch, args.llm)
-        step(custom_prompts, home, scratch, args.llm)
+            step(search_, folder, args.database)
+        step(aggregate_components, folder, scratch, args.llm)
+        step(aggregate_pipeline, folder, scratch, args.llm)
+        step(custom_prompts, folder, scratch, args.llm)
         if second is not None:
-            step(several, home, second, scratch)
+            step(several, folder, second, scratch)
         step(whole_run, scratch)
         if memory is not None:
-            step(helpers, at, home, memory, scratch)
+            step(helpers, at, folder, memory, scratch)
         if args.local:
             step(local_models, at, scratch)
         if args.llm:
-            step(paid_models, home, scratch)
+            step(paid_models, folder, scratch)
     finally:
         vidra.configure(data_root=was)
         if args.keep is None:

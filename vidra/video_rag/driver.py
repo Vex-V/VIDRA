@@ -39,13 +39,13 @@ from vidra.shared.storage.database import Database, as_database
 DATABASES = tuple(_DATABASES)
 
 
-def layout(home: str | Path) -> dict[str, Path]:
+def layout(folder: str | Path) -> dict[str, Path]:
     """Every artifact's path inside one video's folder, from the library's own
     filename table. Includes `store`, the frame directory.
     """
-    root = Path(home)
+    root = Path(folder)
     return {**{name: root / filename for name, filename in paths.ARTIFACTS.items()},
-            **{name: root / folder for name, folder in paths.DIRECTORIES.items()}}
+            **{name: root / dirname for name, dirname in paths.DIRECTORIES.items()}}
 
 
 @dataclass
@@ -81,7 +81,7 @@ class Run:
     #: The id the run settled on (`media` may mint a new one).
     video_id: str
     #: The folder every artifact went into.
-    home: Path
+    folder: Path
     #: Every component's receipt, in the order they ran.
     steps: list[Produced] = field(default_factory=list)
     #: `{component: why}` for each component that did not run.
@@ -91,12 +91,12 @@ class Run:
 
     def artifacts(self) -> dict[str, str]:
         """What is actually in the folder, by artifact name."""
-        return {name: str(where) for name, where in sorted(layout(self.home).items())
+        return {name: str(where) for name, where in sorted(layout(self.folder).items())
                 if where.exists()}
 
     def as_dict(self) -> dict[str, Any]:
         return {"video_id": self.video_id,
-                "home": str(self.home),
+                "folder": str(self.folder),
                 "steps": [s.as_dict() for s in self.steps],
                 "skipped": self.skipped,
                 "problems": self.problems,
@@ -250,9 +250,9 @@ def _run(options: Options, whole: Any,
     starting("media")
     first = media.media(options.source, options.into, options.video_id,
                         options.on_conflict, options.name, options.recorded_at)
-    home = Path(first.stats["home"])
-    at = layout(home)
-    run = Run(video_id=first.video_id, home=home)
+    folder = Path(first.stats["folder"])
+    at = layout(folder)
+    run = Run(video_id=first.video_id, folder=folder)
     whole(video_id=run.video_id)
 
     def step(produced: Produced) -> Produced:
@@ -485,7 +485,7 @@ def report(options: Any, execute: Callable[[Callable], Run],
         return 0
     for name, why in run.skipped.items():
         print(f"  {name:<22} -- skipped: {why}")
-    print(f"\n{run.video_id} -> {run.home}")
+    print(f"\n{run.video_id} -> {run.folder}")
     print(f"  artifacts: {', '.join(run.artifacts())}")
     return 0
 

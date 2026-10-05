@@ -55,7 +55,7 @@ def media(source: str | Path, into: str | Path,
         refuse   raise `VideoIdTaken`
 
     The same file again (by `Media.source`) always reuses its folder. The receipt
-    carries the id used, `requested_id`, and `stats["home"]`, the folder.
+    carries the id used, `requested_id`, and `stats["folder"]`, the folder.
     """
     if on_conflict not in ON_CONFLICT:
         raise UnknownOption(f"unknown on_conflict {on_conflict!r}; "
@@ -67,8 +67,8 @@ def media(source: str | Path, into: str | Path,
                             on_conflict)
         described = _kept(parent, described, name is not None,
                           recorded_at is not None)
-        home = parent / described.video_id
-        where = write(home / FILENAME, described)
+        folder = parent / described.video_id
+        where = write(folder / FILENAME, described)
         done(video_id=described.video_id, duration_s=described.duration_s,
              has_video=described.has_video, has_audio=described.has_audio)
     return Produced(
@@ -82,7 +82,7 @@ def media(source: str | Path, into: str | Path,
                "name": described.name,
                "recorded_at": described.recorded_at,
                # The folder every later path is built from.
-               "home": str(home),
+               "folder": str(folder),
                # The id the filename asked for, beside the one used.
                "requested_id": video_id or Path(source).stem},
         # Streams this file does not carry.
@@ -222,7 +222,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if produced.video_id != produced.stats["requested_id"]:
         print(f"  {produced.stats['requested_id']!r} is a different file; "
               f"this one is {produced.video_id!r}")
-    print(f"home  -> {produced.stats['home']}")
+    print(f"folder  -> {produced.stats['folder']}")
     print(f"media -> {produced.artifacts['media']}")
     return 0
 

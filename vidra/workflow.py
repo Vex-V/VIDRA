@@ -84,10 +84,10 @@ def chosen(options: Options) -> list[str]:
             if aggregates.TIERS.index(aggregates.tier_of(name)) <= ceiling]
 
 
-def inputs_for(names: list[str], home: Path) -> tuple[dict[str, Any], dict[str, str]]:
+def inputs_for(names: list[str], folder: Path) -> tuple[dict[str, Any], dict[str, str]]:
     """What each aggregator reads in a run, built from the folder extraction
     wrote, and why any could not run."""
-    at = video_rag.layout(home)
+    at = video_rag.layout(folder)
     video = aggregates.record(**{kind: at[kind] for kind in
                                  ("timeline", "transcript", "descriptions", "manifest")
                                  if at[kind].exists()})
@@ -153,8 +153,8 @@ def _process(options: Options,
     # The folder extraction settled on is the record the aggregates read; earlier
     # answers there are reused while current.
     say("aggregate", None)
-    answers = video_rag.layout(run.home)["aggregates"]
-    handed, cannot = inputs_for(chosen(options), run.home)
+    answers = video_rag.layout(run.folder)["aggregates"]
+    handed, cannot = inputs_for(chosen(options), run.folder)
     produced = aggregates.aggregate(
         out=answers, previous=answers, llm=used["llm"], embedder=used["embedder"],
         database=database, **{name.replace(":", "_"): data
