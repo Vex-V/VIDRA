@@ -6,7 +6,7 @@
 Two readings of one person are compared by a weighted distance over the
 `people` shape's closed-vocabulary fields, and answers are walked in time
 order with a Hungarian assignment to tracks. Reads a prototype data root
-(`--data`, set before `falconvar` is imported). Labels: `people_labels.json`.
+(`--data`, set before `vidra` is imported). Labels: `people_labels.json`.
 """
 from __future__ import annotations
 
@@ -43,18 +43,18 @@ STOP = {"a", "an", "the", "and", "with", "of", "on", "in", "none", "nothing", "n
 
 
 def use_data(root: Path) -> None:
-    """Point `falconvar` at a data root. Must run before it is imported."""
-    os.environ["FALCONVAR_DATA"] = str(root)
+    """Point `vidra` at a data root. Must run before it is imported."""
+    os.environ["VIDRA_DATA"] = str(root)
 
 
 class Corpus:
     """One video's people mentions, its labels, and the answers in time order."""
 
     def __init__(self, video: str = "test1", labels: Path = LABELS, data: Path = DATA):
-        from falconvar.aggregates import context
-        from falconvar.aggregates.definitions import Selection
-        from falconvar.aggregates.core.inputs import Source
-        from falconvar.aggregates.entities.linking import mentions_of
+        from vidra.aggregates import context
+        from vidra.aggregates.definitions import Selection
+        from vidra.aggregates.core.inputs import Source
+        from vidra.aggregates.entities.linking import mentions_of
 
         self.labels = json.loads(labels.read_text(encoding="utf-8"))
         self.truth = {m: person for person, ms in self.labels.items() for m in ms}
@@ -219,7 +219,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--no-embed", action="store_true", help="skip the cosine rows")
     args = ap.parse_args(argv)
     use_data(args.data)
-    from falconvar.shared.config import env
+    from vidra.shared.config import env
     env.load()
 
     c = Corpus(args.video, args.labels, args.data)
@@ -231,7 +231,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     sims = {}
     if not args.no_embed:
-        from falconvar.shared.models import embedders
+        from vidra.shared.models import embedders
         v = np.asarray(embedders.build("openai").embed([m.signature for m in c.mentions]))
         v /= np.linalg.norm(v, axis=1, keepdims=True)
         sims["cosine openai (text)"] = v @ v.T

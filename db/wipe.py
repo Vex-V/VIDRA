@@ -15,8 +15,8 @@ import argparse
 import shutil
 import sys
 
-from falconvar.shared.config import env, paths
-from falconvar.shared.storage import db
+from vidra.shared.config import env, paths
+from vidra.shared.storage import db
 
 #: Children before parents. A table a database does not have is skipped.
 TABLES = ("ag_mentions", "ag_embeddings", "ag_items", "ag_answers", "ag_sources",

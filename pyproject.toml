@@ -1,4 +1,4 @@
-# Declares the distribution. `python -m falconvar.…` works from a checkout and
+# Declares the distribution. `python -m vidra.…` works from a checkout and
 # from an install; there are no console_scripts, because `python -m` is the
 # documented interface and a second spelling would be a second thing to keep
 # correct.
@@ -8,11 +8,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "falconvar"
+name = "vidra"
 version = "3.0.0"
 description = "Video and audio in, searchable moments out."
 readme = "README.md"
-requires-python = ">=3.12"
+# Measured: the wheel passes `eval.library_check --local --llm` on 3.11 to 3.14.
+# numpy 2.5 has already dropped 3.11 (pip resolves 2.4 there). Nothing
+# checks the floor but a run on 3.11, and 3.12-only syntax broke it once.
+requires-python = ">=3.11"
 
 # The core: reading a video, the positional samplers, documents, and the
 # clients for whoever answers. Everything here is imported by a default run.
@@ -31,7 +34,7 @@ dependencies = [
     "supabase",
 ]
 
-# The heavy halves, opt-in. `pip install falconvar` would otherwise pull
+# The heavy halves, opt-in. `pip install vidra` would otherwise pull
 # several GB of CUDA wheels on behalf of someone running `uniform` against an
 # API model.
 #
@@ -54,24 +57,29 @@ local = [                      # model-backed samplers and in-process models
 audio = [
     "faster-whisper",
     "pyannote.audio",
+    # CTranslate2, under faster-whisper, loads CUDA 12's cuBLAS and cuDNN 9 by
+    # name on a GPU. torch ships only its own CUDA's, so without these a GPU
+    # machine gets a Whisper that loads and then fails at its first encode.
+    "nvidia-cublas-cu12; sys_platform != 'darwin'",
+    "nvidia-cudnn-cu12>=9,<10; sys_platform != 'darwin'",
 ]
-all = ["falconvar[local,audio]"]
+all = ["vidra[local,audio]"]
 
 [tool.setuptools.package-data]
 # The built-in prompts and definitions are data inside the package, not
-# resources beside it: `python -m falconvar.workflow` from any directory has to
+# resources beside it: `python -m vidra.workflow` from any directory has to
 # find them, and an editable install that resolved them by `__file__` would
 # stop working the day it became a real one.
 #
 # `py.typed` (PEP 561) is what makes the annotations visible to a consumer's
 # type checker. Without it every one of them is invisible outside this tree.
-"falconvar" = ["py.typed"]
-"falconvar.video_rag.describe" = ["prompts.json"]
-"falconvar.aggregates.definitions" = ["definitions.json"]
+"vidra" = ["py.typed"]
+"vidra.video_rag.describe" = ["prompts.json"]
+"vidra.aggregates.definitions" = ["definitions.json"]
 
 [tool.setuptools.packages.find]
 # Found rather than listed. The explicit list drifted the moment a folder was
-# added: ten new `falconvar.aggregates.*` packages had to be appended by hand,
+# added: ten new `vidra.aggregates.*` packages had to be appended by hand,
 # and a package left off is not a build error -- it is an `ImportError` for
 # whoever installs the wheel.
 #
@@ -80,5 +88,5 @@ all = ["falconvar[local,audio]"]
 # they rebuild the store with only `av`, `opencv-python` and `numpy`.
 # Installing it beside the pipeline is the first step towards it importing
 # from one. `eval` and `db` are not part of the library either.
-include = ["falconvar*"]
+include = ["vidra*"]
 exclude = ["recovery*", "eval*", "db*", "data*", "samples*"]

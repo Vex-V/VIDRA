@@ -93,7 +93,7 @@ def _cache() -> dict:
 
 def embed(texts: Sequence[str], name: str) -> np.ndarray:
     """Unit vectors, cached on disk by (embedder, text)."""
-    from falconvar.shared.models import embedders
+    from vidra.shared.models import embedders
 
     store = _cache()
     key = lambda t: hashlib.sha1(f"{name}\0{t}".encode()).hexdigest()
@@ -391,8 +391,8 @@ class _Cached:
 
 def shipped(c: Corpus, embedder: str, profile: str = "people") -> Score:
     """The production linker, run as `entities` runs it."""
-    from falconvar.aggregates import definitions
-    from falconvar.aggregates.entities.linking import link_similar, similarity
+    from vidra.aggregates import definitions
+    from vidra.aggregates.entities.linking import link_similar, similarity
 
     entry = definitions.get("profiles", profile)
     sim, _ = similarity(c.mentions, _Cached(embedder), entry)
@@ -466,7 +466,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="print splits and mixed groups for one calibrated config")
     args = ap.parse_args(argv)
     use_data(DATA)
-    from falconvar.shared.config import env
+    from vidra.shared.config import env
     env.load()
 
     embedders = [e for e in args.embedders.split(",") if e]

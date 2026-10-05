@@ -1,5 +1,5 @@
 # Everything here is required. Heavy packages are imported where they are used,
-# so `import falconvar` stays light -- but nothing falls back without them.
+# so `import vidra` stays light -- but nothing falls back without them.
 
 # Core -- reading video and the uniform sampler.
 av==18.1.0                 # decode + exact PTS/time_base; OpenCV cannot expose either

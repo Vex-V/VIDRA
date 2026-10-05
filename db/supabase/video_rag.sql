@@ -1,8 +1,8 @@
--- FalCONvar · video_rag on Supabase: the tables `video_rag` exports and the
+-- VIDRA · video_rag on Supabase: the tables `video_rag` exports and the
 -- search over them. Every table here starts with vr_; the aggregates' (ag_)
 -- are in aggregates.sql.
 --
--- Run it in the SQL editor; it is idempotent. Then add `falconvar` under
+-- Run it in the SQL editor; it is idempotent. Then add `vidra` under
 -- Dashboard > Settings > API > Exposed schemas.
 --
 -- Writes use the secret key; reads use the publishable key (`anon`), which is
@@ -13,14 +13,14 @@
 -- ===========================================================================
 -- 0 · schema and extension
 -- ===========================================================================
-create schema if not exists falconvar;
-grant usage on schema falconvar to anon, service_role;
+create schema if not exists vidra;
+grant usage on schema vidra to anon, service_role;
 create extension if not exists vector;
 
 -- ===========================================================================
 -- 1 · the file
 -- ===========================================================================
-create table if not exists falconvar.vr_videos (
+create table if not exists vidra.vr_videos (
   video_id      text primary key,
   path          text not null,
   name          text,                     -- the filename unless given
@@ -37,8 +37,8 @@ create table if not exists falconvar.vr_videos (
 -- ===========================================================================
 -- 2 · the grid: one per video; chunk tables join it on (video_id, chunk_id)
 -- ===========================================================================
-create table if not exists falconvar.vr_timelines (
-  video_id      text primary key references falconvar.vr_videos on delete cascade,
+create table if not exists vidra.vr_timelines (
+  video_id      text primary key references vidra.vr_videos on delete cascade,
   policy        text not null,            -- uniform | scene | vad | speaker
   derived_from  text not null,            -- video | audio | grid
   params        jsonb not null default '{}'::jsonb,
@@ -48,8 +48,8 @@ create table if not exists falconvar.vr_timelines (
   built_at      timestamptz not null default now()
 );
 
-create table if not exists falconvar.vr_chunks (
-  video_id  text not null references falconvar.vr_timelines on delete cascade,
+create table if not exists vidra.vr_chunks (
+  video_id  text not null references vidra.vr_timelines on delete cascade,
   chunk_id  int  not null,
   start_ts  numeric not null,
   end_ts    numeric not null,
@@ -60,8 +60,8 @@ create table if not exists falconvar.vr_chunks (
 -- ===========================================================================
 -- 3 · the soundtrack: the raw transcript, and its text per chunk
 -- ===========================================================================
-create table if not exists falconvar.vr_transcripts (
-  video_id     text primary key references falconvar.vr_videos on delete cascade,
+create table if not exists vidra.vr_transcripts (
+  video_id     text primary key references vidra.vr_videos on delete cascade,
   timeline_fingerprint text,
   model        jsonb not null default '{}'::jsonb,
   track        jsonb not null default '{}'::jsonb,
@@ -72,7 +72,7 @@ create table if not exists falconvar.vr_transcripts (
   heard_at     timestamptz not null default now()
 );
 
-create table if not exists falconvar.vr_transcript_chunks (
+create table if not exists vidra.vr_transcript_chunks (
   video_id    text not null,
   chunk_id    int  not null,
   text        text not null default '',
@@ -80,14 +80,14 @@ create table if not exists falconvar.vr_transcript_chunks (
   structured  jsonb not null default '{}'::jsonb,   -- {speakers}
   turns       jsonb not null default '[]'::jsonb,
   primary key (video_id, chunk_id),
-  foreign key (video_id, chunk_id) references falconvar.vr_chunks on delete cascade
+  foreign key (video_id, chunk_id) references vidra.vr_chunks on delete cascade
 );
 
 -- ===========================================================================
 -- 4 · the picture: which frames each sampler kept
 -- ===========================================================================
-create table if not exists falconvar.vr_manifests (
-  video_id     text primary key references falconvar.vr_videos on delete cascade,
+create table if not exists vidra.vr_manifests (
+  video_id     text primary key references vidra.vr_videos on delete cascade,
   timeline_fingerprint text not null,
   manifest_fingerprint text not null,
   source       jsonb not null,
@@ -97,7 +97,7 @@ create table if not exists falconvar.vr_manifests (
 );
 
 -- One row per (chunk, sampler run); `questions` is what was asked of its frames.
-create table if not exists falconvar.vr_chunk_samplers (
+create table if not exists vidra.vr_chunk_samplers (
   video_id    text not null,
   chunk_id    int  not null,
   sampler_id  text not null,              -- the sampler's name
@@ -105,13 +105,13 @@ create table if not exists falconvar.vr_chunk_samplers (
   frame_count int  not null,
   frames      jsonb not null,
   primary key (video_id, chunk_id, sampler_id),
-  foreign key (video_id, chunk_id) references falconvar.vr_chunks on delete cascade
+  foreign key (video_id, chunk_id) references vidra.vr_chunks on delete cascade
 );
 
 -- ===========================================================================
 -- 5 · descriptions: one model answer per (chunk, sampler:question). No foreign key.
 -- ===========================================================================
-create table if not exists falconvar.vr_descriptions (
+create table if not exists vidra.vr_descriptions (
   video_id      text not null,
   chunk_id      int  not null,
   sampler_id    text not null,
@@ -136,7 +136,7 @@ create table if not exists falconvar.vr_descriptions (
 -- width); a large single space could add a partial one:
 -- `using hnsw ((embedding::vector(N)) vector_cosine_ops) where embedder = '...'`.
 -- ===========================================================================
-create table if not exists falconvar.vr_embeddings (
+create table if not exists vidra.vr_embeddings (
   video_id    text not null,
   chunk_id    int  not null,
   sampler_id  text not null,              -- the pairing: "clip:text"
@@ -157,16 +157,16 @@ create table if not exists falconvar.vr_embeddings (
 );
 
 create index if not exists vr_embeddings_question
-  on falconvar.vr_embeddings (video_id, embedder, question);
-create index if not exists vr_embeddings_fts on falconvar.vr_embeddings using gin (fts);
+  on vidra.vr_embeddings (video_id, embedder, question);
+create index if not exists vr_embeddings_fts on vidra.vr_embeddings using gin (fts);
 create index if not exists vr_embeddings_structured
-  on falconvar.vr_embeddings using gin (structured jsonb_path_ops);
+  on vidra.vr_embeddings using gin (structured jsonb_path_ops);
 
 -- ===========================================================================
 -- 7 · prompts: what each question said, at each version a run asked it under.
 --     Written, never read back; rows are never deleted.
 -- ===========================================================================
-create table if not exists falconvar.vr_prompts (
+create table if not exists vidra.vr_prompts (
   name        text not null,
   version     text not null,          -- instruction + shape + system
   instruction text not null,
@@ -183,7 +183,7 @@ create table if not exists falconvar.vr_prompts (
 --     rows, fused by RRF. Changing the parameter list needs the old function
 --     dropped first (`create or replace` would add an overload).
 -- ===========================================================================
-create or replace function falconvar.vr_search(
+create or replace function vidra.vr_search(
   p_embedder     text,
   p_query_vector vector,
   p_query_text   text default null,
@@ -203,7 +203,7 @@ returns table (
 )
 language sql stable as $$
   with candidates as (
-    select e.* from falconvar.vr_embeddings e
+    select e.* from vidra.vr_embeddings e
     where e.embedder = p_embedder
       and (p_video_ids  is null or e.video_id = any(p_video_ids))
       and (p_sampler    is null or e.sampler_id = p_sampler)
@@ -265,7 +265,7 @@ language sql stable as $$
     on  c.video_id   = f.video_id
     and c.chunk_id   = f.chunk_id
     and c.sampler_id = f.sampler_id
-  left join falconvar.vr_chunks k
+  left join vidra.vr_chunks k
     on k.video_id = f.video_id and k.chunk_id = f.chunk_id
   -- Ties broken by the vector rank.
   order by f.score desc,
@@ -285,20 +285,20 @@ begin
     'vr_videos','vr_timelines','vr_chunks','vr_transcripts','vr_transcript_chunks',
     'vr_manifests','vr_chunk_samplers','vr_descriptions','vr_embeddings','vr_prompts'
   ] loop
-    execute format('alter table falconvar.%I enable row level security', t);
-    execute format('drop policy if exists "public read" on falconvar.%I', t);
+    execute format('alter table vidra.%I enable row level security', t);
+    execute format('drop policy if exists "public read" on vidra.%I', t);
     execute format(
-      'create policy "public read" on falconvar.%I for select to anon using (true)', t);
+      'create policy "public read" on vidra.%I for select to anon using (true)', t);
   end loop;
 end $$;
 
-grant select  on all tables in schema falconvar to anon;
-grant all     on all tables in schema falconvar to service_role;
-grant execute on function falconvar.vr_search(
+grant select  on all tables in schema vidra to anon;
+grant all     on all tables in schema vidra to service_role;
+grant execute on function vidra.vr_search(
   text, vector, text, text[], text, text, text, int[], jsonb, int, int)
   to anon, service_role;
 
 -- ===========================================================================
 -- Verify reads under the publishable key (the SQL editor is a superuser):
---   select count(*) from falconvar.vr_videos;
+--   select count(*) from vidra.vr_videos;
 -- ===========================================================================

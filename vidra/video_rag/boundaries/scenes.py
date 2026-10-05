@@ -1,0 +1,170 @@
+"""Scene evidence: content scores over the picture, thresholded into cuts.
+
+Frames are decoded straight to the detection size. A `stride` scores every
+Nth frame; the threshold should rise with it. `cuts.json` keeps the per-frame
+score series, so `rethreshold` needs no second decode; `detect` and
+`rethreshold` both go through `cuts_from_scores`.
+"""
+
+from __future__ import annotations
+
+import time
+from fractions import Fraction
+from typing import Any, Optional, Sequence
+
+import av
+
+from vidra.shared.contracts.documents import Cuts, Media
+from vidra.shared.reporting.errors import VidraError
+from vidra.shared.reporting.errors import Refused
+
+#: Width detection runs at.
+DETECT_WIDTH = 320
+
+#: PySceneDetect's default, calibrated for adjacent frames.
+DEFAULT_THRESHOLD = 27.0
+
+#: Frames of the decimated-for-detection stream between scored frames.
+DEFAULT_STRIDE = 5
+
+
+class NoPicture(VidraError, RuntimeError):
+    """Asked to find scene cuts in a file with no video stream."""
+
+
+def _timestamps(stream) -> tuple[Optional[Fraction], float]:
+    time_base = stream.time_base
+    rate = stream.guessed_rate or stream.average_rate
+    return time_base, float(rate) if rate else 0.0
+
+
+def score_frames(media: Media, stride: int = DEFAULT_STRIDE,
+                 detect_width: int = DETECT_WIDTH) -> tuple[list[tuple[float, float]],
+                                                            dict[str, Any]]:
+    """Decode the picture and score every `stride`-th frame. Returns
+    `[(media_ts, score), ...]` and the pass's stats.
+    """
+    if not media.has_video:
+        raise NoPicture(f"{media.path} has no video stream")
+    if stride < 1:
+        raise Refused("stride must be >= 1; it is a frame stride")
+
+    from scenedetect import ContentDetector, FrameTimecode
+    from scenedetect.stats_manager import StatsManager
+
+    stats_manager = StatsManager()
+    # Cuts come from thresholding the scores; the minimum chunk length is
+    # `grid.enforce`'s.
+    detector = ContentDetector(threshold=DEFAULT_THRESHOLD)
+    detector.stats_manager = stats_manager
+
+    container = av.open(media.path)
+    try:
+        stream = container.streams.video[0]
+        # Required for decode speed.
+        stream.thread_type = "AUTO"
+        time_base, fps = _timestamps(stream)
+        height = max(1, int(media.video.height * detect_width / media.video.width))
+
+        scored: list[tuple[float, float]] = []
+        read = converted = 0
+        started = time.perf_counter()
+
+        for frame in container.decode(video=0):
+            if read % stride == 0:
+                # Straight to the detection size.
+                small = frame.reformat(width=detect_width, height=height,
+                                       format="bgr24").to_ndarray()
+                detector.process_frame(FrameTimecode(read, fps or 30.0), small)
+                value = stats_manager.get_metrics(
+                    read, [ContentDetector.FRAME_SCORE_KEY])[0]
+                if value is not None:
+                    # The first scored frame has no predecessor and scores None.
+                    media_ts = (float(frame.pts * time_base)
+                                if frame.pts is not None and time_base
+                                else read / (fps or 30.0))
+                    scored.append((media_ts, float(value)))
+                converted += 1
+            read += 1
+    finally:
+        container.close()
+
+    elapsed = time.perf_counter() - started
+    return scored, {
+        "frames_read": read,
+        "frames_scored": converted,
+        "elapsed_s": round(elapsed, 3),
+        "ms_per_frame": round(elapsed / max(read, 1) * 1000, 3),
+    }
+
+
+def cuts_from_scores(scored: Sequence[tuple[float, float]],
+                     threshold: float) -> list[float]:
+    """Which scored frames are cuts at this threshold: each cut lands on the frame
+    that differs from its predecessor by more than `threshold`.
+    """
+    return [ts for ts, value in scored if value >= threshold]
+
+
+def detect(media: Media, stride: int = DEFAULT_STRIDE,
+           threshold: float = DEFAULT_THRESHOLD,
+           detect_width: int = DETECT_WIDTH) -> Cuts:
+    """One pass over the picture, as a `Cuts` document."""
+    scored, stats = score_frames(media, stride, detect_width)
+    cuts = cuts_from_scores(scored, threshold)
+    return Cuts(
+        video_id=media.video_id,
+        source="video",
+        detector="content",
+        params={"threshold": threshold, "stride": stride,
+                "detect_width": detect_width},
+        cuts=cuts,
+        scores={
+            "metric": "content_val",
+            "stride": stride,
+            # Timestamps beside the scores.
+            "at": [round(ts, 3) for ts, _ in scored],
+            "values": [round(v, 4) for _, v in scored],
+        },
+        stats={**stats, "cuts_found": len(cuts)},
+    )
+
+
+def rethreshold(cuts: Cuts, threshold: float) -> Cuts:
+    """A different threshold over the cached scores. No decoding."""
+    if not cuts.scores:
+        raise Refused(
+            f"{cuts.video_id}: this cuts document carries no score series, so a "
+            "threshold cannot be changed without re-running the pass")
+    scored = list(zip(cuts.scores["at"], cuts.scores["values"]))
+    return Cuts(
+        video_id=cuts.video_id, source=cuts.source, detector=cuts.detector,
+        params={**cuts.params, "threshold": threshold},
+        cuts=cuts_from_scores(scored, threshold),
+        scores=cuts.scores,
+        stats={**cuts.stats, "cuts_found": len(cuts_from_scores(scored, threshold)),
+               "rethresholded": True},
+    )
+
+
+def sweep(cuts: Cuts, thresholds: Sequence[float]) -> list[dict[str, Any]]:
+    """How many cuts each threshold would give. Reports; does not choose."""
+    if not cuts.scores:
+        raise Refused("no score series to sweep")
+    scored = list(zip(cuts.scores["at"], cuts.scores["values"]))
+    values = [v for _, v in scored]
+    rows = []
+    for threshold in sorted(thresholds):
+        found = [ts for ts, v in scored if v >= threshold]
+        gaps = [b - a for a, b in zip(found, found[1:])]
+        rows.append({
+            "threshold": threshold,
+            "cuts": len(found),
+            "rate": round(len(found) / max(len(values), 1), 4),
+            "median_gap_s": round(sorted(gaps)[len(gaps) // 2], 2) if gaps else None,
+        })
+    return rows
+
+
+__all__ = ["DETECT_WIDTH", "DEFAULT_THRESHOLD", "DEFAULT_STRIDE", "NoPicture",
+           "score_frames", "cuts_from_scores", "detect", "rethreshold", "sweep"]

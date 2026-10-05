@@ -1,4 +1,4 @@
--- FalCONvar · the aggregates on Supabase. Run with video_rag.sql, in either
+-- VIDRA · the aggregates on Supabase. Run with video_rag.sql, in either
 -- order; idempotent.
 --
 -- An answer belongs to a source: one video, or several laid end to end
@@ -17,20 +17,20 @@
 --
 -- Every table here starts with ag_; every video_rag table with vr_.
 --
--- Rows are built by `falconvar.aggregates.export`; `aggregate(..., database=)`
+-- Rows are built by `vidra.aggregates.export`; `aggregate(..., database=)`
 -- writes them.
 
 -- ===========================================================================
 -- 0 · schema and extension
 -- ===========================================================================
-create schema if not exists falconvar;
-grant usage on schema falconvar to anon, service_role;
+create schema if not exists vidra;
+grant usage on schema vidra to anon, service_role;
 create extension if not exists vector;
 
 -- ===========================================================================
 -- 1 · sources and answers
 -- ===========================================================================
-create table if not exists falconvar.ag_sources (
+create table if not exists vidra.ag_sources (
   source_id    text primary key,          -- a video id, or combined-<hash>
   video_ids    text[] not null,           -- what it draws from, in order
   members      jsonb not null default '[]'::jsonb,  -- each: video_id, first_chunk, chunk_count, offset_s
@@ -40,10 +40,10 @@ create table if not exists falconvar.ag_sources (
 );
 -- "every source involving test": video_ids @> '{test}'
 create index if not exists ag_sources_videos
-  on falconvar.ag_sources using gin (video_ids);
+  on vidra.ag_sources using gin (video_ids);
 
-create table if not exists falconvar.ag_answers (
-  source_id    text not null references falconvar.ag_sources on delete cascade,
+create table if not exists vidra.ag_answers (
+  source_id    text not null references vidra.ag_sources on delete cascade,
   aggregate_id text not null,             -- summary · summary~severity · entities:people
   aggregator   text not null,             -- summary · entities:people (the definition)
   tier         text not null,             -- free | local | llm
@@ -59,7 +59,7 @@ create table if not exists falconvar.ag_answers (
 -- ===========================================================================
 -- 2 · what an answer places in time, unpacked from its payload; deleted with it
 -- ===========================================================================
-create table if not exists falconvar.ag_items (
+create table if not exists vidra.ag_items (
   source_id    text not null,
   aggregate_id text not null,
   item_id      text not null,             -- chapter-2 · event-14 · name-17 · e003
@@ -71,15 +71,15 @@ create table if not exists falconvar.ag_items (
   end_ts       numeric,
   data         jsonb not null default '{}'::jsonb,  -- the rest of the item
   primary key (source_id, aggregate_id, item_id),
-  foreign key (source_id, aggregate_id) references falconvar.ag_answers on delete cascade
+  foreign key (source_id, aggregate_id) references vidra.ag_answers on delete cascade
 );
 create index if not exists ag_items_kind
-  on falconvar.ag_items (source_id, item_kind);
+  on vidra.ag_items (source_id, item_kind);
 -- "what is in chunk 6": chunk_ids @> '{6}'
 create index if not exists ag_items_chunks
-  on falconvar.ag_items using gin (chunk_ids);
+  on vidra.ag_items using gin (chunk_ids);
 
-create table if not exists falconvar.ag_mentions (
+create table if not exists vidra.ag_mentions (
   source_id    text not null,
   aggregate_id text not null,
   mention_key  text not null,             -- c3/yolo/people/1
@@ -90,16 +90,16 @@ create table if not exists falconvar.ag_mentions (
   doubt        text,                      -- why the account left it out; null if undisputed
   primary key (source_id, aggregate_id, mention_key),
   foreign key (source_id, aggregate_id, item_id)
-    references falconvar.ag_items on delete cascade
+    references vidra.ag_items on delete cascade
 );
 create index if not exists ag_mentions_chunk
-  on falconvar.ag_mentions (source_id, chunk_id);
+  on vidra.ag_mentions (source_id, chunk_id);
 
 -- ===========================================================================
 -- 3 · the aggregate index: one table, three levels, any embedder and width.
 --     A search filters on embedder and level before taking a distance.
 -- ===========================================================================
-create table if not exists falconvar.ag_embeddings (
+create table if not exists vidra.ag_embeddings (
   source_id    text not null,
   aggregate_id text not null,
   item_id      text not null default '',  -- '' for a summary, which is the whole answer
@@ -113,18 +113,18 @@ create table if not exists falconvar.ag_embeddings (
   fts          tsvector generated always as (to_tsvector('english', content)) stored,
   embedded_at  timestamptz not null default now(),
   primary key (source_id, aggregate_id, item_id, embedder),
-  foreign key (source_id, aggregate_id) references falconvar.ag_answers on delete cascade
+  foreign key (source_id, aggregate_id) references vidra.ag_answers on delete cascade
 );
 create index if not exists ag_embeddings_level
-  on falconvar.ag_embeddings (embedder, level);
+  on vidra.ag_embeddings (embedder, level);
 create index if not exists ag_embeddings_fts
-  on falconvar.ag_embeddings using gin (fts);
+  on vidra.ag_embeddings using gin (fts);
 
 -- ===========================================================================
 -- 4 · definitions: what a prompt or link profile said at each version an
 --     answer records in `ag_answers.version`. Written, never read back.
 -- ===========================================================================
-create table if not exists falconvar.ag_definitions (
+create table if not exists vidra.ag_definitions (
   name        text not null,          -- summary · entities:people
   version     text not null,
   kind        text not null,          -- fold | spans | items | link
@@ -137,7 +137,7 @@ create table if not exists falconvar.ag_definitions (
 -- ===========================================================================
 -- 5 · the search: video_rag.sql's hybrid search, over one level
 -- ===========================================================================
-create or replace function falconvar.ag_search(
+create or replace function vidra.ag_search(
   p_embedder     text,
   p_level        text,                 -- source | span | entity
   p_query_vector vector,
@@ -153,7 +153,7 @@ returns table (
 )
 language sql stable as $$
   with candidates as (
-    select e.* from falconvar.ag_embeddings e
+    select e.* from vidra.ag_embeddings e
     where e.embedder = p_embedder
       and e.level = p_level
       and (p_source_ids is null or e.source_id = any(p_source_ids))
@@ -206,8 +206,8 @@ language sql stable as $$
   join candidates c
     on  c.source_id = f.source_id and c.aggregate_id = f.aggregate_id
     and c.item_id   = f.item_id
-  join falconvar.ag_sources s on s.source_id = f.source_id
-  left join falconvar.ag_items i
+  join vidra.ag_sources s on s.source_id = f.source_id
+  left join vidra.ag_items i
     on  i.source_id = f.source_id and i.aggregate_id = f.aggregate_id
     and i.item_id   = f.item_id
   order by f.score desc, f.vector_rank asc nulls last,
@@ -226,19 +226,19 @@ begin
     'ag_sources','ag_answers','ag_items','ag_mentions',
     'ag_embeddings','ag_definitions'
   ] loop
-    execute format('alter table falconvar.%I enable row level security', t);
-    execute format('drop policy if exists "public read" on falconvar.%I', t);
+    execute format('alter table vidra.%I enable row level security', t);
+    execute format('drop policy if exists "public read" on vidra.%I', t);
     execute format(
-      'create policy "public read" on falconvar.%I for select to anon using (true)', t);
+      'create policy "public read" on vidra.%I for select to anon using (true)', t);
   end loop;
 end $$;
 
-grant select  on all tables in schema falconvar to anon;
-grant all     on all tables in schema falconvar to service_role;
-grant execute on function falconvar.ag_search(
+grant select  on all tables in schema vidra to anon;
+grant all     on all tables in schema vidra to service_role;
+grant execute on function vidra.ag_search(
   text, text, vector, text, text[], int, int)
   to anon, service_role;
 
 -- ===========================================================================
--- Verify under the PUBLISHABLE key:  select count(*) from falconvar.ag_answers;
+-- Verify under the PUBLISHABLE key:  select count(*) from vidra.ag_answers;
 -- ===========================================================================

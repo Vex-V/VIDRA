@@ -4,7 +4,7 @@
 -- produce. Run by hand only. The later statements remove leftovers of older
 -- versions (a `ver3` schema, tables in `public`); harmless when absent.
 
-drop schema if exists falconvar cascade;
+drop schema if exists vidra cascade;
 
 drop schema if exists ver3 cascade;
 

@@ -1,7 +1,9 @@
 """The whole library, checked: every component, every verb, both pipelines.
 
     python -m eval.library_check                      # free and offline
-    python -m eval.library_check --llm                # also the paid aggregates
+    python -m eval.library_check --local              # also whisper, pyannote, clip, yolo,
+                                                      #   objects, text (free, a few minutes)
+    python -m eval.library_check --llm                # also the paid models (a few cents)
     python -m eval.library_check --database supabase  # also export + search (writes)
     python -m eval.library_check --keep out/          # keep what it wrote
 
@@ -22,8 +24,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-import falconvar
-from falconvar.shared.config import paths
+import vidra
+from vidra.shared.config import paths
 
 PRIMARY = Path("samples/Chernobyl.mp4")        # 205 s, picture and narration
 SECOND = Path("samples/fixtures/cuts.mp4")     # 60 s, picture only, real cuts
@@ -47,12 +49,12 @@ def check(ok: Any, what: str) -> None:
 
 
 def refused(what: str, call: Callable[[], Any], fragment: str = "") -> None:
-    """A call the library must refuse with a `FalconvarError`; `fragment`, when
+    """A call the library must refuse with a `VidraError`; `fragment`, when
     given, must be in the message.
     """
     try:
         call()
-    except falconvar.FalconvarError as exc:
+    except vidra.VidraError as exc:
         said = str(exc).splitlines()[0]
         check(fragment.lower() in said.lower(),
               f"refuses {what}: {type(exc).__name__}: {said[:110]}")
@@ -63,7 +65,7 @@ def refused(what: str, call: Callable[[], Any], fragment: str = "") -> None:
     check(False, f"refuses {what} -- it did not")
 
 
-class MemoryDatabase(falconvar.Database):
+class MemoryDatabase(vidra.Database):
     """A database that keeps what it is sent and searches it by cosine, so the
     export and search seam is checked without a server.
     """
@@ -174,8 +176,8 @@ def models_() -> None:
     import dataclasses
     import os
 
-    from falconvar import Models
-    from falconvar.shared.models.roles import unpack
+    from vidra import Models
+    from vidra.shared.models.roles import unpack
 
     section("0 models")
     models = Models(**FREE)
@@ -205,7 +207,7 @@ def models_() -> None:
             "Models")
 
     # Keys given in code: they outrank the environment and never print.
-    from falconvar.shared.models import providers
+    from vidra.shared.models import providers
     openai = providers.get("openai")
     saved = {v: os.environ.pop(v) for v in openai.key_vars if v in os.environ}
     try:
@@ -234,13 +236,13 @@ def models_() -> None:
             lambda: Models(keys={"opnai": "sk-x"}), "opnai")
     refused("an empty key", lambda: Models(keys={"openai": " "}), "non-empty")
     refused("an env_file that is not there",
-            lambda: falconvar.configure(env_file="nope/.env"), "does not exist")
-    refused("an empty hf_token", lambda: falconvar.configure(hf_token=""), "hf_token")
+            lambda: vidra.configure(env_file="nope/.env"), "does not exist")
+    refused("an empty hf_token", lambda: vidra.configure(hf_token=""), "hf_token")
 
 
 def media_(into: Path) -> tuple[Path, dict[str, Path]]:
     """media -- a file in, `media.json` in a folder it makes."""
-    from falconvar.video_rag import layout, media
+    from vidra.video_rag import layout, media
 
     section("1 media")
     produced = media.media(PRIMARY, into)
@@ -268,7 +270,9 @@ def media_(into: Path) -> tuple[Path, dict[str, Path]]:
     refused("a taken id under on_conflict='refuse'",
             lambda: media.media(clash, into, produced.video_id, "refuse"), "")
     refused("a file that is not there", lambda: media.media("samples/nope.mp4", into))
-    refused("a file that is not media", lambda: media.media("CLAUDE.md", into))
+    text = into.parent / "notes.txt"
+    text.write_text("not a video", encoding="utf-8")
+    refused("a file that is not media", lambda: media.media(text, into))
     refused("an id that climbs out of `into`",
             lambda: media.media(PRIMARY, into, "../../escaped"))
     refused("an id that hides itself", lambda: media.media(PRIMARY, into, "_hidden"))
@@ -320,7 +324,7 @@ def _stamp(source: Path, out: Path, creation_time: str) -> None:
 
 def audio_(at: dict[str, Path]) -> None:
     """audio -- media.json in, transcript.raw.json out."""
-    from falconvar.video_rag import audio, media
+    from vidra.video_rag import audio, media
 
     section("2 audio")
     produced = audio.audio(at["media"], at["raw_transcript"],
@@ -340,7 +344,7 @@ def audio_(at: dict[str, Path]) -> None:
 
 def boundaries_(at: dict[str, Path], scratch: Path) -> None:
     """boundaries -- evidence (a scene pass, or none), then the grid."""
-    from falconvar.video_rag import boundaries, media
+    from vidra.video_rag import boundaries, media
 
     section("3 boundaries")
     found = boundaries.evidence(at["cuts"], "scene", media=at["media"])
@@ -377,14 +381,14 @@ def boundaries_(at: dict[str, Path], scratch: Path) -> None:
 
 
 def boundaries_cuts(at: dict[str, Path]) -> Any:
-    from falconvar.shared.contracts.documents import Cuts
-    from falconvar.shared.storage import files
+    from vidra.shared.contracts.documents import Cuts
+    from vidra.shared.storage import files
     return files.read(at["cuts"], Cuts)
 
 
 def video_(at: dict[str, Path], scratch: Path) -> None:
     """video -- which frames each sampler keeps, into a store."""
-    from falconvar.video_rag import boundaries, media, video
+    from vidra.video_rag import boundaries, media, video
 
     section("4 video")
     produced = video.video(at["media"], at["timeline"], at["manifest"],
@@ -415,7 +419,7 @@ def video_(at: dict[str, Path], scratch: Path) -> None:
 
 def cut_(at: dict[str, Path]) -> None:
     """cut -- the transcript onto the grid."""
-    from falconvar.video_rag import audio, boundaries, cut
+    from vidra.video_rag import audio, boundaries, cut
 
     section("5 cut")
     cut.cut(at["timeline"], at["raw_transcript"], at["transcript"])
@@ -431,7 +435,7 @@ def describe_(at: dict[str, Path]) -> None:
     """describe -- one answer per (chunk, sampler, question), resuming with
     `previous=`.
     """
-    from falconvar.video_rag import boundaries, describe, video
+    from vidra.video_rag import boundaries, describe, video
 
     section("6 describe")
     first = describe.describe(at["manifest"], at["timeline"], at["store"],
@@ -459,8 +463,8 @@ def describe_(at: dict[str, Path]) -> None:
 
 def questions_(at: dict[str, Path], scratch: Path) -> None:
     """A custom question with its own shape, built from fields."""
-    from falconvar.video_rag import describe, video
-    from falconvar.video_rag.describe import library, prompts
+    from vidra.video_rag import describe, video
+    from vidra.video_rag.describe import library, prompts
 
     section("6b custom questions")
     added = describe.add_question(
@@ -532,7 +536,7 @@ def questions_(at: dict[str, Path], scratch: Path) -> None:
 
 def embed_(at: dict[str, Path]) -> None:
     """embed -- text and vectors into embedded.json."""
-    from falconvar.video_rag import describe, embed
+    from vidra.video_rag import describe, embed
 
     section("7 embed")
     first = embed.embed(at["embedded"], descriptions=at["descriptions"],
@@ -554,7 +558,7 @@ def embed_(at: dict[str, Path]) -> None:
 
 def pipeline_(into: Path) -> Path:
     """video_rag() -- the eight components in order, over one folder."""
-    from falconvar.video_rag import Options, validate, video_rag
+    from vidra.video_rag import Options, validate, video_rag
 
     section("8 video_rag() -- the pipeline")
     run = video_rag(SECOND, into, sampler="uniform", policy="scene", **FREE)
@@ -577,11 +581,11 @@ def database_(into: Path) -> MemoryDatabase:
     """A Database handed in: what a run exports to it, and search reading it back."""
     import os
 
-    from falconvar import Models, Supabase
-    from falconvar import aggregates
-    from falconvar.shared.storage import files
-    from falconvar.shared.storage.database import as_database
-    from falconvar.video_rag import Options, retrieve, validate, video_rag
+    from vidra import Models, Supabase
+    from vidra import aggregates
+    from vidra.shared.storage import files
+    from vidra.shared.storage.database import as_database
+    from vidra.video_rag import Options, retrieve, validate, video_rag
 
     section("9 a database, handed in (held in memory: nothing is sent)")
     models = Models(**FREE)
@@ -649,8 +653,8 @@ def database_(into: Path) -> MemoryDatabase:
             {"title": "The reactor", "summary": "Inside the reactor the core overheats.",
              "chunk_ids": list(range(1, last + 1)), "start_ts": grid[1]["start_ts"],
              "end_ts": grid[last]["end_ts"]}]}, "stats": {}})
-    from falconvar.aggregates.database.export import export
-    from falconvar.shared.contracts.documents import Timeline
+    from vidra.aggregates.database.export import export
+    from vidra.shared.contracts.documents import Timeline
     problems, units = export(run.video_id,
                              Timeline.from_dict(files.read_json(run.home / "timeline.json")),
                              {"summary": str(answers / "summary.json"),
@@ -697,7 +701,7 @@ def database_(into: Path) -> MemoryDatabase:
 
 def search_(home: Path, database: str) -> None:
     """retrieve.search -- ranked in Postgres, so only with --database."""
-    from falconvar.video_rag import layout, search, video_rag
+    from vidra.video_rag import layout, search, video_rag
 
     section("9b export + search, live")
     run = video_rag(PRIMARY, home.parent, sampler="uniform:[overview,scene]",
@@ -712,7 +716,7 @@ def search_(home: Path, database: str) -> None:
 
 def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
     """Every aggregator as a component: one input in, one answer out."""
-    from falconvar.aggregates import (Inapplicable, coverage, entities, ner, prompt,
+    from vidra.aggregates import (Inapplicable, coverage, entities, ner, prompt,
                                       select, sentiment, speakers, stats)
 
     section("10 aggregates, one component at a time")
@@ -770,10 +774,10 @@ def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
             lambda: entities.entities("people", out / "in.json", out / "x.json"), "sightings")
 
     # A component takes `models=`; the refusal comes before any call.
-    from falconvar import Models
+    from vidra import Models
     keyed = Models(llm="openai", keys={"openai": "sk-test-not-real"})
     import inspect
-    from falconvar.aggregates import answer
+    from vidra.aggregates import answer
     check(all("models" in inspect.signature(f).parameters
               for f in (prompt.prompt, entities.entities, answer)),
           "prompt(), entities() and answer() take models=")
@@ -783,8 +787,8 @@ def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
 
     # Chapter boundaries from made-up vectors with three clear topics, then a cap.
     import random
-    from falconvar.aggregates import settings_of, uses_embedder, validate
-    from falconvar.aggregates.spans.segment import segment
+    from vidra.aggregates import settings_of, uses_embedder, validate
+    from vidra.aggregates.spans.segment import segment
     rng = random.Random(1)
     topics = [[[(1.0 if i == axis else 0.0) + rng.gauss(0, 0.15) for i in range(8)]
                for _ in range(size)] for axis, size in ((0, 5), (1, 4), (2, 6))]
@@ -819,7 +823,7 @@ def aggregate_components(home: Path, scratch: Path, llm: bool) -> None:
 
 def aggregate_pipeline(home: Path, scratch: Path, llm: bool) -> None:
     """aggregate() -- runs what it is handed data for, and nothing else."""
-    from falconvar.aggregates import aggregate, validate
+    from vidra.aggregates import aggregate, validate
 
     section("11 aggregate() -- the pipeline")
     out = scratch / "answers"
@@ -861,8 +865,8 @@ def aggregate_pipeline(home: Path, scratch: Path, llm: bool) -> None:
 
 def custom_prompts(home: Path, scratch: Path, llm: bool) -> None:
     """add_prompt / add_profile: definitions of your own, run like the built-ins."""
-    from falconvar import aggregates
-    from falconvar.aggregates import DefinitionError, ProtectedDefinition
+    from vidra import aggregates
+    from vidra.aggregates import DefinitionError, ProtectedDefinition
 
     section("12 custom aggregate prompts")
     fields = {"report": {"type": "text", "about": "what happened, in order"},
@@ -932,9 +936,9 @@ def custom_prompts(home: Path, scratch: Path, llm: bool) -> None:
 
 def several(home: Path, second: Path, scratch: Path) -> None:
     """Two videos combined into one record, then aggregated."""
-    from falconvar.aggregates import aggregate, combine
-    from falconvar.aggregates.combination import origin
-    from falconvar.video_rag import boundaries
+    from vidra.aggregates import aggregate, combine
+    from vidra.aggregates.combination import origin
+    from vidra.video_rag import boundaries
 
     section("13 several videos")
     both = combine([home, second], scratch / "both")
@@ -959,7 +963,7 @@ def several(home: Path, second: Path, scratch: Path) -> None:
 
 def whole_run(scratch: Path) -> None:
     """workflow.process -- extract, then aggregate; and where it writes."""
-    from falconvar import Models, workflow
+    from vidra import Models, workflow
 
     section("14 workflow")
     memory = MemoryDatabase()
@@ -981,22 +985,355 @@ def whole_run(scratch: Path) -> None:
 
     # `into=None` is the data root.
     outside = paths.data_root()
-    falconvar.configure(data_root=scratch / "elsewhere")
+    vidra.configure(data_root=scratch / "elsewhere")
     run = workflow.process(workflow.Options(source=SECOND, use_audio=False, **FREE))
     check(run.home.parent == paths.out_root() == scratch / "elsewhere" / "out",
           f"configure(): into=None wrote under {paths.out_root()}")
-    falconvar.configure(data_root=outside)
+    vidra.configure(data_root=outside)
     check(paths.data_root() == outside, "...and configuring it back restores it")
+
+
+# ------------------------------------------- 4 · extension points and helpers
+
+def helpers(at: dict[str, Path], home: Path, memory: Any, scratch: Path) -> None:
+    """A sampler of your own, the rate limits, progress callbacks, search's
+    filters, and the helpers the registries publish.
+    """
+    from vidra.video_rag import boundaries, describe, embed, retrieve, video
+    from vidra.video_rag.video import samplers
+    from vidra.video_rag.video.samplers import Sampler, register
+
+    section("15 extension points and helpers")
+    out = scratch / "helpers"
+    out.mkdir(parents=True, exist_ok=True)
+
+    @register
+    class ThirdDemo(Sampler):
+        """Every third decimated frame: the smallest sampler there is."""
+        name = "third_demo"
+
+        def propose(self, frame: Any, chunk_local_index: int) -> bool:
+            return chunk_local_index % 3 == 0
+
+    check("third_demo" in samplers.available(), "register(cls) -> listed in available()")
+    video.video(at["media"], at["timeline"], out / "third.json", store=at["store"],
+                sampler="third_demo:overview")
+    kept = [f["chunk_local_index"] for c in video.load(out / "third.json").chunks
+            for f in c["samplers"]["third_demo"]["frames"]]
+    check(kept and all(i % 3 == 0 for i in kept),
+          f"video(sampler='third_demo:overview') runs it: {len(kept)} frames, "
+          f"every one at a multiple of 3")
+    check(samplers.build("uniform", every_n=2).every_n == 2, "build(name, **settings)")
+    refused("building a sampler nobody has", lambda: samplers.build("nope"), "nope")
+
+    # Rate limits sit in the base class, so they hold for every sampler.
+    video.video(at["media"], at["timeline"], out / "capped.json", store=at["store"],
+                sampler="uniform", max_per_chunk=2)
+    counts = [c["samplers"]["uniform"]["frame_count"]
+              for c in video.load(out / "capped.json").chunks]
+    check(counts and max(counts) <= 2 and min(counts) >= 1,
+          f"max_per_chunk=2 -> per chunk {counts}: at most 2, at least 1")
+    video.video(at["media"], at["timeline"], out / "spaced.json", store=at["store"],
+                sampler="uniform", min_interval_s=4.0)
+    gaps = [b["media_ts"] - a["media_ts"]
+            for c in video.load(out / "spaced.json").chunks
+            for a, b in zip(c["samplers"]["uniform"]["frames"],
+                            c["samplers"]["uniform"]["frames"][1:])]
+    check(gaps and min(gaps) >= 4.0 - 1e-6,
+          f"min_interval_s=4 -> no two frames of a chunk closer than {min(gaps):.2f}s")
+    refused("max_per_chunk=0", lambda: video.video(at["media"], at["timeline"],
+                                                   out / "x.json", max_per_chunk=0),
+            "max_per_chunk")
+
+    # Progress: one event per unit of work, counting up to the total.
+    events: dict[str, list] = {}
+    def record(p: Any) -> None:
+        events.setdefault(p.component, []).append(p)
+    video.video(at["media"], at["timeline"], out / "progress.json", store=at["store"],
+                sampler="uniform", every_n=5, on_progress=record)
+    describe.describe(out / "progress.json", at["timeline"], at["store"],
+                      out / "progress_desc.json", describer="stub", on_progress=record)
+    embed.embed(out / "progress_emb.json", descriptions=out / "progress_desc.json",
+                embedder="local", on_progress=record)
+    for name, seen in sorted(events.items()):
+        check(seen and seen[-1].completed + seen[-1].skipped == seen[-1].total
+              and seen[-1].fraction == 1.0,
+              f"on_progress from {name}: {len(seen)} events, ending "
+              f"{seen[-1].completed}/{seen[-1].total}")
+    check(set(events) >= {"video", "describe", "embed"},
+          f"video, describe and embed all report: {sorted(events)}")
+
+    # Search's filters, against the database section 9 filled.
+    from vidra import Models
+    models = Models(**FREE)
+    vid = memory.video_ids()[0]
+    spans = memory.spans(vid)                  # the grid as the database holds it
+    some = lambda **kw: retrieve.search("a reactor building", vid, models=models,  # noqa: E731
+                                        database=memory, moments=20, **kw)
+    only, _ = some(chunk_ids=[2])
+    check(only and {m.chunk_id for m in only} == {2}, "chunk_ids=[2] -> chunk 2 only")
+    near, _ = some(chunk_ids=[2], window=1)
+    check(near and {m.chunk_id for m in near} <= {1, 2, 3} and len({m.chunk_id for m in near}) > 1,
+          f"chunk_ids=[2], window=1 -> its neighbours too: {sorted({m.chunk_id for m in near})}")
+    start, end = spans[1][0] + 0.5, spans[2][1] - 0.5
+    timed, _ = some(after=start, before=end)
+    check(timed and all(m.end_ts > start and m.start_ts < end for m in timed),
+          f"after={start:.1f}, before={end:.1f} -> only chunks overlapping that window: "
+          f"{sorted({m.chunk_id for m in timed})}")
+    asked, notes = some(question="overview")
+    check(asked and all(h["question"] == "overview" for m in asked for h in m.hits)
+          and any("agreement" in n for n in notes),
+          "question='overview' -> overview answers only, and a note on what filtering costs")
+    nothing, notes = some(after=10_000)
+    check(nothing == [] and any("window" in n for n in notes),
+          "a window past the end -> no moments and a note saying why")
+
+    # The aggregates' registry, as data.
+    from vidra import aggregates
+    from vidra.aggregates import combination, select
+    check(set(aggregates.up_to("free")) == {"stats", "speakers", "coverage"},
+          f"up_to('free') -> {sorted(aggregates.up_to('free'))}")
+    local = set(aggregates.up_to("local"))
+    check(local == {"stats", "speakers", "coverage", "ner", "sentiment"},
+          f"up_to('local') adds the local models: {sorted(local)}")
+    check((aggregates.kind_of("summary"), aggregates.kind_of("chapters"),
+           aggregates.kind_of("events"), aggregates.kind_of("entities:people"),
+           aggregates.kind_of("stats")) == ("fold", "spans", "items", "link", None),
+          "kind_of: fold, spans, items, link -- and None for code")
+    check(aggregates.takes_inputs("ner") and not aggregates.takes_inputs("stats"),
+          "takes_inputs: ner reads a selection, stats the record")
+    check(aggregates.tier_of("stats") == "free" and aggregates.tier_of("ner") == "local",
+          "tier_of: what each costs")
+
+    ctx = aggregates.context(at["timeline"], descriptions=at["descriptions"],
+                             transcript=at["transcript"], manifest=at["manifest"])
+    bare = aggregates.context(at["timeline"])
+    why = aggregates.missing(aggregates.build("speakers"), bare)
+    check(why and "transcript" in why and aggregates.missing(aggregates.build("speakers"), ctx) is None,
+          f"missing(speakers): None with a transcript, and without one: {why}")
+    excerpt = select.pick(ctx, "ner")
+    check(len(excerpt.rows) > 0, f"pick(record, 'ner') -> an excerpt of {len(excerpt.rows)} rows")
+    counted = aggregates.answer("stats", ctx)
+    check(counted.payload["chunks"] == len(boundaries.load(at["timeline"])),
+          "answer('stats', Context) on objects, nothing written")
+
+    made = aggregates.aggregate(home, out / "answers", stats=True, coverage=True,
+                                sentiment=True)
+    loaded = aggregates.load_all(out / "answers")
+    check(set(loaded) == set(made.stats["aggregates"]),
+          f"load_all(folder) -> every answer by id: {sorted(loaded)}")
+    check(aggregates.load_all(out / "nowhere") == {}, "load_all of an absent folder -> {}")
+    taken = aggregates.load_input(out / "answers" / "inputs" / "sentiment.json")
+    check(type(taken).__name__ == "Excerpt", "load_input -> an Excerpt, by what the file is")
+    from vidra.aggregates import definitions
+    version = definitions.version_of("prompts", "summary")
+    rows = aggregates.definition_rows({"summary": version, "entities:people":
+                                       definitions.version_of("profiles", "people")})
+    check([(r["name"], r["kind"], r["builtin"]) for r in rows]
+          == [("entities:people", "link", True), ("summary", "fold", True)]
+          and rows[1]["version"] == version and "instruction" in rows[1]["definition"],
+          "definition_rows -> what each definition said, as database rows")
+
+    a, b = "Chernobyl", "cuts"
+    check(combination.default_id([a, b]) == combination.default_id([a, b])
+          != combination.default_id([b, a]),
+          f"default_id is stable and ordered: {combination.default_id([a, b])}")
+    from vidra.shared.contracts.documents import Descriptions, Manifest, Timeline, Transcript
+    from vidra.shared.storage import files
+    part = combination.Part(files.read(at["timeline"], Timeline),
+                            files.read(at["descriptions"], Descriptions),
+                            files.read(at["transcript"], Transcript),
+                            files.read(at["manifest"], Manifest))
+    other = scratch / "out"
+    second = next(p for p in other.iterdir() if p.is_dir() and p != home
+                  and (p / "embedded.json").exists())
+    merged = combination.merge([part, combination.Part(
+        files.read(second / "timeline.json", Timeline),
+        files.read(second / "descriptions.json", Descriptions),
+        None, files.read(second / "manifest.json", Manifest))])
+    check(len(merged.timeline) == len(part.timeline) + len(boundaries.load(second / "timeline.json")),
+          f"merge(Parts) on objects -> {len(merged.timeline)} chunks, nothing written")
+
+    # Embedders, as functions.
+    from vidra.shared.models import embedders
+    hashed = embedders.build("hash")
+    check(hashed.embed(["a reactor"]) == hashed.embed(["a reactor"]),
+          f"build('hash') -> a deterministic, free embedder: {hashed.key}")
+    query, document = embedders.prefixes_for("BAAI/bge-small-en-v1.5")
+    check(query and not document, f"prefixes_for(bge): a query prefix {query[:30]!r}, none for passages")
+    bge = embedders.build("local")
+    q = embedders.query_vector(bge, "a reactor")
+    d = bge.embed(["a reactor"])[0]
+    check(len(q) == len(d) == 384 and q != d,
+          "query_vector goes through the query side: same width, different vector")
+    check(embedders.key_for("local", "m", 8, "", "") == "local:m:8"
+          and embedders.key_for("local", "m", 8, "q: ", "") != "local:m:8",
+          "key_for: name:model:dims, with a suffix when the prefixes are hand-set")
+
+
+# --------------------------------------------- 5 · the models themselves
+
+def local_models(at: dict[str, Path], scratch: Path) -> None:
+    """Whisper and pyannote, the speech grids, and every model-backed sampler --
+    free, but they need `[local]` and `[audio]` and take a few minutes.
+    """
+    from vidra import aggregates
+    from vidra.video_rag import audio, boundaries, cut, media, video
+
+    section("16 local models: whisper, pyannote, clip, yolo, objects, text")
+    out = scratch / "local"
+    out.mkdir(parents=True, exist_ok=True)
+
+    started = time.perf_counter()
+    audio.audio(at["media"], out / "raw.json", transcriber="whisper", diarizer="pyannote")
+    raw = audio.load(out / "raw.json")
+    speakers = {s.get("speaker") for s in raw.segments} - {None}
+    check(len(raw.words) > 300 and raw.turns and len(speakers) >= 1,
+          f"audio(whisper, pyannote) -> {len(raw.words)} words, {len(raw.segments)} segments, "
+          f"{len(raw.turns)} turns, speakers {sorted(speakers)} "
+          f"in {time.perf_counter() - started:.0f}s")
+    check(all(w.get("start") is not None for w in raw.words), "every word has a timestamp")
+
+    # The device every torch model defaults to; Whisper alone never takes mps.
+    from unittest import mock
+
+    import torch
+
+    from vidra.shared.models.devices import default_device
+    expected = ("cuda" if torch.cuda.is_available()
+                else "mps" if torch.backends.mps.is_available() else "cpu")
+    check(default_device() == expected, f"default_device() -> {default_device()}")
+    with mock.patch.object(torch.cuda, "is_available", return_value=False), \
+            mock.patch.object(torch.backends.mps, "is_available", return_value=True):
+        check(default_device() == "mps", "no cuda but an Apple GPU -> mps")
+    refused("whisper on mps",
+            lambda: audio.audio(at["media"], out / "x.json", transcriber="whisper",
+                                diarizer="none", device="mps"), "mps")
+
+    duration = media.load(at["media"]).duration_s
+    for policy in ("vad", "speaker"):
+        boundaries.evidence(out / f"{policy}_cuts.json", policy, raw_transcript=out / "raw.json")
+        boundaries.boundaries(at["media"], out / f"{policy}.json", policy,
+                              cuts=out / f"{policy}_cuts.json", chunk_s=30)
+        grid = boundaries.load(out / f"{policy}.json")
+        spans = grid.spans
+        tiled = spans[0][0] == 0 and all(abs(a[1] - b[0]) < 1e-6 for a, b in zip(spans, spans[1:]))
+        check(tiled and abs(spans[-1][1] - duration) < 0.1 and max(e - s for s, e in spans) <= 30.0001,
+              f"{policy} grid -> {len(grid)} chunks tiling {duration:.1f}s, none over 30s")
+
+    cut.cut(out / "vad.json", out / "raw.json", out / "transcript.json")
+    record = {"timeline": out / "vad.json", "transcript": out / "transcript.json"}
+    aggregates.speakers.speakers(record, out / "speakers.json")
+    who = read(out / "speakers.json")["payload"]
+    check(who["speakers"] == len(speakers) and who["speech_ratio"] > 0.5,
+          f"speakers(record) over real turns -> {who['speakers']} speaker(s), "
+          f"{who['speech_ratio']:.0%} speech, monologue {who['monologue']}")
+
+    # Every model-backed sampler, on a minute of a shop.
+    shop = media.media(Path("samples/test2.mp4"), out / "videos")
+    home = Path(shop.stats["home"])
+    boundaries.boundaries(home / "media.json", home / "timeline.json", "uniform")
+    started = time.perf_counter()
+    made = video.video(home / "media.json", home / "timeline.json", home / "manifest.json",
+                       store=home / "store", sampler="clip,yolo,objects",
+                       vocabulary=["person", "shelf", "bottle", "basket"])
+    manifest = video.load(home / "manifest.json")
+    runs = [r["name"] for r in manifest.config["samplers"]]
+    per = {r: [c["samplers"][r]["frame_count"] for c in manifest.chunks] for r in runs}
+    check(runs == ["clip", "yolo", "objects"] and all(min(v) >= 1 for v in per.values()),
+          f"clip, yolo, objects in one pass -> frames per chunk {per} "
+          f"in {time.perf_counter() - started:.0f}s")
+    check(made.stats["stored_frames"] <= made.stats["frames_sampled"],
+          f"{made.stats['frames_sampled']} picks, {made.stats['stored_frames']} files: "
+          f"a frame two samplers kept is stored once")
+
+    from recovery.recreate import recreate, verify
+    rebuilt = recreate(home / "manifest.json", out / "rebuilt")
+    names = {f"{f['index']:07d}.jpg" for c in manifest.chunks
+             for r in c["samplers"].values() for f in r["frames"]}
+    same = verify(out / "rebuilt", home / "store", names)
+    check(not rebuilt["missing"] and len(same["identical"]) == same["compared"] == len(names),
+          f"recovery.recreate rebuilt the store {len(same['identical'])}/{len(names)} byte-identical")
+
+    slides = media.media(Path("samples/fixtures/slides.mp4"), out / "videos")
+    sh = Path(slides.stats["home"])
+    boundaries.boundaries(sh / "media.json", sh / "timeline.json", "uniform")
+    started = time.perf_counter()
+    video.video(sh / "media.json", sh / "timeline.json", sh / "manifest.json",
+                store=sh / "store", sampler="text", languages=["en"])
+    texts = [c["samplers"]["text"]["frame_count"] for c in video.load(sh / "manifest.json").chunks]
+    check(texts and min(texts) >= 1,
+          f"text(languages=['en']) on slides -> frames per chunk {texts} "
+          f"in {time.perf_counter() - started:.0f}s")
+    return None
+
+
+def paid_models(home: Path, scratch: Path) -> None:
+    """A real describer and embedder, the items kind, and linking real people.
+    Costs a few cents.
+    """
+    from vidra.aggregates import entities, prompt, select
+    from vidra.video_rag import boundaries, describe, embed, media, video
+
+    section("17 paid models: a real describer, embedder, events and linking")
+    out = scratch / "paid"
+    shop = media.media(Path("samples/test2.mp4"), out)
+    h = Path(shop.stats["home"])
+    boundaries.boundaries(h / "media.json", h / "timeline.json", "uniform")
+    video.video(h / "media.json", h / "timeline.json", h / "manifest.json",
+                store=h / "store", sampler="yolo,uniform:overview", every_n=5)
+    started = time.perf_counter()
+    made = describe.describe(h / "manifest.json", h / "timeline.json", h / "store",
+                             h / "descriptions.json", describer="openai")
+    answers = describe.load(h / "descriptions.json")
+    people = [p for c in answers.chunks for p in
+              (c["samplers"].get("yolo", {}).get("structured") or {}).get("people", [])]
+    check(made.stats["described"] > 0 and people
+          and all({"appearance", "clothing"} <= set(p) for p in people),
+          f"describe(openai) -> {made.stats['described']} answers, {len(people)} people "
+          f"as objects with appearance and clothing, in {time.perf_counter() - started:.0f}s")
+    overview = [c["samplers"]["uniform:overview"] for c in answers.chunks
+                if "uniform:overview" in c["samplers"]]
+    check(overview and all(not o.get("structured") and len(o["description"].split()) > 30
+                           for o in overview),
+          "uniform:overview -> prose only, no structured fields")
+
+    embed.embed(h / "embedded.json", descriptions=h / "descriptions.json",
+                timeline=h / "timeline.json", embedder="openai")
+    units = embed.load(h / "embedded.json").units
+    check(units and all(len(u["vector"]) == 1536 for u in units),
+          f"embed(openai) -> {len(units)} units of 1536 dimensions")
+
+    select.select(h, out / "people.json", "entities:people")
+    linked = entities.entities("people", out / "people.json", out / "entities.json",
+                               embedder="local")
+    e = read(out / "entities.json")["payload"]
+    check(e["count"] and e["count"] <= len(people),
+          f"entities('people') over {len(people)} sightings -> {e['count']} entities, "
+          f"{e.get('narrated')} with an account ({linked.stats.get('model')})")
+
+    select.select(h, out / "events_in.json", "events")
+    prompt.prompt("events", out / "events_in.json", out / "events.json")
+    ev = read(out / "events.json")["payload"]
+    grid = read(out / "events_in.json")["timeline"]
+    ids = {c["chunk_id"] for c in grid["chunks"]}
+    check(ev["count"] and all(x["chunk_id"] in ids and x["end_ts"] > x["start_ts"]
+                              for x in ev["events"]),
+          f"prompt('events') -> {ev['count']} events, every one on a real chunk and timed by the grid")
 
 
 # ------------------------------------------------------------------ main
 
 def main() -> int:
-    from falconvar.shared.config import env
+    from vidra.shared.config import env
     env.load()        # an entry point reads .env; the library never does
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--llm", action="store_true",
-                    help="also run the paid aggregates: a summary, and entities")
+                    help="also run the paid models: a describer, an embedder, "
+                         "summary, chapters, events and entities")
+    ap.add_argument("--local", action="store_true",
+                    help="also run the local models: whisper, pyannote, and the "
+                         "clip, yolo, objects and text samplers (free, minutes)")
     ap.add_argument("--database", default=None,
                     help="also export to this database and search it -- WRITES to it")
     ap.add_argument("--keep", type=Path, default=None,
@@ -1006,10 +1343,10 @@ def main() -> int:
         if not sample.exists():
             raise SystemExit(f"no such file: {sample} -- run from the checkout root")
 
-    scratch = args.keep or Path(tempfile.mkdtemp(prefix="falconvar-example-"))
+    scratch = args.keep or Path(tempfile.mkdtemp(prefix="vidra-example-"))
     scratch.mkdir(parents=True, exist_ok=True)
     was = paths.data_root()
-    falconvar.configure(data_root=scratch / "root")
+    vidra.configure(data_root=scratch / "root")
     print(f"writing under {scratch}")
     started = time.perf_counter()
     def step(call: Callable[..., Any], *arguments: Any) -> Any:
@@ -1035,7 +1372,7 @@ def main() -> int:
         step(questions_, at, scratch)
         step(embed_, at)
         second = step(pipeline_, into)
-        step(database_, scratch / "db")
+        memory = step(database_, scratch / "db")
         if args.database:
             step(search_, home, args.database)
         step(aggregate_components, home, scratch, args.llm)
@@ -1044,8 +1381,14 @@ def main() -> int:
         if second is not None:
             step(several, home, second, scratch)
         step(whole_run, scratch)
+        if memory is not None:
+            step(helpers, at, home, memory, scratch)
+        if args.local:
+            step(local_models, at, scratch)
+        if args.llm:
+            step(paid_models, home, scratch)
     finally:
-        falconvar.configure(data_root=was)
+        vidra.configure(data_root=was)
         if args.keep is None:
             shutil.rmtree(scratch, ignore_errors=True)
 

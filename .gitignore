@@ -32,7 +32,7 @@
 # Everything a run writes, under one root: `data/out/<video-id>/`, and the
 # custom prompts beside it. The outputs are reproducible from a source video; a
 # frame store runs to hundreds of MB (95 MB for a five-minute file at 1920px).
-# `FALCONVAR_DATA` moves the lot; `FALCONVAR_DATA=.` restores the old layout.
+# `VIDRA_DATA` moves the lot; `VIDRA_DATA=.` restores the old layout.
 # ---------------------------------------------------------------------------
 /data/
 
@@ -104,3 +104,7 @@ scratch/
 # Playwright MCP scratch output and ad-hoc screenshots
 .playwright-mcp/
 /*.png
+
+HACKATHONS.md
+CLAUDE.md
+example.py

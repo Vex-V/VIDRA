@@ -23,7 +23,7 @@ from typing import Any, Iterable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from falconvar.video_rag.retrieve import search                 # noqa: E402
+from vidra.video_rag.retrieve import search                 # noqa: E402
 
 #: Word splitting for the overlap bands.
 _WORD = re.compile(r"[a-z0-9£$€%.:'-]+")
@@ -142,7 +142,7 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def corpus_terms(video_ids: Iterable[str]) -> set[str]:
     """Every content word the index holds, read from `embedded.json`."""
-    from falconvar.video_rag.embed import readable
+    from vidra.video_rag.embed import readable
 
     terms: set[str] = set()
     for video_id in video_ids:
@@ -157,7 +157,7 @@ def corpus_terms(video_ids: Iterable[str]) -> set[str]:
 # ------------------------------------------------------------------- main
 
 def main(argv: Optional[list[str]] = None) -> int:
-    from falconvar.shared.config import env
+    from vidra.shared.config import env
     env.load()        # an entry point reads .env; the library never does
     ap = argparse.ArgumentParser(
         description="Grade a retrieval configuration against a query set.")
