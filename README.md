@@ -162,13 +162,3 @@ db/               Supabase SQL, generated JSON Schemas
 data/             default output location; not in git
 ```
 
-## Limitations
-
-- No test suite in the repository.
-- Only OpenAI and the local embedder have been run against real services;
-  Anthropic and the Chat Completions servers are checked against a mock.
-- Not run on Linux or macOS.
-- Recorded files only; no live streams.
-- People linking reads descriptions, not pixels, so it depends on how
-  consistently the vision model describes the same person.
-- No licence file yet.
