@@ -14,7 +14,7 @@ What each reads:
     stats · coverage · speakers     record=   a `record(...)`
     ner · sentiment                 input=    an excerpt
     summary · chapters · events     input=    an excerpt
-    prompt(name=...)                input=    an excerpt, for a custom prompt
+    custom(name=...)                input=    an excerpt, for a custom prompt
     entities(profile=...)           input=    sightings
 
 `input=` is the object `excerpt()` / `sightings()` returned, or the path of
@@ -144,11 +144,12 @@ def events(*, input: InputLike, out: PathLike,
     return _run("events", _given("events", input), out, previous, models, llm)
 
 
-def prompt(*, name: str, input: InputLike, out: PathLike,
+def custom(*, name: str, input: InputLike, out: PathLike,
            previous: Optional[PathLike] = None, models: Optional[Models] = None,
            llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
            **settings: Any) -> Produced:
-    """Any prompt by name: one added with `add_prompt`, or a built-in. A `spans`
+    """Run an aggregator defined by a prompt, by name: one added with
+    `add_prompt`, or a built-in (`summary`, `chapters`, `events`). A `spans`
     prompt also takes `embedder`, `max_spans` and `min_span_s`."""
     prompts = [n for n in definitions.ids() if kind_of(n) != "link"]
     if name not in prompts:
@@ -174,5 +175,5 @@ def entities(*, profile: str, input: InputLike, out: PathLike,
     return _run(name, _given(name, input), out, previous, models, llm, embedder)
 
 
-__all__ = ["chapters", "coverage", "entities", "events", "ner", "prompt",
+__all__ = ["chapters", "coverage", "custom", "entities", "events", "ner",
            "sentiment", "speakers", "stats", "summary"]

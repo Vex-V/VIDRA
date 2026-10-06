@@ -432,7 +432,7 @@ def add_prompt(name: str, instruction: str, fields: dict[str, Any], *,
                              "one_of": ["none", "minor", "major"]},
             },
         )
-        aggregates.prompt(name="incident_report", input=excerpt, out=...)
+        aggregates.custom(name="incident_report", input=excerpt, out=...)
 
     `kind` is how it is asked:
 

@@ -161,8 +161,8 @@ def build(name: str, llm: Optional[LLM] = None, embedder: Optional[Embedder] = N
 from .driver import (AggregateError, Inapplicable, aggregate,  # noqa: E402
                      answer, answers, definition_rows, load, load_all,
                      load_input, validate)
-from .components import (chapters, coverage, entities, events, ner,  # noqa: E402
-                         prompt, sentiment, speakers, stats, summary)
+from .components import (chapters, coverage, custom, entities, events,  # noqa: E402
+                         ner, sentiment, speakers, stats, summary)
 
 
 def __getattr__(name: str) -> Any:
@@ -178,8 +178,8 @@ __all__ = ["REGISTRY", "RUNNERS", "TIERS", "AggregateError", "Context",
            "DefinitionError", "Inapplicable", "ProtectedDefinition", "Record",
            "RecordError", "about", "add_profile", "add_prompt", "aggregate",
            "answer", "answers", "available", "build", "chapters", "combine",
-           "coverage", "definition", "definition_rows", "entities", "events",
-           "kind_of", "load", "load_all", "load_input", "merge", "missing", "ner", "prompt",
+           "coverage", "custom", "definition", "definition_rows", "entities", "events",
+           "kind_of", "load", "load_all", "load_input", "merge", "missing", "ner",
            "record", "remove_profile", "remove_prompt", "search", "sentiment",
            "settings_of", "speakers", "stats", "summary", "takes_inputs",
            "tier_of", "uses_embedder", "validate"]

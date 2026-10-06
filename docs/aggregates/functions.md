@@ -195,7 +195,7 @@ The combination is a record like any other.
 ## Custom prompts and profiles
 
 A custom prompt is an instruction and the fields to fill. It is saved in
-`data/aggregates.json` and run with `prompt` or as a keyword of `aggregate`:
+`data/aggregates.json` and run with `custom`, or as a keyword of `aggregate`:
 
 ```python
 aggregates.add_prompt(
@@ -209,10 +209,15 @@ aggregates.add_prompt(
     kind="fold",           # fold: one answer; spans: chapters; items: cited things
 )
 
-aggregates.prompt(name="incident_report", input=seen,
+aggregates.custom(name="incident_report", input=seen,
                   out=D / "answers" / "incident.json", models=models)
 aggregates.aggregate(out=D / "aggregates", models=models, incident_report=seen)
 ```
+
+`custom` runs any aggregator defined by a prompt, by name, including the
+built-ins: `custom(name="summary", ...)` is `summary(...)`. It does not run
+the code aggregators (`stats`, `ner`, ...) or linking profiles, which have
+their own functions.
 
 A linking profile links the entries of a list field and writes an account of
 each. It runs as `entities:<name>`:
