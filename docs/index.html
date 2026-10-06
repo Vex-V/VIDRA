@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="docs-root" content="">
+<title>Start here · VIDRA docs</title>
+<link rel="stylesheet" href="pages/assets/style.css">
+<script src="pages/assets/search-index.js"></script>
+<script src="pages/assets/docs.js"></script>
+<!-- /head -->
+</head>
+<body>
+<header class="top">
+<!-- top -->
+<a class="brand" href="index.html">VIDRA <span>docs</span></a>
+<button class="icon menu" id="menu" type="button" aria-label="Menu">&#9776;</button>
+<div class="spacer"></div>
+<div class="search"><input id="q" type="search" placeholder="Search the docs  ( / )" autocomplete="off" aria-label="Search the docs"><div class="results" id="results"></div></div>
+<button class="icon" id="theme" type="button" aria-label="Light or dark">&#9680;</button>
+<!-- /top -->
+</header>
+<div class="layout">
+<nav class="side" aria-label="Pages">
+<!-- nav -->
+<div class="group">Get started</div>
+<a href="index.html" class="here">Start here</a>
+<a href="pages/concepts.html">Concepts</a>
+<a href="pages/recipes.html">Recipes</a>
+<div class="group">video_rag</div>
+<a href="pages/pipeline.html">The pipeline</a>
+<a href="pages/stages.html">Stages</a>
+<a href="pages/samplers.html">Samplers</a>
+<a href="pages/questions.html">Questions</a>
+<a href="pages/search.html">Search</a>
+<div class="group">aggregates</div>
+<a href="pages/aggregates.html">Aggregates</a>
+<a href="pages/definitions.html">Custom prompts and profiles</a>
+<div class="group">Bring your own</div>
+<a href="pages/models.html">Models</a>
+<a href="pages/databases.html">Databases</a>
+<div class="group">Reference</div>
+<a href="pages/reference.html">Reference</a>
+<!-- /nav -->
+</nav>
+<main>
+<h1>VIDRA</h1>
+<p class="lede">A Python library that turns a video into a searchable index of moments, and answers questions about the whole video.</p>
+
+<ul>
+  <li><b><code>video_rag</code></b> cuts a video into time chunks, keeps a few frames per chunk, has a vision model describe them, transcribes the audio and embeds the text. A search returns the matching chunks with their times.</li>
+  <li><b><code>aggregates</code></b> reads what <code>video_rag</code> wrote and answers questions about the whole video: counts, speakers, a summary, chapters, events, named entities, and who or what keeps appearing.</li>
+</ul>
+
+<div class="flow">video.mp4 ──► video_rag ──► data/out/&lt;video_id&gt;/  ──► search("a customer paying") ─► moments
+                               (files, one per stage)
+                                       │
+                                       └──► aggregates ──► summary, chapters, people, ...</div>
+
+<p>Every result is a file in the video's folder. A database is an optional copy, and is what search reads. Models are objects you pass in: ready-made ones for OpenAI, Anthropic and local embedders, or your own class.</p>
+
+<h2 id="install">Install</h2>
+<p>Python 3.11 to 3.14. No system FFmpeg needed.</p>
+<pre><code>git clone https://github.com/Vex-V/FalCONvar.git
+cd FalCONvar
+pip install ".[all]"</code></pre>
+<table>
+<tr><th>Install</th><th>Adds</th><th>Needed for</th></tr>
+<tr><td><code>pip install .</code></td><td>PyAV, OpenCV, NumPy, PySceneDetect, the OpenAI and Supabase clients</td><td>the <code>uniform</code> sampler, every chunking policy but the speech ones, hosted models, <code>Stub</code> and <code>HashEmbedder</code>, Supabase and <code>Folder</code></td></tr>
+<tr><td><code>pip install ".[local]"</code></td><td>PyTorch, transformers, Ultralytics, EasyOCR, sentence-transformers, GLiNER</td><td>the <code>clip</code>, <code>yolo</code>, <code>objects</code> and <code>text</code> samplers, <code>LocalEmbedder</code>, <code>ner</code>, <code>sentiment</code></td></tr>
+<tr><td><code>pip install ".[audio]"</code></td><td>faster-whisper, pyannote.audio, CUDA 12 libraries</td><td>transcription and speaker diarization</td></tr>
+<tr><td><code>pip install ".[all]"</code></td><td>both</td><td>everything</td></tr>
+</table>
+<p><code>pip install -r requirements.txt</code> installs the exact tested versions, but not <code>vidra</code> itself; run scripts from the repository root.</p>
+<div class="note"><p><b>NVIDIA GPU:</b> pip's default PyTorch on Windows is CPU-only. Add <code>--extra-index-url https://download.pytorch.org/whl/cu130</code>. Everything also runs on the CPU, more slowly (<a href="pages/reference.html#hardware">Hardware</a>).</p></div>
+
+<h2 id="keys">Keys and configuration</h2>
+<p>Keys are read from the environment. A <code>.env</code> file is read only if you load it, with <code>vidra.configure(env_file=".env")</code>; or pass keys in code: <code>OpenAI(api_key=...)</code>, <code>Supabase(url=..., key=...)</code>.</p>
+<table>
+<tr><th>Variable</th><th>Read by</th></tr>
+<tr><td><code>OPENAI_API_KEY</code></td><td><code>OpenAI</code>, <code>OpenAIEmbedder</code> (also accepted as <code>OPENAI_API</code>)</td></tr>
+<tr><td><code>ANTHROPIC_API_KEY</code></td><td><code>Anthropic</code></td></tr>
+<tr><td><code>HF_TOKEN</code></td><td>the first download of pyannote's gated speaker model; not needed once cached</td></tr>
+<tr><td><code>SUPABASE_URL</code>, <code>SUPABASE_SECRET_KEY</code>, <code>SUPABASE_PUBLISHABLE_KEY</code></td><td><code>Supabase</code>: writes use the secret key, searches the publishable one</td></tr>
+<tr><td><code>VIDRA_DATA</code></td><td>where output goes (default <code>data/</code> in the checkout, else <code>~/.vidra</code>)</td></tr>
+<tr><td><code>VIDRA_WEIGHTS</code></td><td>where checkpoints are cached (default <code>weights/</code>)</td></tr>
+</table>
+<p><code>.env.example</code> lists them all.</p>
+
+<h3 id="configure">configure()</h3>
+<div class="sig">vidra.configure(data_root=None, weights=None, env_file=None, hf_token=None)</div>
+<p>Call once, before anything runs. <code>None</code> changes nothing.</p>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>data_root</code></td><td>Where output, custom questions (<code>prompts.json</code>) and custom aggregates (<code>aggregates.json</code>) live. Outranks <code>VIDRA_DATA</code>.</td></tr>
+<tr><td><code>weights</code></td><td>Where checkpoints are cached. Outranks <code>VIDRA_WEIGHTS</code>.</td></tr>
+<tr><td><code>env_file</code></td><td>A <code>.env</code> file to read now. Never overrides a variable already set; a missing file is refused.</td></tr>
+<tr><td><code>hf_token</code></td><td>A Hugging Face token for gated downloads, for this process only.</td></tr>
+</table>
+<pre><code class="python">import vidra
+
+vidra.configure(env_file=".env", data_root="/srv/vidra")
+print(vidra.__version__)</code></pre>
+
+<h2 id="quickstart">Quickstart</h2>
+<p>Index a video, search it, then summarise it and split it into chapters. Needs <code>vidra[all]</code> and <code>OPENAI_API_KEY</code>.</p>
+<pre><code class="python">import vidra
+from vidra import Folder, LocalEmbedder, Models, OpenAI, aggregates
+from vidra.video_rag import search, video_rag
+
+vidra.configure(env_file=".env")
+models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=OpenAI("gpt-5.4-mini"),
+                embedder=LocalEmbedder())
+db = Folder("data/out")                     # search the output folder; no server
+
+run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
+                models=models, database=db)
+
+moments, notes = search("a customer paying in cash", run.video_id,
+                        models=models, database=db)
+for m in moments:
+    print(f"{m.start_ts:.0f}-{m.end_ts:.0f}s", m.hits[0]["content"][:80])
+
+d = run.folder
+video = aggregates.record(timeline=d / "timeline.json", transcript=d / "transcript.json",
+                          descriptions=d / "descriptions.json")
+told = video.excerpt(transcript=True, answers={"clip": ["summary"]})
+aggregates.summary(input=told, out=d / "answers" / "summary.json", models=models)
+aggregates.chapters(input=told, out=d / "answers" / "chapters.json", models=models)
+
+print(aggregates.load(d / "answers" / "summary.json").payload["summary"])
+for c in aggregates.load(d / "answers" / "chapters.json").payload["chapters"]:
+    print(f"{c['start_ts']:.0f}s", c["title"])</code></pre>
+<p>Output is in <code>data/out/shop/</code>: one JSON file per stage, and the kept frames in <code>store/</code> (<a href="pages/concepts.html#folder">what each file holds</a>). More complete scripts are in <a href="pages/recipes.html">Recipes</a>.</p>
+<!-- pager -->
+<div class="pager">
+<a class="next" href="pages/concepts.html"><small>Next</small>Concepts</a>
+</div>
+<!-- /pager -->
+</main>
+</div>
+</body>
+</html>

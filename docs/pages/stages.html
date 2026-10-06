@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="docs-root" content="../">
+<title>Stages · VIDRA docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/search-index.js"></script>
+<script src="assets/docs.js"></script>
+<!-- /head -->
+</head>
+<body>
+<header class="top">
+<!-- top -->
+<a class="brand" href="../index.html">VIDRA <span>docs</span></a>
+<button class="icon menu" id="menu" type="button" aria-label="Menu">&#9776;</button>
+<div class="spacer"></div>
+<div class="search"><input id="q" type="search" placeholder="Search the docs  ( / )" autocomplete="off" aria-label="Search the docs"><div class="results" id="results"></div></div>
+<button class="icon" id="theme" type="button" aria-label="Light or dark">&#9680;</button>
+<!-- /top -->
+</header>
+<div class="layout">
+<nav class="side" aria-label="Pages">
+<!-- nav -->
+<div class="group">Get started</div>
+<a href="../index.html">Start here</a>
+<a href="concepts.html">Concepts</a>
+<a href="recipes.html">Recipes</a>
+<div class="group">video_rag</div>
+<a href="pipeline.html">The pipeline</a>
+<a href="stages.html" class="here">Stages</a>
+<a href="samplers.html">Samplers</a>
+<a href="questions.html">Questions</a>
+<a href="search.html">Search</a>
+<div class="group">aggregates</div>
+<a href="aggregates.html">Aggregates</a>
+<a href="definitions.html">Custom prompts and profiles</a>
+<div class="group">Bring your own</div>
+<a href="models.html">Models</a>
+<a href="databases.html">Databases</a>
+<div class="group">Reference</div>
+<a href="reference.html">Reference</a>
+<!-- /nav -->
+</nav>
+<main>
+<h1>Stages</h1>
+<p class="lede">The eight steps <code>video_rag()</code> runs, each callable on its own with all its settings.</p>
+
+<p>Each stage is a module under <code>vidra.video_rag</code> with three kinds of function:</p>
+<table>
+<tr><th>Function</th><th>Takes</th><th>Does</th></tr>
+<tr><td>the stage's own name: <code>media.media</code>, <code>audio.audio</code>, ...</td><td>file paths</td><td>reads its inputs, writes one output file, returns a receipt (<code>Produced</code>)</td></tr>
+<tr><td>a verb: <code>split</code>, <code>listen</code>, <code>detect</code>, <code>timeline</code>, <code>ingest</code>, <code>apply</code>, <code>answer</code>, <code>encode</code></td><td>documents already in memory</td><td>the same work, returning the document; reads and writes no file</td></tr>
+<tr><td><code>load</code></td><td>a path</td><td>reads the stage's output back, typed</td></tr>
+</table>
+<p>The file function is the verb plus a read and a write, so both run the same checks. A receipt has <code>.video_id</code>, <code>.component</code>, <code>.artifacts</code> (<code>{name: path}</code>), <code>.stats</code> and <code>.skipped</code>.</p>
+<p>Full script: <a href="recipes.html#stage-by-stage">stage-by-stage recipe</a>. Below, <code>D</code> is a video's folder.</p>
+<pre><code class="python">from pathlib import Path
+from vidra.video_rag import audio, boundaries, cut, describe, embed, media, video</code></pre>
+
+<!-- ============================================================ media -->
+<h2 id="media">1. media</h2>
+<p>Reads the file's streams and makes the video's folder. Writes <code>media.json</code>.</p>
+<div class="sig">media.media(source, into, video_id=None, on_conflict="new", name=None, recorded_at=None) -&gt; Produced</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>source</code></td><td>required</td><td>The video file.</td></tr>
+<tr><td><code>into</code></td><td>required</td><td>The folder holding one folder per video.</td></tr>
+<tr><td><code>video_id</code></td><td>filename stem</td><td>The folder's name.</td></tr>
+<tr><td><code>on_conflict</code></td><td><code>"new"</code></td><td>When a different file holds the id: <code>new</code>, <code>replace</code> or <code>refuse</code> (<a href="concepts.html#video-id">Video ids</a>).</td></tr>
+<tr><td><code>name</code>, <code>recorded_at</code></td><td>from the file</td><td>Display name and recording time (a <code>datetime</code> or ISO 8601 string).</td></tr>
+</table>
+<pre><code class="python">made = media.media("shop.mp4", "data/out")
+D = Path(made.stats["folder"])        # data/out/shop
+made.video_id                         # the id actually used</code></pre>
+<p><code>media.split(path, video_id=None, name=None, recorded_at=None)</code> returns the <code>Media</code> without writing; <code>media.load(path)</code> reads <code>media.json</code>. A file with no video or audio stream raises <code>media.UnusableMedia</code>; <code>on_conflict="refuse"</code> raises <code>media.VideoIdTaken</code>.</p>
+
+<!-- ============================================================ audio -->
+<h2 id="audio">2. audio</h2>
+<p>Transcribes and diarizes the whole soundtrack in one pass. Writes <code>transcript.raw.json</code>: words, segments and speaker turns with times, not yet chunked. Needs <code>vidra[audio]</code>.</p>
+<div class="sig">audio.audio(media, out, transcriber="whisper", diarizer="pyannote", model=None, language=None,
+            vad_filter=None, compute_type=None, device=None, diarizer_model=None,
+            exclusive=None) -&gt; Produced</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>media</code></td><td>required</td><td>Path to <code>media.json</code>.</td></tr>
+<tr><td><code>out</code></td><td>required</td><td>Where to write <code>transcript.raw.json</code>.</td></tr>
+<tr><td><code>transcriber</code></td><td><code>"whisper"</code></td><td><code>whisper</code> (faster-whisper), or <code>stub</code> (placeholder text, for tests).</td></tr>
+<tr><td><code>diarizer</code></td><td><code>"pyannote"</code></td><td><code>pyannote</code>, or <code>none</code>: every segment keeps <code>speaker: null</code>.</td></tr>
+<tr><td><code>model</code></td><td><code>"small"</code></td><td>Whisper's model: <code>tiny</code>, <code>base</code>, <code>small</code>, <code>medium</code>, <code>large-v3</code>, ...</td></tr>
+<tr><td><code>language</code></td><td>detected</td><td>Spoken language, e.g. <code>"en"</code>; detected if not given.</td></tr>
+<tr><td><code>vad_filter</code></td><td><code>True</code></td><td>Skip stretches without speech. Off, Whisper can invent text over silence.</td></tr>
+<tr><td><code>compute_type</code></td><td><code>float16</code> on a GPU, <code>int8</code> on the CPU</td><td>Whisper's precision.</td></tr>
+<tr><td><code>device</code></td><td>cuda, else the CPU</td><td>For both models. Whisper has no <code>mps</code>.</td></tr>
+<tr><td><code>diarizer_model</code></td><td><code>"pyannote/speaker-diarization-3.1"</code></td><td>pyannote's pipeline. Gated: the first download needs <code>HF_TOKEN</code> from an account that accepted its terms.</td></tr>
+<tr><td><code>exclusive</code></td><td><code>True</code></td><td>Resolve overlapping speech so each word has one speaker.</td></tr>
+</table>
+<pre><code class="python">audio.audio(D / "media.json", D / "transcript.raw.json",
+            model="medium", language="en", diarizer="pyannote")</code></pre>
+<p>A setting the chosen backends don't take is refused, e.g. <code>language</code> with <code>transcriber="stub"</code>. A near-silent soundtrack is recorded as silent without running a model.</p>
+<p><code>audio.listen(media, ...)</code> takes a <code>Media</code> and returns the <code>RawTranscript</code>. <code>audio.load(path)</code> reads one back.</p>
+
+<!-- ======================================================= boundaries -->
+<h2 id="boundaries">3–4. boundaries</h2>
+<p>Two steps: <b>evidence</b> finds where content changes (<code>scene</code>, <code>vad</code>, <code>speaker</code> only) and writes <code>cuts.json</code>; <b>boundaries</b> turns it into chunks and writes <code>timeline.json</code>.</p>
+
+<h3 id="evidence">evidence</h3>
+<div class="sig">boundaries.evidence(out, policy, media=None, raw_transcript=None, stride=5, threshold=27.0,
+                    detect_width=320, silence_s=0.65) -&gt; Produced</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Policy</th><th>Meaning</th></tr>
+<tr><td><code>out</code></td><td>required</td><td></td><td>Where to write <code>cuts.json</code>.</td></tr>
+<tr><td><code>policy</code></td><td>required</td><td></td><td><code>uniform</code> (does nothing), <code>scene</code>, <code>vad</code>, <code>speaker</code>.</td></tr>
+<tr><td><code>media</code></td><td></td><td>scene</td><td>Path to <code>media.json</code>.</td></tr>
+<tr><td><code>raw_transcript</code></td><td></td><td>vad, speaker</td><td>Path to <code>transcript.raw.json</code>.</td></tr>
+<tr><td><code>stride</code></td><td><code>5</code></td><td>scene</td><td>Score every Nth frame. Higher is faster but finds more false cuts.</td></tr>
+<tr><td><code>threshold</code></td><td><code>27.0</code></td><td>scene</td><td>Change score needed for a cut (PySceneDetect's scale). Lower finds more.</td></tr>
+<tr><td><code>detect_width</code></td><td><code>320</code></td><td>scene</td><td>Frames are scaled to this width before scoring.</td></tr>
+<tr><td><code>silence_s</code></td><td><code>0.65</code></td><td>vad</td><td>A pause at least this long is a cut.</td></tr>
+</table>
+<p>A setting the policy doesn't read is refused (<code>boundaries.EVIDENCE_SETTINGS</code> maps settings to policies). Scene scores are cached in <code>cuts.json</code>, so trying a new threshold needs no decode:</p>
+<pre><code class="python">boundaries.evidence(D / "cuts.json", "scene", media=D / "media.json", stride=5)
+
+for row in boundaries.calibrate(D / "cuts.json"):          # nothing is decoded
+    print(row["threshold"], row["cuts"], row["rate"], row["median_gap_s"])
+
+boundaries.retune(D / "cuts.json", D / "cuts.json", threshold=35.0)   # rewrite the cuts</code></pre>
+<ul>
+  <li><code>calibrate(cuts, thresholds=None)</code>: how many cuts each threshold gives, as rows of <code>threshold</code>, <code>cuts</code>, <code>rate</code> (cuts per scored frame) and <code>median_gap_s</code>. <code>cuts</code> is a path or a <code>Cuts</code>; <code>thresholds</code> defaults to a spread on the detector's scale.</li>
+  <li><code>retune(cuts, out, threshold)</code>: rewrites the cuts at a new threshold.</li>
+</ul>
+
+<h3 id="grid">boundaries</h3>
+<div class="sig">boundaries.boundaries(media, out, policy="uniform", cuts=None, chunk_s=20.0, min_s=5.0,
+                      max_s=None) -&gt; Produced</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>media</code></td><td>required</td><td>Path to <code>media.json</code>.</td></tr>
+<tr><td><code>out</code></td><td>required</td><td>Where to write <code>timeline.json</code>.</td></tr>
+<tr><td><code>policy</code></td><td><code>"uniform"</code></td><td>As in <code>evidence</code>.</td></tr>
+<tr><td><code>cuts</code></td><td>none</td><td>Path to <code>cuts.json</code>; required by every policy but <code>uniform</code>.</td></tr>
+<tr><td><code>chunk_s</code></td><td><code>20.0</code></td><td>The chunk length for <code>uniform</code>, and the default ceiling.</td></tr>
+<tr><td><code>min_s</code></td><td><code>5.0</code></td><td>Shorter chunks merge into a neighbour.</td></tr>
+<tr><td><code>max_s</code></td><td><code>chunk_s</code></td><td>Longer chunks split evenly (a 62 s span at 30 s becomes three of 20.8 s, not 30 + 30 + 2).</td></tr>
+</table>
+<pre><code class="python">boundaries.boundaries(D / "media.json", D / "timeline.json", policy="scene",
+                      cuts=D / "cuts.json", min_s=10, max_s=40)
+grid = boundaries.load(D / "timeline.json")
+len(grid), grid.spans[0]            # 12, (0.0, 19.93)</code></pre>
+<p>A last chunk under a quarter of the chunk length joins the one before. <code>min_s</code> above the ceiling is refused. With no cuts, chunks are still capped at <code>max_s</code>.</p>
+<p>Verbs: <code>detect(policy, media=None, transcript=None, stride=5, threshold=27.0, detect_width=320, silence_s=0.65)</code> returns <code>Cuts</code> (<code>None</code> for <code>uniform</code>); <code>timeline(media, policy="uniform", cuts=None, chunk_s=20.0, min_s=5.0, max_s=None)</code> returns the <code>Timeline</code>.</p>
+<pre><code class="python">m = media.split("shop.mp4")
+grid = boundaries.timeline(m, "scene", cuts=boundaries.detect("scene", media=m))</code></pre>
+<p><code>boundaries.POLICIES</code> maps each policy to what its evidence reads: <code>None</code>, <code>"video"</code> or <code>"audio"</code>.</p>
+
+<!-- ============================================================ video -->
+<h2 id="video">5. video</h2>
+<p>Decodes the picture once, offers frames to each sampler and stores the ones kept. Writes <code>manifest.json</code> and the JPEGs in <code>store/</code>. See <a href="samplers.html">Samplers</a>.</p>
+<div class="sig">video.video(media, timeline, out, store=None, sampler="uniform", per_second=1.0, every_n=None,
+            min_interval_s=0.0, max_per_chunk=None, threshold=None, vocabulary=None,
+            confidence=None, languages=None, store_scope="sampled", prune_store=False,
+            on_progress=None) -&gt; Produced</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>media</code>, <code>timeline</code></td><td>required</td><td>Paths to <code>media.json</code> and <code>timeline.json</code>.</td></tr>
+<tr><td><code>out</code></td><td>required</td><td>Where to write <code>manifest.json</code>.</td></tr>
+<tr><td><code>store</code></td><td>none</td><td>Frame folder. Without it no frames are kept and <code>describe</code> has nothing to read.</td></tr>
+<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>A <a href="samplers.html#specs">sampler spec</a>: <code>"clip,yolo:overview"</code>, or a list of specs.</td></tr>
+<tr><td><code>per_second</code></td><td><code>1.0</code></td><td>Frames offered to the samplers per second of video.</td></tr>
+<tr><td><code>every_n</code></td><td><code>1</code></td><td><code>uniform</code>: keep every Nth offered frame.</td></tr>
+<tr><td><code>min_interval_s</code></td><td><code>0.0</code></td><td>Every sampler: at least this many seconds between kept frames.</td></tr>
+<tr><td><code>max_per_chunk</code></td><td>none</td><td>Every sampler: at most this many frames per chunk.</td></tr>
+<tr><td><code>threshold</code></td><td>per sampler</td><td><code>clip</code>, <code>yolo</code>, <code>objects</code>, <code>text</code>: keep a frame when similarity to the last kept one falls below this.</td></tr>
+<tr><td><code>vocabulary</code></td><td>shop items</td><td><code>objects</code>: what to detect, e.g. <code>["forklift", "pallet"]</code>.</td></tr>
+<tr><td><code>confidence</code></td><td><code>0.30</code></td><td><code>objects</code>: how sure a detection must be.</td></tr>
+<tr><td><code>languages</code></td><td><code>["en"]</code></td><td><code>text</code>: EasyOCR's languages.</td></tr>
+<tr><td><code>store_scope</code></td><td><code>"sampled"</code></td><td><code>"sampled"</code> stores kept frames; <code>"decimated"</code> stores every offered frame.</td></tr>
+<tr><td><code>prune_store</code></td><td><code>False</code></td><td>Delete frames this manifest doesn't use; otherwise the store keeps growing across runs.</td></tr>
+<tr><td><code>on_progress</code></td><td>none</td><td>Called with a <code>Progress</code> after each chunk.</td></tr>
+</table>
+<pre><code class="python">video.video(D / "media.json", D / "timeline.json", D / "manifest.json",
+            store=D / "store", sampler="objects", vocabulary=["cart", "basket"],
+            confidence=0.4, max_per_chunk=4)</code></pre>
+<p>Samplers and questions are checked before decoding, and a setting no chosen sampler reads is refused (e.g. <code>every_n</code> without <code>uniform</code>). No readable video stream raises <code>video.UnreadableSource</code>.</p>
+<p><code>video.ingest(media, timeline, sampler="uniform", ..., frames=None, store_scope="sampled", on_progress=None)</code> takes a <code>Media</code> and <code>Timeline</code>, writes frames into <code>frames</code> (a <code>FrameStore</code>, or <code>None</code>), and returns the <code>Manifest</code>. <code>video.load(path)</code> reads one back.</p>
+
+<h3 id="frame-store">The frame store</h3>
+<p><code>video.FrameStore(root, quality=95, fmt="jpg")</code> writes one JPEG per kept frame into <code>root</code>, named by decode position; a frame kept twice is one file. <code>quality</code> is the JPEG quality.</p>
+<pre><code class="python">store = video.FrameStore(D / "store")
+plan = video.ingest(media.load(D / "media.json"), boundaries.load(D / "timeline.json"),
+                    "clip", frames=store)</code></pre>
+
+<h3 id="recreate">recreate</h3>
+<p>Rebuilds every frame from the manifest and the video, and can compare them byte for byte with an existing store:</p>
+<div class="sig">video.recreate(*, manifest, video, out, verify=None, force=False, quality=95) -&gt; dict</div>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>manifest</code></td><td>Path to <code>manifest.json</code>.</td></tr>
+<tr><td><code>video</code></td><td>The video file it was built from.</td></tr>
+<tr><td><code>out</code></td><td>Where to write the frames.</td></tr>
+<tr><td><code>verify</code></td><td>An existing store to compare with.</td></tr>
+<tr><td><code>force</code></td><td>Rebuild even if the video's size, rate or frame count differ from the manifest (otherwise <code>video.Mismatch</code>); differences go in <code>problems</code>.</td></tr>
+<tr><td><code>quality</code></td><td>JPEG quality the store was written at; must match for an identical rebuild.</td></tr>
+</table>
+<pre><code class="python">done = video.recreate(manifest=D / "manifest.json", video="shop.mp4",
+                      out="rebuilt", verify=D / "store")
+done["named"], done["written"], done["missing"], done["problems"]
+done["verified"]["identical"]          # True when every frame matches</code></pre>
+<p>No file at <code>video</code> raises <code>video.MissingVideo</code>.</p>
+
+<!-- ============================================================== cut -->
+<h2 id="cut">6. cut</h2>
+<p>Cuts the raw transcript onto the grid; each word goes to the chunk its midpoint is in. Writes <code>transcript.json</code>. No model, so a new grid never re-runs Whisper.</p>
+<div class="sig">cut.cut(timeline, raw_transcript, out) -&gt; Produced</div>
+<pre><code class="python">cut.cut(D / "timeline.json", D / "transcript.raw.json", D / "transcript.json")
+spoken = cut.load(D / "transcript.json")
+spoken.chunks[3]["text"], spoken.chunks[3]["structured"]["speakers"]</code></pre>
+<p><code>cut.apply(timeline, raw)</code> does it in memory. Silent chunks are kept with empty text, so chunk ids match every other file.</p>
+
+<!-- ========================================================= describe -->
+<h2 id="describe">7. describe</h2>
+<p>Sends each chunk's frames to the vision model once per sampler and question. Writes <code>descriptions.json</code>. Calls run concurrently, up to the model's <code>concurrency</code>.</p>
+<div class="sig">describe.describe(manifest, timeline, store, out, previous=None, vlm=None, samplers=None,
+                  limit=None, max_output_tokens=None, on_progress=None) -&gt; Produced</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>manifest</code>, <code>timeline</code></td><td>required</td><td>Paths to <code>manifest.json</code> and <code>timeline.json</code>.</td></tr>
+<tr><td><code>store</code></td><td>required</td><td>The frame folder <code>video</code> wrote.</td></tr>
+<tr><td><code>out</code></td><td>required</td><td>Where to write <code>descriptions.json</code>.</td></tr>
+<tr><td><code>previous</code></td><td>none</td><td>Earlier <code>descriptions.json</code> (usually <code>out</code>); current answers are reused.</td></tr>
+<tr><td><code>vlm</code></td><td><code>OpenAI()</code></td><td>The vision model.</td></tr>
+<tr><td><code>samplers</code></td><td>all</td><td>Only these answer ids, e.g. <code>["clip:text"]</code>; others are kept from <code>previous</code>.</td></tr>
+<tr><td><code>limit</code></td><td>none</td><td>Max new calls this run; a later run with <code>previous=</code> continues. At least 1.</td></tr>
+<tr><td><code>max_output_tokens</code></td><td>2000</td><td>Cap on one answer; too low truncates structured answers. Changing it re-describes everything.</td></tr>
+<tr><td><code>on_progress</code></td><td>none</td><td>Called with a <code>Progress</code> after each call, in completion order.</td></tr>
+</table>
+<pre><code class="python">describe.describe(D / "manifest.json", D / "timeline.json", D / "store",
+                  D / "descriptions.json", previous=D / "descriptions.json",
+                  vlm=OpenAI("gpt-5.4-mini"), limit=20)
+
+said = describe.load(D / "descriptions.json")
+answer = said.chunks[0]["samplers"]["clip"]
+answer["description"]           # the prose
+answer["structured"]            # the fields: {"setting": ..., "people": [...], ...}</code></pre>
+<p>Frames are read only from the store: a missing store or frame raises <code>describe.StoreUnavailable</code>; an unreachable model, <code>describe.DescriberUnavailable</code>. One failed call fails the run and its new answers are not written.</p>
+<p><code>describe.answer(manifest, timeline, frames, vlm=None, samplers=None, limit=None, existing=None, max_output_tokens=None, on_progress=None)</code> works in memory; <code>existing</code> is an earlier <code>Descriptions</code>. Question functions are on <a href="questions.html">Questions</a>.</p>
+
+<!-- ============================================================ embed -->
+<h2 id="embed">8. embed</h2>
+<p>Turns every answer and every chunk's transcript into a <b>unit</b> of text and embeds it. Writes <code>embedded.json</code>: units and vectors under the embedder's key.</p>
+<div class="sig">embed.embed(out, descriptions=None, transcript=None, previous=None, timeline=None,
+            embedder=None, batch=64, on_progress=None) -&gt; Produced</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>out</code></td><td>required</td><td>Where to write <code>embedded.json</code>.</td></tr>
+<tr><td><code>descriptions</code>, <code>transcript</code></td><td>none</td><td>Paths to embed from; name at least one.</td></tr>
+<tr><td><code>previous</code></td><td>none</td><td>Earlier <code>embedded.json</code> (usually <code>out</code>); unchanged units keep their vectors.</td></tr>
+<tr><td><code>timeline</code></td><td>none</td><td>Path to <code>timeline.json</code>, recorded as the units' grid.</td></tr>
+<tr><td><code>embedder</code></td><td><code>OpenAIEmbedder()</code></td><td>The embedder; search must use the same one.</td></tr>
+<tr><td><code>batch</code></td><td><code>64</code></td><td>Texts per embedding call.</td></tr>
+<tr><td><code>on_progress</code></td><td>none</td><td>Called with a <code>Progress</code> after each batch.</td></tr>
+</table>
+<pre><code class="python">embed.embed(D / "embedded.json", descriptions=D / "descriptions.json",
+            transcript=D / "transcript.json", previous=D / "embedded.json",
+            timeline=D / "timeline.json", embedder=LocalEmbedder())
+
+index = embed.load(D / "embedded.json")
+index.embedder                    # "local:BAAI/bge-small-en-v1.5:384"
+index.units[0]["content"], len(index.units[0]["vector"])</code></pre>
+<p>A unit's text is the answer's prose then its fields, keys sorted, so the same answer always gives the same vector.</p>
+<p><code>embed.encode(descriptions=None, transcript=None, previous=None, embedder=None, batch=64, on_progress=None)</code> works in memory and returns a list of <code>embed.Unit</code>: <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>content</code>, <code>structured</code>, <code>vector</code>. An unreachable embedder raises <code>embed.EmbedderUnavailable</code>.</p>
+
+<h2 id="in-memory">The whole chain in memory</h2>
+<p>The verbs chain without an output folder; only frames are written, to the store you name:</p>
+<pre><code class="python">from vidra import LocalEmbedder, Stub
+
+m = media.split("shop.mp4")
+raw = audio.listen(m)
+grid = boundaries.timeline(m, "scene", cuts=boundaries.detect("scene", media=m))
+store = video.FrameStore("frames/shop")
+plan = video.ingest(m, grid, "clip", frames=store)
+spoken = cut.apply(grid, raw)
+said = describe.answer(plan, grid, store, vlm=Stub())
+units = embed.encode(descriptions=said, transcript=spoken, embedder=LocalEmbedder())</code></pre>
+<!-- pager -->
+<div class="pager">
+<a href="pipeline.html"><small>Previous</small>The pipeline</a>
+<a class="next" href="samplers.html"><small>Next</small>Samplers</a>
+</div>
+<!-- /pager -->
+</main>
+</div>
+</body>
+</html>

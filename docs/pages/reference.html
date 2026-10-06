@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="docs-root" content="../">
+<title>Reference · VIDRA docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/search-index.js"></script>
+<script src="assets/docs.js"></script>
+<!-- /head -->
+</head>
+<body>
+<header class="top">
+<!-- top -->
+<a class="brand" href="../index.html">VIDRA <span>docs</span></a>
+<button class="icon menu" id="menu" type="button" aria-label="Menu">&#9776;</button>
+<div class="spacer"></div>
+<div class="search"><input id="q" type="search" placeholder="Search the docs  ( / )" autocomplete="off" aria-label="Search the docs"><div class="results" id="results"></div></div>
+<button class="icon" id="theme" type="button" aria-label="Light or dark">&#9680;</button>
+<!-- /top -->
+</header>
+<div class="layout">
+<nav class="side" aria-label="Pages">
+<!-- nav -->
+<div class="group">Get started</div>
+<a href="../index.html">Start here</a>
+<a href="concepts.html">Concepts</a>
+<a href="recipes.html">Recipes</a>
+<div class="group">video_rag</div>
+<a href="pipeline.html">The pipeline</a>
+<a href="stages.html">Stages</a>
+<a href="samplers.html">Samplers</a>
+<a href="questions.html">Questions</a>
+<a href="search.html">Search</a>
+<div class="group">aggregates</div>
+<a href="aggregates.html">Aggregates</a>
+<a href="definitions.html">Custom prompts and profiles</a>
+<div class="group">Bring your own</div>
+<a href="models.html">Models</a>
+<a href="databases.html">Databases</a>
+<div class="group">Reference</div>
+<a href="reference.html" class="here">Reference</a>
+<!-- /nav -->
+</nav>
+<main>
+<h1>Reference</h1>
+<p class="lede">File formats, errors, storage locations and hardware.</p>
+
+<h2 id="documents">Documents</h2>
+<p>Every document is a JSON object with <code>document</code> (its kind), <code>version</code> and <code>video_id</code>, and is what the matching <code>write_&lt;artifact&gt;</code> hook receives. Times are in seconds. Each stage's <code>load</code> reads one back, typed.</p>
+
+<h3 id="doc-media">media.json</h3>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>path</code></td><td>The file's path when read.</td></tr>
+<tr><td><code>container_format</code></td><td>Container format.</td></tr>
+<tr><td><code>duration_s</code></td><td>The container's duration.</td></tr>
+<tr><td><code>video</code></td><td>The picture stream, or <code>null</code>: <code>index</code>, <code>codec</code>, <code>rate</code> (frames per second), <code>time_base</code>, <code>width</code>, <code>height</code>, <code>frames</code>, <code>duration_s</code>.</td></tr>
+<tr><td><code>audio</code></td><td>The soundtrack, or <code>null</code>: <code>index</code>, <code>codec</code>, <code>rate</code> (samples per second), <code>channels</code>, <code>duration_s</code>.</td></tr>
+<tr><td><code>source</code></td><td>Content fingerprint, distinguishing a moved file from a different one.</td></tr>
+<tr><td><code>name</code></td><td>Display name; the filename unless given.</td></tr>
+<tr><td><code>recorded_at</code></td><td>Recording time (ISO 8601) from tags unless given, or <code>null</code>.</td></tr>
+</table>
+
+<h3 id="doc-raw-transcript">transcript.raw.json</h3>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>segments</code></td><td>Whisper's utterances: <code>start</code>, <code>end</code>, <code>text</code>, <code>speaker</code>.</td></tr>
+<tr><td><code>words</code></td><td>Each word: <code>start</code>, <code>end</code>, <code>text</code>, <code>speaker</code>.</td></tr>
+<tr><td><code>turns</code></td><td>Diarization's turns: <code>speaker</code>, <code>start</code>, <code>end</code>.</td></tr>
+<tr><td><code>speakers</code></td><td>The speaker labels, e.g. <code>["SPEAKER_00"]</code>.</td></tr>
+<tr><td><code>model</code></td><td>Transcriber, diarizer, settings, detected language.</td></tr>
+<tr><td><code>track</code></td><td>The decoded audio: <code>rate</code>, <code>duration_s</code>, <code>samples</code>, <code>rms</code>, <code>peak</code>, <code>silent</code>.</td></tr>
+<tr><td><code>stats</code></td><td>Counts (segments, words, speakers, turns, speech seconds) and timings.</td></tr>
+</table>
+
+<h3 id="doc-cuts">cuts.json</h3>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>cuts</code></td><td>The boundary times.</td></tr>
+<tr><td><code>source</code></td><td><code>video</code> or <code>audio</code>.</td></tr>
+<tr><td><code>detector</code></td><td><code>content</code> for the scene detector, or the policy name.</td></tr>
+<tr><td><code>params</code></td><td>Settings used (<code>threshold</code>, <code>stride</code>, ...).</td></tr>
+<tr><td><code>scores</code></td><td>Per-frame scores (<code>metric</code>, <code>stride</code>, <code>at</code>, <code>values</code>) for <code>retune</code> and <code>calibrate</code>, or <code>null</code>.</td></tr>
+<tr><td><code>stats</code></td><td>Frames read and scored, timing, cuts found.</td></tr>
+</table>
+
+<h3 id="doc-timeline">timeline.json</h3>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>chunks</code></td><td>The grid: <code>chunk_id</code>, <code>start_ts</code>, <code>end_ts</code>, contiguous.</td></tr>
+<tr><td><code>policy</code></td><td><code>uniform</code>, <code>scene</code>, <code>vad</code> or <code>speaker</code>.</td></tr>
+<tr><td><code>derived_from</code></td><td><code>video</code>, <code>audio</code>, <code>grid</code> (arithmetic), or <code>combined</code>.</td></tr>
+<tr><td><code>params</code></td><td>Settings used (<code>min_s</code>, <code>max_s</code>, ...); for a combination, <code>combined</code> places each video.</td></tr>
+<tr><td><code>fingerprint</code></td><td>Grid hash, recorded by every later document to detect mismatched grids.</td></tr>
+<tr><td><code>duration_s</code>, <code>chunk_count</code></td><td>The grid's length and size.</td></tr>
+</table>
+
+<h3 id="doc-manifest">manifest.json</h3>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>chunks</code></td><td>Per chunk: <code>chunk_id</code>, <code>decimated_frames</code> (frames offered), and <code>samplers</code>: <code>{sampler_id: {frame_count, frames}}</code>, each frame with <code>index</code> (its file in the store), <code>media_ts</code>, <code>chunk_local_index</code>, <code>pts</code>.</td></tr>
+<tr><td><code>source</code></td><td>What was decoded: path, container, duration, stream properties. <code>video.recreate</code> checks against it.</td></tr>
+<tr><td><code>config</code></td><td>Decimator, sampler settings (with <code>prompts</code>) and frame store settings.</td></tr>
+<tr><td><code>stats</code></td><td><code>frames_decimated</code>, <code>frames_sampled</code> (picks), <code>stored_frames</code> (files), <code>stored_mb</code>, timing.</td></tr>
+<tr><td><code>timeline_fingerprint</code>, <code>manifest_fingerprint</code></td><td>Grid hash, and a hash of this sampling.</td></tr>
+</table>
+
+<h3 id="doc-transcript">transcript.json</h3>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>chunks</code></td><td>Per chunk, silent ones included: <code>chunk_id</code>, <code>text</code>, <code>word_count</code>, <code>turns</code> (<code>speaker</code>, <code>start</code>, <code>end</code>, <code>text</code>), <code>structured</code> (<code>{"speakers": [...]}</code>).</td></tr>
+<tr><td><code>model</code></td><td>Carried from the raw transcript.</td></tr>
+<tr><td><code>stats</code></td><td>Chunks, chunks with speech, words, words outside the grid, speakers.</td></tr>
+<tr><td><code>timeline_fingerprint</code></td><td>The grid it was cut on.</td></tr>
+</table>
+
+<h3 id="doc-descriptions">descriptions.json</h3>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>chunks</code></td><td>Per chunk: <code>chunk_id</code> and <code>samplers</code>: <code>{answer_id: answer}</code>. Each answer has <code>sampler</code>, <code>question</code>, <code>description</code> (the prose), <code>structured</code> (the fields), <code>frame_count</code>, <code>frame_indexes</code>, <code>elapsed_s</code>.</td></tr>
+<tr><td><code>model</code></td><td>The VLM: <code>name</code>, <code>params</code> and <code>prompts</code> (<code>{question: hash}</code>); compared for reuse.</td></tr>
+<tr><td><code>stats</code></td><td>Described, skipped (reused), chunks, timing.</td></tr>
+<tr><td><code>timeline_fingerprint</code>, <code>manifest_fingerprint</code></td><td>The grid and sampling described.</td></tr>
+</table>
+
+<h3 id="doc-embedded">embedded.json</h3>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>embedder</code></td><td>The embedder's key: the vector space.</td></tr>
+<tr><td><code>units</code></td><td>Each unit: <code>chunk_id</code>, <code>sampler_id</code> (answer id or <code>transcript</code>), <code>sampler</code>, <code>question</code>, <code>content</code>, <code>structured</code>, <code>text_hash</code>, <code>characters</code>, <code>vector</code>.</td></tr>
+<tr><td><code>count</code>, <code>samplers</code></td><td>How many units, and which answer ids.</td></tr>
+<tr><td><code>timeline_fingerprint</code></td><td>The grid.</td></tr>
+</table>
+
+<h3 id="doc-answer">Aggregate answers</h3>
+<p>One file per answer, named by its id (<code>summary.json</code>; <code>entities:people</code> as <code>entities.people.json</code>):</p>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>aggregate_id</code></td><td><code>summary</code>, <code>entities:people</code>, or with a label <code>sentiment~spoken</code>.</td></tr>
+<tr><td><code>tier</code></td><td><code>free</code>, <code>local</code> or <code>llm</code>.</td></tr>
+<tr><td><code>payload</code></td><td>The answer; keys per aggregator on <a href="aggregates.html#aggregators">Aggregates</a>.</td></tr>
+<tr><td><code>inputs_fingerprint</code></td><td>A hash of the text it read.</td></tr>
+<tr><td><code>stats</code></td><td><code>about</code>, <code>model</code> (key), <code>inputs</code>, <code>version</code> (definition hash), <code>read_chars</code>.</td></tr>
+</table>
+<p>Saved inputs: an <b>excerpt</b> holds <code>selection</code>, the <code>timeline</code>, the <code>rows</code> (one per chunk with text) and the <code>answers</code> that contributed; a <b>sightings</b> file holds the <code>profile</code>, <code>selection</code>, <code>field_name</code>, identity <code>keys</code>, the <code>timeline</code>, the <code>mentions</code> (each <code>chunk_id</code>, <code>sampler_id</code>, <code>field</code>, <code>index</code>, <code>signature</code>, <code>entry</code>) and, when the profile reads it, the <code>transcript</code> of the chunks mentioned.</p>
+
+<h3 id="produced">Receipts: Produced</h3>
+<p>Returned by every stage and aggregator:</p>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>video_id</code></td><td>The video id used (<code>media</code> may mint a new one).</td></tr>
+<tr><td><code>component</code></td><td>Which stage or aggregator.</td></tr>
+<tr><td><code>artifacts</code></td><td><code>{name: path}</code> of what was written.</td></tr>
+<tr><td><code>stats</code></td><td>Its headline numbers.</td></tr>
+<tr><td><code>skipped</code></td><td>What didn't run, e.g. <code>["evidence"]</code> under <code>uniform</code>.</td></tr>
+</table>
+<p>JSON Schemas are in <code>db/json/</code>; <code>python -m vidra.shared.contracts.schemas --check</code> checks them.</p>
+
+<h2 id="errors">Errors</h2>
+<p>Every deliberate error is a <code>vidra.VidraError</code> with a builtin base, so <code>except ValueError</code> etc. still work.</p>
+<table>
+<tr><th>Class</th><th>Also a</th><th>Raised when</th></tr>
+<tr><td><code>vidra.VidraError</code></td><td></td><td>the base of everything below</td></tr>
+<tr><td><code>vidra.Unavailable</code></td><td></td><td>this setup cannot do it: no package, weights, key or server. Retrying will not help</td></tr>
+<tr><td><code>vidra.ModelUnavailable</code></td><td>Unavailable</td><td>a model reports a problem (no API key), or a local model will not load</td></tr>
+<tr><td><code>ModelFailed</code></td><td>Unavailable</td><td>a model call failed (<code>vidra.shared.models.base</code>)</td></tr>
+<tr><td><code>Refused</code></td><td><code>ValueError</code></td><td>the request is invalid as given (<code>vidra.shared.reporting.errors</code>)</td></tr>
+<tr><td><code>UnknownOption</code></td><td><code>ValueError</code>, <code>KeyError</code></td><td>a value outside a fixed set: an unknown policy, sampler, backend</td></tr>
+<tr><td><code>MissingArtifact</code></td><td><code>FileNotFoundError</code></td><td>a stage's input file does not exist; the message names the stage that writes it. Also a search with nothing indexed</td></tr>
+<tr><td><code>UnusableVideoId</code></td><td><code>ValueError</code></td><td>a video id with characters a folder name cannot safely have</td></tr>
+<tr><td><code>Unsupported</code></td><td>Unavailable, <code>NotImplementedError</code></td><td>a database does not implement a read hook (<code>vidra.shared.storage.database</code>)</td></tr>
+<tr><td><code>SchemaOutOfDate</code></td><td>Unavailable</td><td>the Supabase schema is older than the code: re-run the SQL files</td></tr>
+<tr><td><code>media.UnusableMedia</code></td><td><code>RuntimeError</code></td><td>the file cannot be opened, or has neither video nor audio</td></tr>
+<tr><td><code>media.VideoIdTaken</code></td><td><code>FileExistsError</code></td><td>another file holds the id and <code>on_conflict="refuse"</code></td></tr>
+<tr><td><code>video.UnreadableSource</code></td><td><code>RuntimeError</code></td><td>no readable video stream</td></tr>
+<tr><td><code>video.Mismatch</code></td><td><code>ValueError</code></td><td><code>recreate</code>: the video is not the one the manifest was built from</td></tr>
+<tr><td><code>video.MissingVideo</code></td><td><code>FileNotFoundError</code></td><td><code>recreate</code>: no file at <code>video</code></td></tr>
+<tr><td><code>describe.DescriberUnavailable</code></td><td>Unavailable</td><td>the vision model cannot be reached</td></tr>
+<tr><td><code>describe.StoreUnavailable</code></td><td>Unavailable</td><td>the frame store, or a frame it should hold, is missing</td></tr>
+<tr><td><code>describe.PromptError</code></td><td><code>ValueError</code></td><td>a question is invalid or unknown</td></tr>
+<tr><td><code>describe.ProtectedPrompt</code></td><td>PromptError</td><td>a built-in question cannot be changed</td></tr>
+<tr><td><code>embed.EmbedderUnavailable</code></td><td>Unavailable</td><td>the embedder cannot be reached or loaded</td></tr>
+<tr><td><code>aggregates.RecordError</code></td><td><code>ValueError</code></td><td>a record cannot be opened, or an input asks for what it lacks</td></tr>
+<tr><td><code>aggregates.AggregateError</code></td><td><code>ValueError</code></td><td>an unknown aggregator, or the wrong kind of input</td></tr>
+<tr><td><code>aggregates.Inapplicable</code></td><td><code>ValueError</code></td><td>nothing to answer; the pipeline skips it with the reason</td></tr>
+<tr><td><code>aggregates.DefinitionError</code></td><td><code>ValueError</code></td><td>a prompt or profile is invalid or unknown</td></tr>
+<tr><td><code>aggregates.ProtectedDefinition</code></td><td>DefinitionError</td><td>a built-in prompt or profile cannot be changed</td></tr>
+<tr><td><code>CombineError</code></td><td><code>ValueError</code></td><td><code>combine</code> cannot lay these records end to end (one named twice)</td></tr>
+</table>
+<pre><code class="python">import vidra
+
+try:
+    run = video_rag("shop.mp4", "data/out", models=models)
+except vidra.Unavailable as missing:      # install or configure something
+    print("cannot run here:", missing)
+except vidra.VidraError as refused:       # the request itself
+    print("refused:", refused)</code></pre>
+
+<h2 id="configuration">Where things are kept</h2>
+<table>
+<tr><th>What</th><th>Where</th><th>Change with</th></tr>
+<tr><td>Output (default for <code>workflow</code> and <code>Folder</code>)</td><td><code>&lt;data root&gt;/out/</code></td><td><code>configure(data_root=)</code>, <code>VIDRA_DATA</code></td></tr>
+<tr><td>Custom questions</td><td><code>&lt;data root&gt;/prompts.json</code></td><td>the same</td></tr>
+<tr><td>Custom prompts and profiles</td><td><code>&lt;data root&gt;/aggregates.json</code></td><td>the same</td></tr>
+<tr><td>Detector and embedder checkpoints</td><td><code>weights/</code></td><td><code>configure(weights=)</code>, <code>VIDRA_WEIGHTS</code></td></tr>
+<tr><td>CLIP, pyannote, GLiNER, DistilBERT</td><td>Hugging Face's cache</td><td><code>HF_HOME</code></td></tr>
+</table>
+<p>The data root is <code>data/</code> in a checkout, else <code>~/.vidra</code>. Precedence: <code>configure()</code>, environment variables, defaults. <code>VIDRA_DATA</code> and <code>VIDRA_WEIGHTS</code> are not read from <code>.env</code>. Folders starting with <code>_</code> are never listed as videos.</p>
+<p>Logs go to the <code>vidra</code> logger, with no handlers configured. <code>logging.basicConfig(level=logging.INFO)</code> shows each stage; failed database writes are warnings.</p>
+
+<h2 id="hardware">Hardware</h2>
+<p>PyTorch models (CLIP, YOLO, local embedder, pyannote) use CUDA, then <code>mps</code>, then CPU. Whisper uses CUDA or CPU. GLiNER and sentiment run on the CPU. RTX 4060 laptop:</p>
+<table>
+<tr><th>Work</th><th>GPU</th><th>CPU</th></tr>
+<tr><td>Whisper <code>small</code> + pyannote, 205 s of narration</td><td>21 s</td><td>316 s</td></tr>
+<tr><td><code>clip</code>, <code>yolo</code> and <code>objects</code>, 60 s video</td><td>25 s</td><td>52 s</td></tr>
+<tr><td><code>text</code>, 60 s of slides</td><td>13 s</td><td>212 s</td></tr>
+<tr><td>describe, 18 calls of 6 frames, <code>gpt-5.4-mini</code></td><td colspan="2">13 s at concurrency 8; 76 s one at a time</td></tr>
+</table>
+<ul>
+  <li><code>mps</code> is untested. If pyannote fails on a Mac, set <code>PYTORCH_ENABLE_MPS_FALLBACK=1</code> before starting Python. Intel Macs can't install the required PyTorch.</li>
+  <li>Whisper on an NVIDIA GPU needs CUDA 12's cuBLAS and cuDNN (installed by <code>vidra[audio]</code>); without them it is refused before the run, or use <code>device="cpu"</code>.</li>
+  <li>Decoding 3 hours of 720p at one frame per second takes about 2 minutes.</li>
+</ul>
+
+<h2 id="checks">Checking an install</h2>
+<ul>
+  <li><code>python -m vidra.shared.contracts.schemas --check</code>: schemas match the document types.</li>
+  <li><code>video.recreate(..., verify=store)</code>: rebuilds frames and compares them byte for byte (<a href="stages.html#recreate">recreate</a>).</li>
+  <li><code>python docs/pages/build.py --check</code>: docs cover every public function and parameter. <code>--run a.mp4 b.mp4</code> runs every example with free stand-in models.</li>
+</ul>
+<!-- pager -->
+<div class="pager">
+<a href="databases.html"><small>Previous</small>Databases</a>
+</div>
+<!-- /pager -->
+</main>
+</div>
+</body>
+</html>

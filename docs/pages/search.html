@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="docs-root" content="../">
+<title>Search · VIDRA docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/search-index.js"></script>
+<script src="assets/docs.js"></script>
+<!-- /head -->
+</head>
+<body>
+<header class="top">
+<!-- top -->
+<a class="brand" href="../index.html">VIDRA <span>docs</span></a>
+<button class="icon menu" id="menu" type="button" aria-label="Menu">&#9776;</button>
+<div class="spacer"></div>
+<div class="search"><input id="q" type="search" placeholder="Search the docs  ( / )" autocomplete="off" aria-label="Search the docs"><div class="results" id="results"></div></div>
+<button class="icon" id="theme" type="button" aria-label="Light or dark">&#9680;</button>
+<!-- /top -->
+</header>
+<div class="layout">
+<nav class="side" aria-label="Pages">
+<!-- nav -->
+<div class="group">Get started</div>
+<a href="../index.html">Start here</a>
+<a href="concepts.html">Concepts</a>
+<a href="recipes.html">Recipes</a>
+<div class="group">video_rag</div>
+<a href="pipeline.html">The pipeline</a>
+<a href="stages.html">Stages</a>
+<a href="samplers.html">Samplers</a>
+<a href="questions.html">Questions</a>
+<a href="search.html" class="here">Search</a>
+<div class="group">aggregates</div>
+<a href="aggregates.html">Aggregates</a>
+<a href="definitions.html">Custom prompts and profiles</a>
+<div class="group">Bring your own</div>
+<a href="models.html">Models</a>
+<a href="databases.html">Databases</a>
+<div class="group">Reference</div>
+<a href="reference.html">Reference</a>
+<!-- /nav -->
+</nav>
+<main>
+<h1>Search</h1>
+<p class="lede">Find the chunks that match a text query.</p>
+
+<h2 id="basics">Searching</h2>
+<pre><code class="python">from vidra import Folder, LocalEmbedder, Models
+from vidra.video_rag import search
+
+models = Models(embedder=LocalEmbedder())      # the embedder that built the index
+db = Folder("data/out")                         # or Supabase()
+
+moments, notes = search("a customer paying in cash", "shop", models=models, database=db)
+for m in moments:
+    print(m.video_id, m.chunk_id, m.start_ts, m.end_ts, round(m.score, 4))
+    for hit in m.hits:                          # the answers that matched in this chunk
+        print("   ", hit["sampler_id"], hit["content"][:80])</code></pre>
+<p>Search reads a database: the one the run exported to, or a <code>Folder</code> over the output. Use the embedder that built the index; other embedders' units are invisible.</p>
+
+<h2 id="arguments">Arguments</h2>
+<div class="sig">search(query, video_id=None, embedder=None, moments=5, sampler=None, candidates=20,
+       question=None, strategy=None, chunk_ids=None, window=0, after=None, before=None,
+       structured=None, video_ids=None, grids=None, database=None, models=None)
+    -&gt; (list[Moment], list[str])</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>query</code></td><td>required</td><td>The text to find; empty is refused.</td></tr>
+<tr><td><code>video_id</code></td><td>every video</td><td>One id, or a list of ids.</td></tr>
+<tr><td><code>video_ids</code></td><td>none</td><td>A list of ids; same as a list in <code>video_id</code>.</td></tr>
+<tr><td><code>embedder</code></td><td><code>OpenAIEmbedder()</code></td><td>The embedder. Or put it in <code>models</code>.</td></tr>
+<tr><td><code>models</code></td><td>none</td><td>A <code>Models</code>; only <code>embedder</code> is used.</td></tr>
+<tr><td><code>database</code></td><td><code>"supabase"</code></td><td>Where to search: a <code>Database</code>, or a name.</td></tr>
+<tr><td><code>moments</code></td><td><code>5</code></td><td>How many chunks to return.</td></tr>
+<tr><td><code>candidates</code></td><td><code>20</code></td><td>Units ranked before grouping into chunks. Raise it if filters or many samplers leave too few moments.</td></tr>
+<tr><td><code>question</code></td><td>none</td><td>Only this question's answers, from any sampler: <code>"text"</code> matches <code>clip:text</code> and <code>uniform:text</code>.</td></tr>
+<tr><td><code>sampler</code></td><td>none</td><td>Only this answer id: <code>"clip:text"</code>, <code>"yolo"</code>, <code>"transcript"</code>.</td></tr>
+<tr><td><code>strategy</code></td><td>none</td><td>Only this sampler's answers, any question: <code>"clip"</code>.</td></tr>
+<tr><td><code>structured</code></td><td>none</td><td>Exact field values: <code>{"payment": "cash"}</code>. A list field matches if it contains the value.</td></tr>
+<tr><td><code>chunk_ids</code></td><td>none</td><td>Only these chunks.</td></tr>
+<tr><td><code>after</code>, <code>before</code></td><td>none</td><td>Only chunks overlapping this window, in seconds.</td></tr>
+<tr><td><code>window</code></td><td><code>0</code></td><td>With <code>chunk_ids</code> or <code>after</code>/<code>before</code>: widen by this many chunks each side.</td></tr>
+<tr><td><code>grids</code></td><td>none</td><td><code>{video_id: timeline.json path}</code>: read chunk times from the file, not the database.</td></tr>
+</table>
+<pre><code class="python"># only what was read off the screen, between minute 2 and minute 5
+search("the error message", "talk", question="text", after=120, before=300,
+       models=models, database=db)
+
+# only clip's answers to the checkout question, where a card was used
+search("paying", "shop", sampler="clip:checkout", structured={"payment": "card"},
+       models=models, database=db)
+
+# across two videos
+search("a forklift reversing", ["monday", "tuesday"], moments=10,
+       models=models, database=db)</code></pre>
+
+<h2 id="results">What comes back</h2>
+<p>A list of <code>Moment</code>, best first, and a list of notes.</p>
+<table class="params">
+<tr><th><code>Moment</code></th><th>Is</th></tr>
+<tr><td><code>video_id</code></td><td>Which video.</td></tr>
+<tr><td><code>chunk_id</code></td><td>Which chunk of that video.</td></tr>
+<tr><td><code>start_ts</code>, <code>end_ts</code></td><td>The chunk's start and end, in seconds.</td></tr>
+<tr><td><code>score</code></td><td>A rank score for ordering, not a similarity (<a href="#ranking">below</a>).</td></tr>
+<tr><td><code>hits</code></td><td>The matching answers in this chunk, best first.</td></tr>
+<tr><td><code>samplers</code></td><td>The answer ids of the hits.</td></tr>
+<tr><td><code>as_dict()</code></td><td>The moment as plain data.</td></tr>
+</table>
+<p>Each hit has <code>sampler_id</code> (the answer id), <code>sampler</code>, <code>question</code>, <code>content</code> (the embedded text), <code>structured</code> (the fields), <code>dense_rank</code> (vector rank) and <code>text_rank</code> (full-text rank, or <code>None</code>).</p>
+<p><b>Read the notes</b> when results look wrong or empty; they explain why. If nothing is indexed for this embedder at all, search raises <code>MissingArtifact</code> (a <code>FileNotFoundError</code>).</p>
+
+<h2 id="ranking">How ranking works</h2>
+<ol>
+  <li>The query is embedded with the embedder's <code>embed_query</code>.</li>
+  <li>The database ranks <code>candidates</code> units under that embedder, after filters. <code>Supabase</code> fuses vector similarity and Postgres full-text search by reciprocal rank: full text catches exact words and names, vectors catch paraphrases. <code>Folder</code> uses vectors only.</li>
+  <li>Units are grouped by chunk. A chunk scores <code>1/(10 + best) + 0.5/(10 + second)</code>, so more answers alone don't win.</li>
+</ol>
+<p>Filters leave fewer units per chunk, so scores drop; the notes say so.</p>
+
+<h2 id="tips">Getting better results</h2>
+<ul>
+  <li>Describe the moment: "a man hands the cashier a banknote" beats "cash payment".</li>
+  <li>Several samplers give each chunk several accounts; agreement lifts the right chunk.</li>
+  <li>For exact filtering, add a question with a <code>one_of</code> field and use <code>structured=</code> (<a href="questions.html#fields">fields</a>).</li>
+  <li>Use <code>Supabase</code> for names, numbers and exact phrases; <code>Folder</code> has no full-text search.</li>
+</ul>
+
+<h2 id="aggregates">Searching summaries, chapters and people</h2>
+<p>To find a video by its summary, a chapter, or a linked person or object, use <a href="aggregates.html#search"><code>aggregates.search</code></a>.</p>
+<!-- pager -->
+<div class="pager">
+<a href="questions.html"><small>Previous</small>Questions</a>
+<a class="next" href="aggregates.html"><small>Next</small>Aggregates</a>
+</div>
+<!-- /pager -->
+</main>
+</div>
+</body>
+</html>

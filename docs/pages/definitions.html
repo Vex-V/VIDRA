@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="docs-root" content="../">
+<title>Custom prompts and profiles · VIDRA docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/search-index.js"></script>
+<script src="assets/docs.js"></script>
+<!-- /head -->
+</head>
+<body>
+<header class="top">
+<!-- top -->
+<a class="brand" href="../index.html">VIDRA <span>docs</span></a>
+<button class="icon menu" id="menu" type="button" aria-label="Menu">&#9776;</button>
+<div class="spacer"></div>
+<div class="search"><input id="q" type="search" placeholder="Search the docs  ( / )" autocomplete="off" aria-label="Search the docs"><div class="results" id="results"></div></div>
+<button class="icon" id="theme" type="button" aria-label="Light or dark">&#9680;</button>
+<!-- /top -->
+</header>
+<div class="layout">
+<nav class="side" aria-label="Pages">
+<!-- nav -->
+<div class="group">Get started</div>
+<a href="../index.html">Start here</a>
+<a href="concepts.html">Concepts</a>
+<a href="recipes.html">Recipes</a>
+<div class="group">video_rag</div>
+<a href="pipeline.html">The pipeline</a>
+<a href="stages.html">Stages</a>
+<a href="samplers.html">Samplers</a>
+<a href="questions.html">Questions</a>
+<a href="search.html">Search</a>
+<div class="group">aggregates</div>
+<a href="aggregates.html">Aggregates</a>
+<a href="definitions.html" class="here">Custom prompts and profiles</a>
+<div class="group">Bring your own</div>
+<a href="models.html">Models</a>
+<a href="databases.html">Databases</a>
+<div class="group">Reference</div>
+<a href="reference.html">Reference</a>
+<!-- /nav -->
+</nav>
+<main>
+<h1>Custom prompts and profiles</h1>
+<p class="lede">Your own aggregators: a <b>prompt</b> asks the LLM about the whole video; a <b>linking profile</b> follows one kind of thing across chunks.</p>
+<p>The built-in <code>summary</code>, <code>chapters</code>, <code>events</code> are prompts and <code>entities:people</code>, <code>entities:objects</code>, <code>entities:text</code> are profiles. Yours are saved in <code>aggregates.json</code> under the data root and run the same way.</p>
+
+<h2 id="prompts">Prompts</h2>
+<div class="sig">aggregates.add_prompt(name, instruction, fields, *, kind="fold", key=None,
+                      fold_instruction=None, about="") -&gt; dict</div>
+<pre><code class="python">from vidra import aggregates
+
+aggregates.add_prompt(
+    "incident_report",
+    "Write an incident report for this video.",
+    fields={
+        "report":   {"type": "text", "about": "what happened, in order"},
+        "severity": {"type": "text", "about": "how serious it was",
+                     "one_of": ["none", "minor", "major"]},
+    },
+    kind="fold",
+)
+
+aggregates.custom(name="incident_report", input=seen,
+                  out="data/out/shop/answers/incident_report.json", models=models)</code></pre>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>name</code></td><td>Lowercase letters, digits, <code>_</code>, <code>-</code>, starting with a letter. Not a built-in, <code>stats</code>, <code>speakers</code>, <code>coverage</code>, <code>ner</code>, <code>sentiment</code> or <code>entities</code>.</td></tr>
+<tr><td><code>instruction</code></td><td>What the LLM is told; the chunks' text follows, tagged with chunk ids.</td></tr>
+<tr><td><code>fields</code></td><td>The answer's fields, as for questions: <code>type</code>, <code>about</code>, <code>one_of</code>, <code>of</code> (<a href="questions.html#fields">fields</a>).</td></tr>
+<tr><td><code>kind</code></td><td><code>fold</code>, <code>spans</code> or <code>items</code> (<a href="#kinds">below</a>).</td></tr>
+<tr><td><code>key</code></td><td>For <code>spans</code> and <code>items</code>: the answer's list name (default: the kind).</td></tr>
+<tr><td><code>fold_instruction</code></td><td>For <code>fold</code>: the instruction for summarising each intermediate group.</td></tr>
+<tr><td><code>about</code></td><td>One-line description.</td></tr>
+</table>
+<p>Returns the stored definition. Re-adding a name replaces it.</p>
+
+<h3 id="kinds">The three kinds</h3>
+<table>
+<tr><th>Kind</th><th>Answers</th><th>How</th><th>Like</th></tr>
+<tr><td><code>fold</code></td><td>one answer for the whole video</td><td>Rows are summarised in groups, then the summaries, until one is left. Any length.</td><td><code>summary</code></td></tr>
+<tr><td><code>spans</code></td><td>a list of consecutive parts, each filling <code>fields</code>, with <code>chunk_ids</code>, <code>start_ts</code>, <code>end_ts</code></td><td>The embedder places boundaries; the LLM fills each part's fields. Takes <code>max_spans</code>, <code>min_span_s</code> and an embedder.</td><td><code>chapters</code></td></tr>
+<tr><td><code>items</code></td><td>a list of things, each filling <code>fields</code>, with <code>chunk_id</code>, <code>start_ts</code>, <code>end_ts</code></td><td>Read 100 chunks at a time; each item cites its chunk, and times come from the grid.</td><td><code>events</code></td></tr>
+</table>
+<pre><code class="python">aggregates.add_prompt(
+    "handovers",
+    "List every moment something is handed from one person to another.",
+    fields={"what": {"type": "text", "about": "what was handed over"},
+            "between": {"type": "text", "about": "who gave it to whom"}},
+    kind="items", key="handovers")
+
+aggregates.add_prompt(
+    "acts",
+    "Divide this performance into acts.",
+    fields={"title": {"type": "text", "about": "a short title"},
+            "mood": {"type": "text", "about": "the mood", "one_of": ["calm", "tense", "comic"]}},
+    kind="spans", key="acts")
+
+aggregates.custom(name="acts", input=both, out=D / "answers" / "acts.json",
+                  models=models, max_spans=4)</code></pre>
+
+<h3 id="running">Running a prompt</h3>
+<ul>
+  <li><code>aggregates.custom(name=..., input=..., out=..., models=...)</code> (<a href="aggregates.html#custom">custom</a>).</li>
+  <li>As a keyword of <code>aggregates.aggregate</code>: <code>aggregate(out=..., incident_report=seen)</code>.</li>
+  <li><code>workflow</code> at <code>tier="llm"</code> runs every added prompt.</li>
+</ul>
+<p>Editing a prompt recomputes its answers on the next run.</p>
+
+<h2 id="profiles">Linking profiles</h2>
+<p>Links the entries of one list field across chunks (each person in <code>people</code>) into entities, then the LLM writes an account of each. Linking uses embeddings and rules, not the LLM.</p>
+<div class="sig">aggregates.add_profile(name, field, instruction, fields, *, identity=None, story=None,
+                       transcript=None, threshold=None, rule=None, mutual=None, check=None,
+                       min_appearances=None, max_narratives=None, weights=None,
+                       attributes=None, near=None, shared=None, about="") -&gt; dict</div>
+<pre><code class="python">aggregates.add_profile(
+    "tools", "objects",
+    "These may be the same object, seen in different chunks. Say what it is and who used it.",
+    fields={"use": {"type": "text", "about": "who used it, and for what"}},
+    identity=["object", "appearance"],
+    story=["context"],
+)
+
+tools = video.sightings(profile="tools", answers=["objects"])
+aggregates.entities(profile="tools", input=tools, out=D / "answers" / "tools.json",
+                    models=models)            # answer id: entities:tools</code></pre>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>name</code></td><td>required</td><td>Runs as <code>entities:&lt;name&gt;</code>.</td></tr>
+<tr><td><code>field</code></td><td>required</td><td>The list field to link, e.g. <code>people</code>, <code>objects</code>, or one of your question's.</td></tr>
+<tr><td><code>instruction</code></td><td>required</td><td>The account instruction; numbered observations follow in time order.</td></tr>
+<tr><td><code>fields</code></td><td>required</td><td>The account's fields.</td></tr>
+<tr><td><code>identity</code></td><td><code>[]</code></td><td>Keys that identify an entry (<code>["appearance", "clothing"]</code>). Without them the whole entry is compared and <code>threshold</code> is required.</td></tr>
+<tr><td><code>story</code></td><td><code>[]</code></td><td>Extra keys the account reads (<code>["role", "action"]</code>).</td></tr>
+<tr><td><code>transcript</code></td><td><code>False</code></td><td>Also give the account the transcript of the entity's chunks.</td></tr>
+<tr><td><code>threshold</code></td><td>read off the video</td><td>Fixed cosine similarity (0 to 1) to link above. Required without <code>identity</code>; refused with <code>weights</code> or <code>attributes</code>.</td></tr>
+<tr><td><code>rule</code></td><td><code>"max"</code></td><td>How the threshold is set from pairs known to differ (two entries in one answer): <code>"max"</code> above the most similar pair; <code>"q95"</code> above the 95th percentile (links more).</td></tr>
+<tr><td><code>mutual</code></td><td><code>True</code></td><td>Link only mutual best matches.</td></tr>
+<tr><td><code>check</code></td><td><code>"flag"</code></td><td><code>"flag"</code>: the LLM marks contradicting observations as <code>doubts</code>. <code>"off"</code>: no check.</td></tr>
+<tr><td><code>min_appearances</code></td><td><code>2</code></td><td>Minimum sightings for an account.</td></tr>
+<tr><td><code>max_narratives</code></td><td><code>12</code></td><td>Maximum accounts (up to 50).</td></tr>
+<tr><td><code>weights</code></td><td>none</td><td><code>{identity key: weight}</code>: embed each key separately and weight them.</td></tr>
+<tr><td><code>attributes</code></td><td>none</td><td><code>{key: weight}</code> for fixed-vocabulary keys (<code>gender</code>, <code>top_color</code>) whose agreement also counts.</td></tr>
+<tr><td><code>near</code></td><td>none</td><td>Attribute values that count as nearly equal: <code>[["dark_blue", "black"], ["jacket", "coat"]]</code>.</td></tr>
+<tr><td><code>shared</code></td><td>none</td><td><code>{key: weight}</code>: credit for shared accessories or distinguishing words.</td></tr>
+<tr><td><code>about</code></td><td><code>""</code></td><td>One-line description.</td></tr>
+</table>
+<p>The built-in <code>people</code> profile uses <code>weights</code>, <code>attributes</code>, <code>near</code>, <code>shared</code> and <code>rule="q95"</code>; <code>objects</code> and <code>text</code> use one embedding and <code>rule="max"</code>. <code>aggregates.definition("entities:people")</code> shows one in full.</p>
+<p>In <code>aggregate(...)</code>, write the colon as an underscore: <code>entities_tools=tools</code>.</p>
+
+<h2 id="manage">Listing and removing</h2>
+<pre><code class="python">aggregates.definition("incident_report")     # the stored entry, with "name", "kind", "builtin"
+aggregates.definition("entities:people")     # a profile; its kind is "link"
+aggregates.available()                       # every aggregator id, yours included
+aggregates.remove_prompt("incident_report")  # answers already written are kept
+aggregates.remove_profile("tools")</code></pre>
+<p>Changing a built-in raises <code>aggregates.ProtectedDefinition</code>. Invalid definitions raise <code>aggregates.DefinitionError</code> when added; <code>.problems</code> lists each issue.</p>
+
+<h2 id="example">Complete example</h2>
+<!-- example custom_aggregate.py -->
+<div class="file">docs/pages/examples/custom_aggregate.py</div>
+<pre><code class="python">"""Aggregators of your own: a prompt run over the whole video, and a linking
+profile that follows one kind of thing across chunks.
+
+    python custom_aggregate.py data/out/&lt;video_id&gt;
+"""
+
+import sys
+from pathlib import Path
+
+import vidra
+from vidra import LocalEmbedder, Models, OpenAI, aggregates
+
+vidra.configure(env_file=".env")
+D = Path(sys.argv[1])
+models = Models(llm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+video = aggregates.record(timeline=D / "timeline.json",
+                          transcript=D / "transcript.json",
+                          descriptions=D / "descriptions.json")
+told = video.excerpt(transcript=True, answers={"clip": ["summary"]})
+
+# fold: one answer over the whole video.
+aggregates.add_prompt(
+    "incident_report",
+    "Write an incident report for this video.",
+    fields={
+        "report": {"type": "text", "about": "what happened, in order"},
+        "severity": {"type": "text", "about": "how serious it was",
+                     "one_of": ["none", "minor", "major"]},
+        "people_involved": {"type": "list", "about": "each person involved, by appearance"},
+    },
+    kind="fold",
+    about="an incident report with a severity",
+)
+
+# items: discrete things, each citing the chunk it is in.
+aggregates.add_prompt(
+    "handovers",
+    "List every moment something is handed from one person to another.",
+    fields={
+        "what": {"type": "text", "about": "what was handed over"},
+        "between": {"type": "text", "about": "who gave it to whom, by appearance"},
+    },
+    kind="items",
+    key="handovers",
+)
+
+aggregates.custom(name="incident_report", input=told,
+                  out=D / "answers" / "incident_report.json", models=models)
+report = aggregates.load(D / "answers" / "incident_report.json").payload
+print(report["severity"], "-", report["report"][:200])
+
+# Linking: the same object across chunks, from the `objects` field of the
+# `objects` sampler's answers (video_rag with sampler="objects").
+aggregates.add_profile(
+    "tools", "objects",
+    "These may be the same object, seen in different chunks. Say what it is "
+    "and who used it for what.",
+    fields={"use": {"type": "text", "about": "who used it, and for what"}},
+    identity=["object", "appearance"],     # what decides that two entries are one
+    story=["context"],                     # what the account reads besides
+)
+
+# All of them run in the pipeline too, each a keyword named after it
+# (`entities:tools` is spelled `entities_tools`).
+inputs = {"incident_report": told, "handovers": told}
+if "objects" in video.answer_ids():
+    inputs["entities_tools"] = video.sightings(profile="tools", answers=["objects"])
+done = aggregates.aggregate(out=D / "aggregates", previous=D / "aggregates",
+                            models=models, **inputs)
+print("wrote:", sorted(done.artifacts))
+print(aggregates.definition("handovers"))</code></pre>
+<!-- /example -->
+<!-- pager -->
+<div class="pager">
+<a href="aggregates.html"><small>Previous</small>Aggregates</a>
+<a class="next" href="models.html"><small>Next</small>Models</a>
+</div>
+<!-- /pager -->
+</main>
+</div>
+</body>
+</html>

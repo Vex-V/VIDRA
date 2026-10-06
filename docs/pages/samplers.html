@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="docs-root" content="../">
+<title>Samplers · VIDRA docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/search-index.js"></script>
+<script src="assets/docs.js"></script>
+<!-- /head -->
+</head>
+<body>
+<header class="top">
+<!-- top -->
+<a class="brand" href="../index.html">VIDRA <span>docs</span></a>
+<button class="icon menu" id="menu" type="button" aria-label="Menu">&#9776;</button>
+<div class="spacer"></div>
+<div class="search"><input id="q" type="search" placeholder="Search the docs  ( / )" autocomplete="off" aria-label="Search the docs"><div class="results" id="results"></div></div>
+<button class="icon" id="theme" type="button" aria-label="Light or dark">&#9680;</button>
+<!-- /top -->
+</header>
+<div class="layout">
+<nav class="side" aria-label="Pages">
+<!-- nav -->
+<div class="group">Get started</div>
+<a href="../index.html">Start here</a>
+<a href="concepts.html">Concepts</a>
+<a href="recipes.html">Recipes</a>
+<div class="group">video_rag</div>
+<a href="pipeline.html">The pipeline</a>
+<a href="stages.html">Stages</a>
+<a href="samplers.html" class="here">Samplers</a>
+<a href="questions.html">Questions</a>
+<a href="search.html">Search</a>
+<div class="group">aggregates</div>
+<a href="aggregates.html">Aggregates</a>
+<a href="definitions.html">Custom prompts and profiles</a>
+<div class="group">Bring your own</div>
+<a href="models.html">Models</a>
+<a href="databases.html">Databases</a>
+<div class="group">Reference</div>
+<a href="reference.html">Reference</a>
+<!-- /nav -->
+</nav>
+<main>
+<h1>Samplers</h1>
+<p class="lede">Which frames of each chunk are kept and sent to the vision model.</p>
+
+<h2 id="how">How sampling works</h2>
+<ol>
+  <li>The video is decoded once, however many samplers run.</li>
+  <li>Frames are <b>offered</b> at <code>per_second</code> (default 1), by media time, so variable frame rates don't matter.</li>
+  <li>Each sampler keeps the offered frames its strategy picks. The first frame of each chunk is always kept.</li>
+  <li><code>min_interval_s</code> and <code>max_per_chunk</code> apply before the strategy, so a frame they rule out costs no model time.</li>
+  <li>Samplers reset at each chunk boundary: "changed" means changed within the chunk.</li>
+  <li>Kept frames go to <code>store/</code> (one file even if two samplers keep it) and are listed in <code>manifest.json</code>.</li>
+</ol>
+<p>Pass samplers to <code>video_rag(sampler=...)</code>, or to <a href="stages.html#video"><code>video.video</code></a> along with their settings.</p>
+
+<h2 id="list">The samplers</h2>
+<table>
+<tr><th>Sampler</th><th>Keeps a frame when</th><th>Model</th><th>Install</th><th>Its question answers</th></tr>
+<tr><td><code>uniform</code></td><td>it is every <code>every_n</code>-th offered frame</td><td>none</td><td>core</td><td>a scene description</td></tr>
+<tr><td><code>clip</code></td><td>the whole picture has changed</td><td>CLIP</td><td><code>[local]</code></td><td>a scene description</td></tr>
+<tr><td><code>yolo</code></td><td>the people in view have changed</td><td>YOLO + CLIP</td><td><code>[local]</code></td><td>one entry per person</td></tr>
+<tr><td><code>objects</code></td><td>the objects you named have changed</td><td>YOLO-World</td><td><code>[local]</code></td><td>one entry per object</td></tr>
+<tr><td><code>text</code></td><td>the text on screen has changed</td><td>EasyOCR's detector</td><td><code>[local]</code></td><td>each piece of text, transcribed</td></tr>
+</table>
+
+<h3 id="uniform">uniform</h3>
+<p>Keeps every <code>every_n</code>-th offered frame, counted from each chunk's start. No model. At <code>per_second=1</code>, <code>every_n=5</code> is one frame every 5 s; for a fixed interval in seconds use <code>min_interval_s</code>.</p>
+<p>For even coverage, or to ask something on a schedule: <code>uniform:text</code> reads the screen periodically with no OCR.</p>
+<table class="params"><tr><th>Setting</th><th>Default</th></tr><tr><td><code>every_n</code></td><td><code>1</code>: every offered frame</td></tr></table>
+
+<h3 id="clip">clip</h3>
+<p>Embeds each frame with CLIP (<code>openai/clip-vit-base-patch32</code>) and keeps it when its similarity to the <i>last kept</i> frame drops below <code>threshold</code>, so slow pans still trigger once they drift far enough. The general-purpose choice.</p>
+<table class="params"><tr><th>Setting</th><th>Default</th><th>Effect</th></tr><tr><td><code>threshold</code></td><td><code>0.96</code></td><td>Lower keeps fewer frames.</td></tr></table>
+
+<h3 id="yolo">yolo</h3>
+<p>Finds people with YOLO (<code>yolo11n.pt</code>), embeds each person's crop with CLIP, and keeps the frame when someone in view no longer matches anyone in the last kept frame. People leaving don't trigger it. Crowds trigger often; pair with <code>min_interval_s</code>.</p>
+<p>Its question returns one entry per person: <code>appearance</code>, <code>clothing</code>, <code>role</code>, <code>action</code> and fixed-vocabulary attributes (gender, age group, hair, top and bottom colour and type, accessories). <code>entities:people</code> links these across chunks.</p>
+<table class="params"><tr><th>Setting</th><th>Default</th><th>Effect</th></tr><tr><td><code>threshold</code></td><td><code>0.83</code></td><td>Lower keeps fewer frames.</td></tr></table>
+
+<h3 id="objects">objects</h3>
+<p>Detects the objects in <code>vocabulary</code> with YOLO-World (<code>yolov8s-worldv2.pt</code>) and keeps the frame when detections no longer match the last kept frame's by class and position. Its question is told the vocabulary and returns one entry per object (<code>object</code>, <code>appearance</code>, <code>context</code>).</p>
+<table class="params">
+<tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>vocabulary</code></td><td>shopping bag, plastic bag, shopping cart, shopping basket, cardboard box, bottle, grocery item, cash register</td><td>What to detect. <b>Set it for your footage</b>; a mismatched list finds half as much and mislabels.</td></tr>
+<tr><td><code>confidence</code></td><td><code>0.30</code></td><td>Minimum detection confidence.</td></tr>
+<tr><td><code>threshold</code></td><td><code>0.30</code></td><td>Lower keeps fewer frames.</td></tr>
+</table>
+
+<h3 id="text">text</h3>
+<p>Locates text with EasyOCR's detector (nothing is read here) and keeps the frame when the text layout changes. Its question transcribes each piece of text with its context. For slides, screens and signs.</p>
+<p>The most expensive sampler: the detector is ~98% of its time. If text changes on a schedule, <code>uniform:text</code> gets the same result without it.</p>
+<table class="params">
+<tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>languages</code></td><td><code>["en"]</code></td><td>EasyOCR language codes, e.g. <code>["en", "de"]</code>.</td></tr>
+<tr><td><code>threshold</code></td><td><code>0.92</code></td><td>Lower keeps fewer frames.</td></tr>
+</table>
+
+<h2 id="settings">Settings</h2>
+<table>
+<tr><th>Setting</th><th>Read by</th><th>Default</th></tr>
+<tr><td><code>per_second</code></td><td>all (what is offered)</td><td><code>1.0</code></td></tr>
+<tr><td><code>min_interval_s</code></td><td>all</td><td><code>0.0</code></td></tr>
+<tr><td><code>max_per_chunk</code></td><td>all</td><td>none</td></tr>
+<tr><td><code>every_n</code></td><td><code>uniform</code></td><td><code>1</code></td></tr>
+<tr><td><code>threshold</code></td><td><code>clip</code>, <code>yolo</code>, <code>objects</code>, <code>text</code></td><td>each sampler's own</td></tr>
+<tr><td><code>vocabulary</code></td><td><code>objects</code></td><td>shop items</td></tr>
+<tr><td><code>confidence</code></td><td><code>objects</code></td><td><code>0.30</code></td></tr>
+<tr><td><code>languages</code></td><td><code>text</code></td><td><code>["en"]</code></td></tr>
+</table>
+<p>A setting no chosen sampler reads is refused. <code>video.SAMPLER_SETTINGS</code> is this table as data: <code>{setting: (samplers)}</code>. A value applies to every sampler that reads it: <code>threshold=0.9</code> with <code>clip,yolo</code> sets both.</p>
+<pre><code class="python">from vidra.video_rag import video
+
+video.video(D / "media.json", D / "timeline.json", D / "manifest.json", store=D / "store",
+            sampler="clip,objects", threshold=0.9,
+            vocabulary=["forklift", "pallet", "hard hat"], confidence=0.4,
+            min_interval_s=2.0, max_per_chunk=5)</code></pre>
+
+<h3 id="thresholds">Choosing a threshold</h3>
+<p>Thresholds don't transfer between videos. <code>clip</code> at 0.96 on three similar shop videos:</p>
+<table>
+<tr><th>Video</th><th>Frames kept</th><th>Typical similarity, 1 s apart</th></tr>
+<tr><td>test.mp4</td><td>13.4%</td><td>0.9868</td></tr>
+<tr><td>test2.mp4</td><td>18.0%</td><td>0.9895</td></tr>
+<tr><td>test1.mp4</td><td>59.2%</td><td>0.9605</td></tr>
+</table>
+<p>Busier footage keeps more. <b>To control cost, use <code>min_interval_s</code> or <code>max_per_chunk</code></b>: they keep the most-changed frames and even out chunks. A lower threshold leaves busy chunks with many frames and quiet ones with one.</p>
+
+<h2 id="specs">Sampler specs</h2>
+<p>The <code>sampler</code> argument names samplers and, optionally, their questions:</p>
+<table>
+<tr><th>Spec</th><th>Means</th><th>Answer ids</th></tr>
+<tr><td><code>clip</code></td><td>clip's frames, clip's own question</td><td><code>clip</code></td></tr>
+<tr><td><code>uniform:text</code></td><td>every Nth frame, asked to read the screen</td><td><code>uniform:text</code></td></tr>
+<tr><td><code>yolo:overview</code></td><td>frames where people changed, as short prose</td><td><code>yolo:overview</code></td></tr>
+<tr><td><code>clip:[text,scene]</code></td><td>one pass, two questions</td><td><code>clip:text</code>, <code>clip:scene</code></td></tr>
+<tr><td><code>clip:text+scene</code></td><td>the same, without brackets</td><td><code>clip:text</code>, <code>clip:scene</code></td></tr>
+<tr><td><code>clip,yolo</code></td><td>two samplers, one decode</td><td><code>clip</code>, <code>yolo</code></td></tr>
+<tr><td><code>clip,clip:checkout</code></td><td>one clip pass, its own question and <code>checkout</code></td><td><code>clip</code>, <code>clip:checkout</code></td></tr>
+</table>
+<ul>
+  <li>Specs naming the same sampler merge into one pass: <code>clip:text,clip:scene</code> is <code>clip:[text,scene]</code>. An extra question on the same frames costs one more call per chunk.</li>
+  <li>Questions must exist (built in or <a href="questions.html#add">added</a>); unknown ones are refused before decoding.</li>
+  <li>Question names can't contain <code>,</code> <code>:</code> <code>[</code> <code>]</code> <code>+</code>.</li>
+  <li>A list also works: <code>sampler=["clip", "uniform:text"]</code>.</li>
+</ul>
+
+<h2 id="cost">Cost and hardware</h2>
+<p>RTX 4060 laptop, one frame per second:</p>
+<table>
+<tr><th>Samplers</th><th>Video</th><th>GPU</th><th>CPU</th></tr>
+<tr><td><code>uniform</code></td><td>any</td><td colspan="2">decode only: ~2 min for 3 hours of 720p</td></tr>
+<tr><td><code>clip</code>, <code>yolo</code>, <code>objects</code> together</td><td>60 s</td><td>25 s</td><td>52 s</td></tr>
+<tr><td><code>text</code></td><td>60 s of slides</td><td>13 s</td><td>212 s</td></tr>
+</table>
+<p>Models run on CUDA, then <code>mps</code>, then CPU. Weights download on first use to <code>weights/</code> (or <code>VIDRA_WEIGHTS</code>); CLIP uses Hugging Face's cache.</p>
+
+<h2 id="choosing">Which to use</h2>
+<table>
+<tr><th>Footage</th><th>Try</th></tr>
+<tr><td>General, unknown content</td><td><code>clip</code></td></tr>
+<tr><td>People matter (retail, security)</td><td><code>clip,yolo</code>, with <code>min_interval_s</code> for crowds</td></tr>
+<tr><td>Specific equipment or products</td><td><code>objects</code> with your <code>vocabulary</code></td></tr>
+<tr><td>Slides, screen recordings</td><td><code>text</code>, or <code>uniform:text</code> to skip OCR</td></tr>
+<tr><td>Cheapest, or no GPU</td><td><code>uniform</code> with <code>every_n</code> 5 to 10</td></tr>
+<tr><td>Short prose per chunk</td><td>any sampler with <code>:overview</code></td></tr>
+</table>
+<!-- pager -->
+<div class="pager">
+<a href="stages.html"><small>Previous</small>Stages</a>
+<a class="next" href="questions.html"><small>Next</small>Questions</a>
+</div>
+<!-- /pager -->
+</main>
+</div>
+</body>
+</html>

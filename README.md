@@ -17,13 +17,23 @@ folder), or subclass a base class to bring your own.
 
 ## Documentation
 
-| | How it works | Functions, with examples |
-|---|---|---|
-| `video_rag` | [docs/video_rag/how-it-works.md](docs/video_rag/how-it-works.md) | [docs/video_rag/functions.md](docs/video_rag/functions.md) |
-| `aggregates` | [docs/aggregates/how-it-works.md](docs/aggregates/how-it-works.md) | [docs/aggregates/functions.md](docs/aggregates/functions.md) |
+The full docs are HTML pages in [`docs/`](docs/): open
+[`docs/index.html`](docs/index.html) in a browser. They work offline, straight
+from disk, with search across every page.
 
-Models and databases, including writing your own, are covered in
-[the video_rag functions](docs/video_rag/functions.md#models).
+| Page | Covers |
+|---|---|
+| Start here | install, keys, a quickstart |
+| Concepts | chunks, the video's folder, answer ids, reuse |
+| Recipes | complete scripts, also in [`docs/pages/examples/`](docs/pages/examples/) |
+| The pipeline, Stages | `video_rag()`, `workflow`, and each stage with every setting |
+| Samplers, Questions, Search | which frames are kept, what the vision model is asked, finding moments |
+| Aggregates, Custom prompts | whole-video answers, and adding your own |
+| Models, Databases | the ready-made ones, and writing your own |
+| Reference | every file's fields, every error, hardware |
+
+`python docs/pages/build.py --check` confirms the docs mention every public function
+and parameter.
 
 ## Requirements
 
@@ -133,8 +143,9 @@ PyTorch in `requirements.txt`.
 - `python -m vidra.shared.contracts.schemas --check` confirms the JSON
   Schemas in `db/json/` match the document types.
 - `video.recreate(...)` rebuilds a video's frames from its manifest and
-  compares them byte for byte (see
-  [the video_rag functions](docs/video_rag/functions.md#rebuilding-the-frame-store)).
+  compares them byte for byte.
+- `python docs/pages/build.py --run a.mp4 b.mp4` runs every docs example on two
+  videos, with free stand-ins for the hosted models.
 
 The full library check passed on Python 3.11, 3.12, 3.13 and 3.14.
 
@@ -146,7 +157,7 @@ vidra/
   video_rag/      media, audio, boundaries, video, cut, describe, embed, retrieve
   aggregates/     records and inputs, the aggregators, the pipeline, combining videos
   shared/         config, errors, document types, storage, models
-docs/             how each tier works, and its functions
+docs/             index.html to open; pages/ holds the rest, examples and build.py
 db/               Supabase SQL, generated JSON Schemas
 data/             default output location; not in git
 ```

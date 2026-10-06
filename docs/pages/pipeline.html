@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="docs-root" content="../">
+<title>The pipeline · VIDRA docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/search-index.js"></script>
+<script src="assets/docs.js"></script>
+<!-- /head -->
+</head>
+<body>
+<header class="top">
+<!-- top -->
+<a class="brand" href="../index.html">VIDRA <span>docs</span></a>
+<button class="icon menu" id="menu" type="button" aria-label="Menu">&#9776;</button>
+<div class="spacer"></div>
+<div class="search"><input id="q" type="search" placeholder="Search the docs  ( / )" autocomplete="off" aria-label="Search the docs"><div class="results" id="results"></div></div>
+<button class="icon" id="theme" type="button" aria-label="Light or dark">&#9680;</button>
+<!-- /top -->
+</header>
+<div class="layout">
+<nav class="side" aria-label="Pages">
+<!-- nav -->
+<div class="group">Get started</div>
+<a href="../index.html">Start here</a>
+<a href="concepts.html">Concepts</a>
+<a href="recipes.html">Recipes</a>
+<div class="group">video_rag</div>
+<a href="pipeline.html" class="here">The pipeline</a>
+<a href="stages.html">Stages</a>
+<a href="samplers.html">Samplers</a>
+<a href="questions.html">Questions</a>
+<a href="search.html">Search</a>
+<div class="group">aggregates</div>
+<a href="aggregates.html">Aggregates</a>
+<a href="definitions.html">Custom prompts and profiles</a>
+<div class="group">Bring your own</div>
+<a href="models.html">Models</a>
+<a href="databases.html">Databases</a>
+<div class="group">Reference</div>
+<a href="reference.html">Reference</a>
+<!-- /nav -->
+</nav>
+<main>
+<h1>The pipeline</h1>
+<p class="lede"><code>video_rag()</code> runs every stage on one video. <code>workflow</code> runs it, then the aggregators.</p>
+
+<h2 id="video-rag">video_rag()</h2>
+<div class="sig">from vidra.video_rag import video_rag
+
+video_rag(source, into, video_id=None, on_conflict="new", name=None, recorded_at=None,
+          policy="uniform", use_video=True, use_audio=True, sampler="uniform",
+          vlm=None, embedder=None, resume=True, database=None, on_step=None,
+          models=None) -&gt; Run</div>
+<pre><code class="python">from vidra import LocalEmbedder, Models, OpenAI, Supabase
+from vidra.video_rag import video_rag
+
+models = Models(vlm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
+                models=models, database=Supabase())</code></pre>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>source</code></td><td>required</td><td>The video file.</td></tr>
+<tr><td><code>into</code></td><td>required</td><td>Parent folder; output goes to <code>into/&lt;video_id&gt;/</code>.</td></tr>
+<tr><td><code>video_id</code></td><td>filename stem</td><td>The folder name (<a href="concepts.html#video-id">Video ids</a>).</td></tr>
+<tr><td><code>on_conflict</code></td><td><code>"new"</code></td><td>If a <i>different</i> file holds the id: <code>"new"</code> mints <code>shop-2</code>, <code>"replace"</code> deletes the old folder, <code>"refuse"</code> raises <code>media.VideoIdTaken</code>.</td></tr>
+<tr><td><code>name</code></td><td>the filename</td><td>Display name, stored in <code>media.json</code>; kept by later runs that omit it.</td></tr>
+<tr><td><code>recorded_at</code></td><td>container tags</td><td>Recording time, a <code>datetime</code> or ISO 8601 string; kept by later runs that omit it.</td></tr>
+<tr><td><code>policy</code></td><td><code>"uniform"</code></td><td>Where chunks are cut: <code>uniform</code>, <code>scene</code>, <code>vad</code>, <code>speaker</code> (<a href="concepts.html#grid">the grid</a>).</td></tr>
+<tr><td><code>use_video</code></td><td><code>True</code></td><td>Read the picture (<code>video</code> and <code>describe</code>).</td></tr>
+<tr><td><code>use_audio</code></td><td><code>True</code></td><td>Read the soundtrack (<code>audio</code> and <code>cut</code>). Needs <code>vidra[audio]</code>.</td></tr>
+<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>Which frames to keep and what to ask, e.g. <code>"clip,yolo:overview"</code> (<a href="samplers.html#specs">specs</a>).</td></tr>
+<tr><td><code>vlm</code></td><td><code>OpenAI()</code></td><td>The vision model. Or set it in <code>models</code>.</td></tr>
+<tr><td><code>embedder</code></td><td><code>OpenAIEmbedder()</code></td><td>The embedder; search must use the same one. Or set it in <code>models</code>.</td></tr>
+<tr><td><code>resume</code></td><td><code>True</code></td><td>Reuse still-current descriptions and vectors. <code>False</code> redoes them.</td></tr>
+<tr><td><code>database</code></td><td>none</td><td>Where to copy every artifact: a <code>Database</code>, or <code>"supabase"</code> / <code>"folder"</code>.</td></tr>
+<tr><td><code>on_step</code></td><td>none</td><td>Progress callback (<a href="#progress">below</a>).</td></tr>
+<tr><td><code>models</code></td><td>none</td><td>A <code>Models</code> with <code>vlm</code> and <code>embedder</code>. Giving a role here and as a keyword is refused.</td></tr>
+</table>
+<p>The policy, samplers, questions, model keys and database are all checked before the first stage; every problem is raised together as one <code>Refused</code>.</p>
+
+<h3 id="run">What it returns: Run</h3>
+<table class="params">
+<tr><th>Attribute</th><th>Is</th></tr>
+<tr><td><code>video_id</code></td><td>The id used, which may differ from the one asked for.</td></tr>
+<tr><td><code>folder</code></td><td>The video's folder, a <code>Path</code>.</td></tr>
+<tr><td><code>steps</code></td><td>Each stage's receipt (<code>Produced</code>), in order: <code>.component</code>, <code>.artifacts</code>, <code>.stats</code>, <code>.skipped</code>.</td></tr>
+<tr><td><code>skipped</code></td><td><code>{stage: why}</code> for stages that did not run.</td></tr>
+<tr><td><code>problems</code></td><td>Failed database writes. The files are still written.</td></tr>
+<tr><td><code>artifacts()</code></td><td><code>{artifact: path}</code> for every file in the folder.</td></tr>
+<tr><td><code>as_dict()</code></td><td>The run as plain data.</td></tr>
+</table>
+<pre><code class="python">run.video_id                  # "shop"
+run.folder                    # Path("data/out/shop")
+run.artifacts()               # {"descriptions": ".../descriptions.json", ...}
+run.skipped                   # {"audio": "the file carries no audio stream"}
+for step in run.steps:
+    print(step.component, step.stats)</code></pre>
+
+<h3 id="order">What runs, in what order</h3>
+<p>The policy decides the order:</p>
+<table>
+<tr><th>Policy</th><th>Order</th></tr>
+<tr><td><code>uniform</code></td><td>media, audio, boundaries, video, cut, describe, embed</td></tr>
+<tr><td><code>scene</code></td><td>media, audio, boundaries.evidence (decodes the picture), boundaries, video, cut, describe, embed</td></tr>
+<tr><td><code>vad</code>, <code>speaker</code></td><td>media, audio, boundaries.evidence (reads the transcript), boundaries, video, cut, describe, embed</td></tr>
+</table>
+<p>Stages that don't apply are skipped with a reason, e.g. <code>audio</code> on a silent file. A policy needing a stream the file lacks is refused.</p>
+<p>Each stage runs with its defaults: Whisper <code>small</code> and pyannote, scene threshold 27, chunks of 5 to 20 s, one frame per second. To change them, run the <a href="stages.html">stages</a> directly.</p>
+
+<h3 id="progress">Progress: on_step</h3>
+<p><code>on_step(component, produced)</code> is called before each stage (with <code>None</code>) and after it (with its <code>Produced</code>). With a third parameter it also gets a <code>Progress</code> for each unit of work in <code>video</code>, <code>describe</code> and <code>embed</code>:</p>
+<pre><code class="python">def on_step(component, produced, progress=None):
+    if progress is not None:
+        print(f"  {component} {progress.completed}/{progress.total} "
+              f"({progress.skipped} reused) {progress.current}")
+    elif produced is None:
+        print("start", component)
+    else:
+        print("done ", component, produced.stats)
+
+video_rag("shop.mp4", "data/out", sampler="clip", on_step=on_step)</code></pre>
+<p><code>Progress</code> has <code>component</code>, <code>total</code>, <code>completed</code>, <code>skipped</code>, <code>current</code> (e.g. <code>3:clip</code>) and <code>result</code>. Describe reports in completion order. Raising in the callback stops the run.</p>
+
+<h3 id="options">Options, process, validate</h3>
+<p><code>video_rag()</code> is shorthand for these:</p>
+<pre><code class="python">from pathlib import Path
+from vidra.video_rag import Options, process, validate
+
+options = Options(source=Path("shop.mp4"), into=Path("data/out"), policy="scene",
+                  sampler="clip", vlm=OpenAI(), embedder=LocalEmbedder())
+problems = validate(options)          # [] when the request is valid; nothing runs
+if not problems:
+    run = process(options, on_step=None)</code></pre>
+<p><code>Options</code> has <code>video_rag()</code>'s fields except <code>on_step</code> and <code>models</code>. <code>validate(options)</code> returns every problem as a list; <code>process(options, on_step)</code> runs it.</p>
+
+<h3 id="layout">layout()</h3>
+<p><code>layout(folder)</code> gives every artifact's path in a video's folder:</p>
+<pre><code class="python">from vidra.video_rag import layout
+
+at = layout("data/out/shop")
+at["timeline"]          # Path("data/out/shop/timeline.json")
+at["store"]             # Path("data/out/shop/store")</code></pre>
+
+<h2 id="workflow">workflow: both tiers</h2>
+<p><code>workflow.process</code> runs <code>video_rag</code>, then every aggregator up to a cost <b>tier</b>. Answers go to <code>&lt;folder&gt;/aggregates/</code> and are reused while current.</p>
+<pre><code class="python">from pathlib import Path
+from vidra import LocalEmbedder, Models, OpenAI, Supabase, workflow
+
+run = workflow.process(workflow.Options(
+    source=Path("shop.mp4"), sampler="clip,yolo", policy="scene", tier="llm",
+    models=Models(vlm=OpenAI(), llm=OpenAI(), embedder=LocalEmbedder()),
+    database=Supabase()))
+
+answers = run.steps[-1]                   # the aggregate step's receipt
+answers.artifacts                         # {"summary": ".../aggregates/summary.json", ...}
+answers.stats["skipped"]                  # {"speakers": "...", ...}</code></pre>
+<div class="sig">workflow.Options(source, into=None, video_id=None, name=None, recorded_at=None,
+                 policy="uniform", use_video=True, use_audio=True, sampler="uniform",
+                 vlm=None, embedder=None, llm=None, tier="free", database=None,
+                 models=None)</div>
+<p><code>video_rag()</code>'s fields, plus:</p>
+<table class="params">
+<tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>into</code></td><td>the data root's <code>out/</code></td><td>Optional here.</td></tr>
+<tr><td><code>llm</code></td><td><code>OpenAI()</code></td><td>The text model for the <code>llm</code> tier. Or set it in <code>models</code>.</td></tr>
+<tr><td><code>tier</code></td><td><code>"free"</code></td><td>The costliest tier to run: <code>free</code>, <code>local</code> or <code>llm</code>.</td></tr>
+</table>
+<table>
+<tr><th>Tier</th><th>Runs</th><th>Each reads</th></tr>
+<tr><td><code>free</code></td><td><code>stats</code>, <code>coverage</code>, <code>speakers</code></td><td>the record</td></tr>
+<tr><td><code>local</code></td><td>the above, <code>ner</code>, <code>sentiment</code></td><td>the transcript and every answer's prose</td></tr>
+<tr><td><code>llm</code></td><td>the above, <code>summary</code>, <code>chapters</code>, <code>events</code>, every custom prompt, and every linking profile (<code>entities:people</code>, <code>entities:objects</code>, <code>entities:text</code>, custom ones)</td><td>prompts: the transcript and every answer's prose; profiles: every answer</td></tr>
+</table>
+<p>An aggregator with nothing to read (<code>speakers</code> on a silent video) is skipped with the reason. To choose inputs yourself, run the <a href="aggregates.html">aggregates</a> directly.</p>
+<ul>
+  <li><code>workflow.validate(options)</code> lists every problem either tier would raise, including a missing LLM key.</li>
+  <li><code>workflow.process(options, on_step)</code> reports <code>"aggregate"</code> as a final step.</li>
+  <li><code>workflow.extraction(options)</code> returns the <code>video_rag.Options</code> part.</li>
+  <li><code>workflow.Run</code> is a <code>Run</code> with the aggregate step last in <code>steps</code>.</li>
+</ul>
+<!-- pager -->
+<div class="pager">
+<a href="recipes.html"><small>Previous</small>Recipes</a>
+<a class="next" href="stages.html"><small>Next</small>Stages</a>
+</div>
+<!-- /pager -->
+</main>
+</div>
+</body>
+</html>

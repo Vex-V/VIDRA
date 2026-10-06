@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="docs-root" content="../">
+<title>Questions · VIDRA docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/search-index.js"></script>
+<script src="assets/docs.js"></script>
+<!-- /head -->
+</head>
+<body>
+<header class="top">
+<!-- top -->
+<a class="brand" href="../index.html">VIDRA <span>docs</span></a>
+<button class="icon menu" id="menu" type="button" aria-label="Menu">&#9776;</button>
+<div class="spacer"></div>
+<div class="search"><input id="q" type="search" placeholder="Search the docs  ( / )" autocomplete="off" aria-label="Search the docs"><div class="results" id="results"></div></div>
+<button class="icon" id="theme" type="button" aria-label="Light or dark">&#9680;</button>
+<!-- /top -->
+</header>
+<div class="layout">
+<nav class="side" aria-label="Pages">
+<!-- nav -->
+<div class="group">Get started</div>
+<a href="../index.html">Start here</a>
+<a href="concepts.html">Concepts</a>
+<a href="recipes.html">Recipes</a>
+<div class="group">video_rag</div>
+<a href="pipeline.html">The pipeline</a>
+<a href="stages.html">Stages</a>
+<a href="samplers.html">Samplers</a>
+<a href="questions.html" class="here">Questions</a>
+<a href="search.html">Search</a>
+<div class="group">aggregates</div>
+<a href="aggregates.html">Aggregates</a>
+<a href="definitions.html">Custom prompts and profiles</a>
+<div class="group">Bring your own</div>
+<a href="models.html">Models</a>
+<a href="databases.html">Databases</a>
+<div class="group">Reference</div>
+<a href="reference.html">Reference</a>
+<!-- /nav -->
+</nav>
+<main>
+<h1>Questions</h1>
+<p class="lede">The prompt the vision model gets for each chunk: an instruction and the fields to fill.</p>
+
+<h2 id="what">What a question is</h2>
+<p>For each chunk, <code>describe</code> sends the kept frames with:</p>
+<ul>
+  <li><b>An instruction</b>, e.g. "These 4 frames span 0:20–0:40 and were kept because the people in shot changed..."</li>
+  <li><b>A shape</b>: the fields to fill, sent as a JSON Schema. Every answer also has a prose <code>summary</code>, the main text that gets embedded.</li>
+</ul>
+<p>Answers are stored under their <a href="concepts.html#answer-ids">answer id</a>: <code>description</code> is the prose, <code>structured</code> the fields. Both are embedded; search can filter on fields.</p>
+<p>A bare sampler (<code>clip</code>) asks its own question; <code>sampler:question</code> (<code>clip:checkout</code>) asks another (<a href="samplers.html#specs">specs</a>).</p>
+
+<h2 id="builtin">Built-in questions</h2>
+<table>
+<tr><th>Question</th><th>Asks</th><th>Shape</th></tr>
+<tr><td><code>scene</code></td><td>the segment as a whole: where, who and what, what happens, what changes</td><td><code>scene</code></td></tr>
+<tr><td><code>uniform</code></td><td>the same, for evenly spaced frames</td><td><code>scene</code></td></tr>
+<tr><td><code>clip</code></td><td>the same, then what changed from frame to frame</td><td><code>scene</code></td></tr>
+<tr><td><code>yolo</code></td><td>one entry per distinct person</td><td><code>people</code></td></tr>
+<tr><td><code>objects</code></td><td>one entry per distinct object, told what the detector looked for</td><td><code>objects</code></td></tr>
+<tr><td><code>text</code></td><td>each piece of text, transcribed exactly</td><td><code>text</code></td></tr>
+<tr><td><code>overview</code></td><td>what is happening, in 4 to 5 sentences; no fields</td><td><code>prose</code></td></tr>
+</table>
+
+<h3 id="shapes">Shapes</h3>
+<table>
+<tr><th>Shape</th><th>Fields</th></tr>
+<tr><td><code>scene</code></td><td><code>setting</code>; lists <code>people</code> (by appearance), <code>objects</code>, <code>visible_text</code>, <code>actions</code>, <code>changes</code>, <code>tags</code>. The fallback for questions without a shape.</td></tr>
+<tr><td><code>people</code></td><td><code>people</code>: one object per person with <code>appearance</code>, <code>clothing</code>, <code>role</code>, <code>action</code>, and fixed-vocabulary <code>gender</code>, <code>age_group</code>, <code>hair_color</code>, <code>hair_style</code>, <code>top_color</code>, <code>top_type</code>, <code>bottom_color</code>, <code>bottom_type</code>, <code>accessories</code>, <code>distinguishing</code></td></tr>
+<tr><td><code>objects</code></td><td><code>objects</code>: one object per thing, with <code>object</code>, <code>appearance</code>, <code>context</code></td></tr>
+<tr><td><code>text</code></td><td><code>visible_text</code>: one object per piece of text, with <code>text</code>, <code>context</code></td></tr>
+<tr><td><code>prose</code></td><td>none: a 4 to 5 sentence summary</td></tr>
+</table>
+<p>Every shape but <code>prose</code> asks for a summary of at least 150 words. Structured answers run ~3x longer than prose, hence <code>max_output_tokens=2000</code>.</p>
+
+<h2 id="add">Adding a question</h2>
+<div class="sig">describe.add_question(name, instruction, *, fields=None, shape=None, summary=None, about="") -&gt; dict</div>
+<pre><code class="python">from vidra.video_rag import describe
+
+describe.add_question(
+    "hazards",
+    "These {n} frames span {span}. List every safety hazard you can see.",
+    fields={
+        "hazards":  {"type": "list", "about": "each hazard, briefly"},
+        "severity": {"type": "text", "about": "the worst one",
+                     "one_of": ["none", "low", "high"]},
+        "exposed":  {"type": "list", "about": "who is at risk",
+                     "of": {"who": "by appearance", "how": "how they are exposed"}},
+    },
+    about="safety hazards and who is exposed",
+)
+
+video_rag("site.mp4", "data/out", sampler="clip,clip:hazards", models=models)</code></pre>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>name</code></td><td>Lowercase letters, digits, <code>_</code>, <code>-</code>; starts with a letter; up to 32 characters; not a built-in.</td></tr>
+<tr><td><code>instruction</code></td><td>What the model is told. May use <code>{n}</code> (frame count), <code>{span}</code> (the chunk's time span) and <code>{vocabulary}</code> (the <code>objects</code> vocabulary).</td></tr>
+<tr><td><code>fields</code></td><td>The answer's own fields (<a href="#fields">below</a>).</td></tr>
+<tr><td><code>shape</code></td><td>Instead of <code>fields</code>, a built-in shape: <code>scene</code>, <code>people</code>, <code>objects</code>, <code>text</code> or <code>prose</code>.</td></tr>
+<tr><td><code>summary</code></td><td>With <code>fields</code>: prose length, <code>"standard"</code> (150+ words, default) or <code>"brief"</code> (4 to 5 sentences).</td></tr>
+<tr><td><code>about</code></td><td>One-line description.</td></tr>
+</table>
+<p>With neither <code>fields</code> nor <code>shape</code>, the answer is prose only. Re-adding a custom name replaces it. Returns <code>question(name)</code>.</p>
+
+<h3 id="fields">The fields</h3>
+<p>Each field is a dict:</p>
+<table class="params">
+<tr><th>Key</th><th>Meaning</th></tr>
+<tr><td><code>type</code></td><td><code>"text"</code> (a string) or <code>"list"</code>.</td></tr>
+<tr><td><code>about</code></td><td>Required. What goes in the field.</td></tr>
+<tr><td><code>one_of</code></td><td>Allowed values. Use it for anything you'll filter on; free text varies (<code>cashier</code>, <code>cashier or customer</code>).</td></tr>
+<tr><td><code>of</code></td><td>For a list: make each entry an object, <code>{key: what goes there}</code>, keeping who-did-what together.</td></tr>
+</table>
+<p>Field names: lowercase letters, digits, <code>_</code>, starting with a letter. Limits: 12 fields, 8 keys per <code>of</code>, 24 values per <code>one_of</code>. Invalid questions are refused when added, not mid-run.</p>
+
+<h3 id="manage">Listing and removing</h3>
+<pre><code class="python">describe.questions()                # every question name, built in or added
+describe.question("hazards")        # {"name", "instruction", "about", "builtin",
+                                    #  "shape", "summary", "fields": {field: about}}
+describe.remove_question("hazards") # answers already stored are kept</code></pre>
+<ul>
+  <li>Saved in <code>prompts.json</code> under the data root. Hand edits work; a malformed entry is dropped with a warning.</li>
+  <li>A built-in's name raises <code>describe.ProtectedPrompt</code>; other problems raise <code>describe.PromptError</code>, listing each.</li>
+  <li>A run naming a removed question is refused.</li>
+</ul>
+
+<h2 id="search">Searching by a question</h2>
+<pre><code class="python">from vidra.video_rag import search
+
+moments, notes = search("someone near the edge", "site", question="hazards",
+                        structured={"severity": "high"}, models=models, database=db)
+moments[0].hits[0]["structured"]    # {"hazards": [...], "severity": "high", "exposed": [...]}</code></pre>
+<p><code>question=</code> keeps that question's answers from any sampler. <code>structured=</code> keeps answers whose field equals the value, or whose list contains it (<a href="search.html">Search</a>).</p>
+
+<h2 id="reuse">Editing a question</h2>
+<p>Each question's wording is hashed with its answers. Editing a question re-describes only its answers; adding one changes nothing stored. Changing the vision model or <code>max_output_tokens</code> re-describes everything.</p>
+
+<h2 id="vs-prompts">Questions and aggregate prompts</h2>
+<p>Both are an instruction plus fields:</p>
+<table>
+<tr><th></th><th><code>describe.add_question</code></th><th><code>aggregates.add_prompt</code></th></tr>
+<tr><td>Answered by</td><td>the VLM</td><td>the LLM</td></tr>
+<tr><td>Reads</td><td>one chunk's frames</td><td>text <code>video_rag</code> already extracted: transcript, answers</td></tr>
+<tr><td>Answers</td><td>once per chunk</td><td>once per video, or per chapter or item</td></tr>
+<tr><td>Run by</td><td>a sampler spec: <code>clip:hazards</code></td><td><code>aggregates.custom(name=...)</code>, or <code>aggregate(hazard_report=...)</code></td></tr>
+<tr><td>Saved in</td><td><code>prompts.json</code></td><td><code>aggregates.json</code></td></tr>
+</table>
+<p>See <a href="definitions.html">Custom prompts and profiles</a>.</p>
+
+<h2 id="example">Complete example</h2>
+<!-- example custom_question.py -->
+<div class="file">docs/pages/examples/custom_question.py</div>
+<pre><code class="python">"""A question of your own: what the vision model is asked about each chunk,
+and the fields its answer must fill. Then search by those fields.
+
+    python custom_question.py path/to/video.mp4
+"""
+
+import sys
+
+import vidra
+from vidra import Folder, LocalEmbedder, Models, OpenAI
+from vidra.video_rag import describe, search, video_rag
+
+vidra.configure(env_file=".env")
+source = sys.argv[1]
+models = Models(vlm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+database = Folder("data/out")
+
+# Saved in data/prompts.json; adding it again replaces it.
+describe.add_question(
+    "checkout",
+    "These {n} frames span {span}. Describe what happens at the checkout.",
+    fields={
+        "payment": {"type": "text", "about": "how the customer pays, if it can be seen",
+                    "one_of": ["cash", "card", "phone", "none visible"]},
+        "items": {"type": "list", "about": "each item scanned, bagged or handed over"},
+        "people": {"type": "list", "about": "each person at the checkout",
+                   "of": {"role": "cashier, customer or bystander",
+                          "doing": "what their hands are doing"}},
+    },
+    about="the checkout: payment, items, who does what",
+)
+print(describe.question("checkout")["fields"])
+
+# clip's frames, asked clip's own question and ours, in one decode.
+run = video_rag(source, "data/out", policy="scene", sampler="clip,clip:checkout",
+                models=models, database=database)
+
+# Only answers to our question, and only those that saw cash.
+moments, notes = search("a customer paying", run.video_id, question="checkout",
+                        structured={"payment": "cash"},
+                        models=models, database=database)
+for m in moments:
+    answer = m.hits[0]["structured"]
+    print(f"{m.start_ts:6.1f}-{m.end_ts:6.1f}s  payment={answer['payment']}  "
+          f"items={answer['items'][:3]}")
+for note in notes:
+    print("note:", note)</code></pre>
+<!-- /example -->
+<!-- pager -->
+<div class="pager">
+<a href="samplers.html"><small>Previous</small>Samplers</a>
+<a class="next" href="search.html"><small>Next</small>Search</a>
+</div>
+<!-- /pager -->
+</main>
+</div>
+</body>
+</html>
