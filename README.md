@@ -16,7 +16,7 @@ objects recur across chunks.
 - [Install](#install)
 - [Configuration](#configuration)
 - [Quick start](#quick-start)
-- [Command line](#command-line)
+- [One stage at a time](#one-stage-at-a-time)
 - [How it works](#how-it-works)
 - [Samplers and questions](#samplers-and-questions)
 - [Aggregates](#aggregates)
@@ -31,7 +31,7 @@ objects recur across chunks.
 
 - Python 3.11 to 3.14.
 - No system FFmpeg: decoding uses PyAV, which bundles it.
-- An API key for at least one model provider, unless every role runs locally
+- An API key for a hosted model, unless every role runs locally
   (see [Models](#models)).
 - Optional: an NVIDIA GPU. Everything also runs on the CPU, more slowly.
 
@@ -54,35 +54,34 @@ pip install -r requirements.txt --extra-index-url https://download.pytorch.org/w
 ```
 
 `requirements.txt` installs every dependency, pinned to the versions the
-library was developed against. `vidra` itself is not installed, so run
-`python -m vidra...` and your own scripts from the repository root, or add
-the root to `PYTHONPATH`.
+library was developed against. `vidra` itself is not installed, so run your
+scripts from the repository root, or add the root to `PYTHONPATH`.
 
 ## Configuration
 
 **Keys.** The library reads API keys from environment variables and never
 reads a `.env` file on its own. Copy `.env.example` to `.env` and fill in
-the providers you use. The command-line tools load `.env` themselves; in your
-own code, either call
+the keys you use. Then either call
 
 ```python
 import vidra
 vidra.configure(env_file=".env")
 ```
 
-or pass keys directly, which takes precedence over the environment:
+or pass a key to the model that uses it, which takes precedence over the
+environment:
 
 ```python
-from vidra import Models
-models = Models(describer="openai", keys={"openai": "sk-..."})
+from vidra import OpenAI
+vlm = OpenAI("gpt-5.4-mini", api_key="sk-...")
 ```
 
 | Variable | Used for |
 |---|---|
-| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, ... | model calls, per provider |
+| `OPENAI_API_KEY` | `OpenAI` and `OpenAIEmbedder`, when no `api_key=` is given |
+| `ANTHROPIC_API_KEY` | `Anthropic`, when no `api_key=` is given |
 | `HF_TOKEN` | the first download of pyannote's gated model |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_PUBLISHABLE_KEY` | the Supabase backend (writes, searches) |
-| `VIDRA_DESCRIBER`, `VIDRA_LLM`, `VIDRA_EMBEDDER` | default model per role |
 
 **Where output goes.** In order of precedence:
 `vidra.configure(data_root=...)`, then the `VIDRA_DATA` variable,
@@ -93,11 +92,13 @@ same rule with `weights=` and `VIDRA_WEIGHTS`.
 
 ```python
 import vidra
-from vidra import Models, Supabase, aggregates
+from vidra import LocalEmbedder, Models, OpenAI, Supabase, aggregates
 from vidra.video_rag import search, video_rag
 
 vidra.configure(env_file=".env")
-models = Models(describer="openai", embedder="local", llm="openai")
+models = Models(vlm=OpenAI("gpt-5.4-mini"),      # describes frames
+                llm=OpenAI("gpt-5.4-mini"),      # summaries, chapters, events
+                embedder=LocalEmbedder())        # vectors, on this machine
 
 # Supabase: url and key default to SUPABASE_URL and SUPABASE_SECRET_KEY.
 # Nothing connects until the first call. For no server at all, use
@@ -133,35 +134,26 @@ chapters = aggregates.search("the checkout gets busy", level="span",
 
 Before the first run, create the tables: see [Search and storage](#search-and-storage).
 
-## Command line
+## One stage at a time
 
-Every module runs with `python -m`. Each one's `--help` lists its options.
+Each stage of `video_rag` is also a function that reads the files it needs and
+writes one, so a stage can be re-run or tuned alone. `D` is a video's folder:
 
-```bash
-# Everything: extract, then aggregate up to a cost tier
-python -m vidra.workflow video.mp4 --sampler clip,yolo --tier llm
+```python
+from vidra.video_rag import boundaries, describe, video
 
-# Extraction only
-python -m vidra.video_rag video.mp4 data/out --sampler clip
+boundaries.evidence(out=D / "cuts.json", policy="scene", media=D / "media.json")
+boundaries.calibrate(D / "cuts.json")         # cuts per threshold; nothing is decoded
+boundaries.boundaries(media=D / "media.json", out=D / "timeline.json",
+                      policy="scene", cuts=D / "cuts.json")
 
-# Search
-python -m vidra.video_rag.retrieve "a customer paying" <video_id> --embedder local --database folder
-
-# Aggregates: a JSON spec of the files, the inputs and what reads each
-python -m vidra.aggregates spec.json
-python -m vidra.aggregates --list
+video.video(media=D / "media.json", timeline=D / "timeline.json",
+            out=D / "manifest.json", store=D / "store", sampler="clip:[text,scene]")
+describe.describe(manifest=D / "manifest.json", timeline=D / "timeline.json",
+                  store=D / "store", out=D / "descriptions.json", limit=5)
 ```
 
-Each stage also has its own command taking the files it reads and the file it
-writes, so a stage can be re-run or tuned alone. For example
-(`D` is a video's output folder):
-
-```bash
-python -m vidra.video_rag.boundaries D/media.json D/cuts.json --policy scene --evidence
-python -m vidra.video_rag.boundaries D/media.json D/timeline.json --policy scene --cuts D/cuts.json
-python -m vidra.video_rag.video D/media.json D/timeline.json D/manifest.json --sampler "clip:[text,scene]"
-python -m vidra.video_rag.describe D/manifest.json D/timeline.json D/store D/descriptions.json --limit 5
-```
+`vidra.workflow.process(...)` runs both tiers in one call.
 
 ## How it works
 
@@ -400,6 +392,46 @@ Supabase setup: run `db/supabase/video_rag.sql`, then
 `db/supabase/aggregates.sql`, in the SQL editor, and add `vidra` under
 Settings → API → Exposed schemas.
 
+### A database of your own
+
+`Database` is a base class with one method per thing a run saves. Subclass it
+and fill in only the ones you want; the rest do nothing:
+
+```python
+from vidra import Database
+
+class VectorsOnly(Database):
+    name = "vectors"
+
+    def write_embedded(self, video_id, document):
+        for unit in document["units"]:
+            my_index.upsert(f"{video_id}/{unit['chunk_id']}/{unit['sampler_id']}",
+                            unit["vector"], unit)
+
+video_rag("shop.mp4", "data/out", models=models, database=VectorsOnly())
+```
+
+Each hook receives a document as a dict, exactly what its JSON file holds:
+
+| Hook | Called with |
+|---|---|
+| `write_media(video_id, document)` | `media.json` |
+| `write_raw_transcript(video_id, document)` | `transcript.raw.json` |
+| `write_cuts(video_id, document)` | `cuts.json` |
+| `write_timeline(video_id, document)` | `timeline.json` |
+| `write_manifest(video_id, document)` | `manifest.json` |
+| `write_transcript(video_id, document)` | `transcript.json` |
+| `write_descriptions(video_id, document)` | `descriptions.json` |
+| `write_embedded(video_id, document)` | `embedded.json`: `embedder` and `units`, each with its `vector` |
+| `write_prompts(rows)` | the questions describe asked |
+| `write_source(source)`, `write_answer(source_id, answer, items, mentions)`, `write_definitions(rows)` | aggregate answers, as rows |
+| `write_aggregate_units(source_id, units, embedder_key)` | embedded summaries, chapters and entities; they are embedded only if this is defined |
+
+To search through it, also define `search`, `spans` and `video_ids` (and
+`search_aggregates` for `aggregates.search`). A read that is not defined
+raises `Unsupported` instead of returning nothing. `Supabase` in
+`vidra/shared/storage/supabase.py` defines every hook and is the reference.
+
 `search` filters by `sampler`, `question`, `chunk_ids`, a time window
 (`after`, `before`), neighbouring chunks (`window`) and exact field values
 (`structured={"severity": "high"}`). `aggregates.search` searches summaries,
@@ -410,22 +442,94 @@ A search must use the embedder that built the index; passing the same
 
 ## Models
 
-Three roles, each set to a provider or `provider/model`:
+Three roles, each filled by a model object:
 
-| Role | Does | Default |
+| Role | Base class | Does | Default |
+|---|---|---|---|
+| `vlm` | `VLM` | frames to structured answers | `OpenAI("gpt-5.4-mini")` |
+| `llm` | `LLM` | the llm aggregates and entity accounts | `OpenAI("gpt-5.4-mini")` |
+| `embedder` | `Embedder` | text to vectors, for the index, search and linking | `OpenAIEmbedder("text-embedding-3-small")` |
+
+A role left out of `Models` uses its default. Any combination works: the VLM,
+the LLM and the embedder can each come from a different place.
+
+### Ready-made models
+
+| Class | Serves | Key |
 |---|---|---|
-| `describer` | frames to structured answers (needs a vision model) | `openai` (`gpt-5.4-mini`) |
-| `embedder` | text to vectors, for the index, search and linking | `openai` (`text-embedding-3-small`) |
-| `llm` | the llm aggregates and entity accounts | `openai` (`gpt-5.4-mini`) |
+| `OpenAI(model)` | VLM and LLM, through OpenAI's Responses API | `api_key=` or `OPENAI_API_KEY` |
+| `Anthropic(model)` | VLM and LLM, through the Messages API | `api_key=` or `ANTHROPIC_API_KEY` |
+| `Chat(model, base_url=, name=)` | VLM and LLM, for any server speaking Chat Completions | `api_key=`, optional |
+| `OpenAIEmbedder(model)` | embedder, for OpenAI or any server's `/embeddings` | `api_key=` or `OPENAI_API_KEY` without `base_url` |
+| `LocalEmbedder(model)` | embedder, a Hugging Face model in this process | none |
+| `Stub()` | VLM and LLM that answer with placeholder text, for tests | none |
+| `HashEmbedder()` | embedder from word hashes, for tests | none |
 
-Built-in providers: `openai`, `anthropic`, `gemini`, `mistral`, `deepseek`,
-`openrouter`, `groq`, `xai`, `together`, `voyage`, `ollama`, `lmstudio`,
-`llamacpp`, and `local` (an in-process embedder, `BAAI/bge-small-en-v1.5`,
-no key). Any other OpenAI-compatible server is added in `data/providers.json`,
-which names the key's environment variable and never holds a key.
+`Chat` covers Ollama, LM Studio, llama.cpp, vLLM, Gemini, Mistral, Groq,
+OpenRouter and other OpenAI-compatible servers:
 
-Only `openai` and `local` have been run against the real service. The others
-are checked against a mock server that records requests.
+```python
+import os
+from vidra import Chat, OpenAIEmbedder
+
+vlm = Chat("qwen2.5vl:7b", base_url="http://localhost:11434/v1", name="ollama",
+           concurrency=1)                         # Ollama answers one call at a time
+llm = Chat("gemini-2.5-flash", name="gemini", api_key=os.environ["GEMINI_API_KEY"],
+           base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+embedder = OpenAIEmbedder("nomic-embed-text", base_url="http://localhost:11434/v1",
+                          name="ollama")
+```
+
+For a server without JSON Schema support, pass `structured="json_object"` or
+`structured="prompt"` (the schema goes into the prompt and the answer is
+parsed).
+
+Only `OpenAI`, `OpenAIEmbedder` and `LocalEmbedder` have been run against the
+real service. The other request formats are checked against a mock server.
+
+### A model of your own
+
+Subclass `VLM`, `LLM` or `Embedder` and fill in its one method:
+
+```python
+from vidra import LLM, VLM, Embedder, Models
+
+class MyVLM(VLM):
+    key = "mylab:vision-v2"
+    concurrency = 4                               # calls in flight at once
+
+    async def generate(self, parts, schema=None, system=None, max_output_tokens=4000):
+        # parts, in order: the instruction, then a label and an image per frame:
+        #   {"type": "text", "text": "..."}
+        #   {"type": "image", "data": b"<jpeg>", "mime": "image/jpeg"}
+        # schema: {"name": ..., "schema": <JSON Schema>}. Return a dict matching
+        # it (or a JSON string). With no schema, return text.
+        ...
+
+class MyLLM(LLM):
+    key = "mylab:text-v1"
+
+    def complete(self, prompt, schema=None, system=None, max_output_tokens=4000):
+        ...                                       # a plain def runs in a thread
+
+class MyEmbedder(Embedder):
+    key = "mylab:embed-v1:768"
+
+    def embed(self, texts):
+        ...                                       # one vector per text, same width
+
+models = Models(vlm=MyVLM(), llm=MyLLM(), embedder=MyEmbedder())
+```
+
+`key` is required. It is recorded with every answer and vector, and decides
+whether stored work is still current, so **change the key whenever the model
+behind it changes.** For an embedder it names the vector space: vectors under
+different keys are never compared, so a search must use the embedder that
+built the index. Override `embed_query` for a model that embeds queries
+differently from passages, and `problems()` to report a missing API key before
+a run starts.
+
+A failure inside a method is reported as `ModelFailed`, naming the model.
 
 ## Hardware
 
@@ -447,13 +551,26 @@ Results were the same on both: the same frames kept and the same 428 words.
 ## Checking an install
 
 On 2026-10-05 the library passed its full check (every stage, the local
-models and the paid models) on Python 3.11, 3.12, 3.13 and 3.14. Two checks
-run from a checkout:
+models and the paid models) on Python 3.11, 3.12, 3.13 and 3.14.
 
-```bash
-python -m vidra.shared.contracts.schemas --check     # JSON Schemas match the dataclasses
-python -m recovery.recreate D/manifest.json --verify D/store   # rebuild the frame store, byte-compare
+A frame store can be rebuilt from its manifest and the video, and compared
+byte for byte with the original. A store that does not rebuild identically
+means the manifest is missing something:
+
+```python
+from vidra.video_rag import video
+
+done = video.recreate(manifest=D / "manifest.json", video="shop.mp4",
+                      out="rebuilt", verify=D / "store")
+done["verified"]["identical"]       # True: every frame named is byte-identical
 ```
+
+`recreate` refuses a video that does not match the manifest (size, frame
+rate, time base, frame count); `force=True` rebuilds anyway and lists the
+differences.
+
+From a checkout, `python -m vidra.shared.contracts.schemas --check` confirms
+the JSON Schemas in `db/json/` match the document types.
 
 ## Project layout
 
@@ -463,19 +580,18 @@ vidra/
   video_rag/      tier 1: media, audio, boundaries, video, cut, describe, embed, retrieve
   aggregates/     tier 2: record and inputs, the aggregator functions, the pipeline,
                   combination, definitions
-  shared/         config, errors and logging, document types, storage backends, model providers
-recovery/         rebuilds a frame store from a manifest and the video; imports nothing from vidra
+  shared/         config, errors and logging, document types, storage backends, models
 db/               Supabase SQL, generated JSON Schemas, a wipe script
 data/             default output location; not in git
 ```
 
 ## Limitations
 
-- No test suite in the repository. The schema check and the frame-store
-  rebuild are the checks that ship.
+- No test suite in the repository. The schema check and `video.recreate`
+  are the checks that ship.
 - Only OpenAI and the local embedder have been run against real services.
 - Not run on Linux or macOS. The `mps` path is untested.
 - Recorded files only; no live streams.
 - People linking reads descriptions, not pixels, so it depends on how
-  consistently the describer words the same person.
+  consistently the VLM words the same person.
 - No licence file yet.

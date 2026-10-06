@@ -31,7 +31,8 @@ from . import audio, boundaries, cut, describe, embed, media, video
 #: The conflict rules `media` accepts.
 from .media.driver import ON_CONFLICT
 from vidra.shared.reporting.errors import Refused
-from vidra.shared.models.roles import Models, keys_of, unpack
+from vidra.shared.models.base import Embedder, VLM
+from vidra.shared.models.roles import Models, unpack
 from vidra.shared.storage.database import DATABASES as _DATABASES
 from vidra.shared.storage.database import Database, as_database
 
@@ -67,9 +68,9 @@ class Options:
     use_video: bool = True
     use_audio: bool = True
     sampler: str = "uniform"                 # what to look at
-    # A provider or `provider/model`; None resolves when the stage runs.
-    describer: Optional[str] = None          # frames -> answers
-    embedder: Optional[str] = None           # text -> vectors
+    # A model object; None is the default (OpenAI's) when the stage runs.
+    vlm: Optional[VLM] = None                # frames -> answers
+    embedder: Optional[Embedder] = None      # text -> vectors
     #: Reuse what an earlier run described and embedded when it is still current.
     resume: bool = True
     # Also copy every artifact to this database: a name or a built `Database`.
@@ -151,21 +152,23 @@ def validate(options: Options) -> list[str]:
                     problems.append(f"unknown question {question!r} in {spec!r}; "
                                     f"known: {', '.join(known_questions)}")
 
-    # Every provider the run will call: known, able to serve the role, with a key.
-    from vidra.shared.models import providers
-    wanted = [("embed", options.embedder)]
+    # Every model the run will call: the right kind, with a key and an API key.
+    from vidra.shared.models import base
+    from vidra.shared.models.roles import resolve
+    wanted = [("embedder", options.embedder)]
     if options.use_video:
-        wanted.append(("describe", options.describer))
-    for role, spec in wanted:
-        problems += providers.problems(role, spec)
+        wanted.append(("vlm", options.vlm))
+    for role, model in wanted:
+        problems += base.problems(role, resolve(role, model))
     return problems
 
 
 def export(produced: Produced, database: str | Database) -> list[str]:
     """Write a component's artifacts to a database. Returns what failed.
 
-    Reads each artifact file back from the receipt and hands it to
-    `database.write`. Directories are skipped, and a failure is reported rather
+    Reads each artifact file back from the receipt and hands it to the
+    database's `write_<artifact>`. Directories are skipped, and so is an
+    artifact whose hook the database left alone; a failure is reported rather
     than raised.
     """
     target = as_database(database)
@@ -175,9 +178,15 @@ def export(produced: Produced, database: str | Database) -> list[str]:
     for artifact, where in sorted(produced.artifacts.items()):
         if not where or Path(where).is_dir():
             continue
+        hook = f"write_{artifact}"
+        if not hasattr(Database, hook):
+            # A new artifact with no hook is a bug here, not the caller's.
+            raise RuntimeError(f"{produced.component} produced {artifact!r} and "
+                               f"Database has no {hook}; add one")
+        if not target.implements(hook):
+            continue
         try:
-            target.write(produced.video_id, artifact,
-                         files.read_json(Path(where)))
+            getattr(target, hook)(produced.video_id, files.read_json(Path(where)))
         except Exception as exc:                          # noqa: BLE001
             message = f"{artifact} -> {target.name}: {exc}"
             problems.append(message)
@@ -188,7 +197,7 @@ def export(produced: Produced, database: str | Database) -> list[str]:
                        "reason": str(exc)[:300]})
 
     # The prompt text behind each question hash this run used.
-    if produced.component == "describe":
+    if produced.component == "describe" and target.implements("write_prompts"):
         try:
             from .describe.driver import prompt_rows
             document = files.read_json(Path(produced.artifacts["descriptions"]))
@@ -328,7 +337,7 @@ def _run(options: Options, whole: Any,
         step(describe.describe(at["manifest"], at["timeline"], at["store"],
                                at["descriptions"],
                                previous=earlier("descriptions"),
-                               describer=options.describer, **ticking))
+                               vlm=options.vlm, **ticking))
 
     # 8 · vectors, from whichever documents this run wrote
     starting("embed")
@@ -354,27 +363,27 @@ def video_rag(source: str | Path,
               use_video: bool = True,
               use_audio: bool = True,
               sampler: str = "uniform",
-              describer: Optional[str] = None,
-              embedder: Optional[str] = None,
+              vlm: Optional[VLM] = None,
+              embedder: Optional[Embedder] = None,
               resume: bool = True,
               database: Optional[str | Database] = None,
               on_step: Optional[Callable[..., None]] = None,
               models: Optional[Models] = None) -> Run:
     """The whole extraction, as keyword arguments: `process` with an `Options`.
 
-    Everything lands under `<into>/<video_id>/`. `models` carries the describer,
-    the embedder and any keys; `database` is a name or a built `Database`.
-    `name` and `recorded_at` override the video's filename and recording time.
+    Everything lands under `<into>/<video_id>/`. `models` carries the vlm and
+    the embedder (or pass `vlm=` / `embedder=`); `database` is a name or a built
+    `Database`. `name` and `recorded_at` override the video's filename and
+    recording time.
     """
-    roles = unpack(models, describer=describer, embedder=embedder)
-    with keys_of(models):
-        return process(Options(
-            source=Path(source), into=Path(into), video_id=video_id,
-            on_conflict=on_conflict, name=name, recorded_at=recorded_at,
-            policy=policy, use_video=use_video,
-            use_audio=use_audio, sampler=sampler, describer=roles["describer"],
-            embedder=roles["embedder"], resume=resume, database=database,
-        ), on_step)
+    roles = unpack(models, vlm=vlm, embedder=embedder)
+    return process(Options(
+        source=Path(source), into=Path(into), video_id=video_id,
+        on_conflict=on_conflict, name=name, recorded_at=recorded_at,
+        policy=policy, use_video=use_video,
+        use_audio=use_audio, sampler=sampler, vlm=roles["vlm"],
+        embedder=roles["embedder"], resume=resume, database=database,
+    ), on_step)
 
 
 # ------------------------------------------- the one thing aggregates asks
@@ -397,98 +406,5 @@ def vocabulary() -> dict[str, Any]:
             "questions": {q: fields(q) for q in library.questions()}}
 
 
-def main(argv: Optional[list[str]] = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-
-    ap = argparse.ArgumentParser(
-        description="Extract once: media to embed, into a folder you name. "
-                    "Per-stage tuning lives on each component's own CLI, e.g. "
-                    "`python -m proto.video`.")
-    ap.add_argument("source", type=Path)
-    ap.add_argument("into", type=Path,
-                    help="the directory that holds one folder per video; the "
-                         "run writes everything under <into>/<video-id>/")
-    ap.add_argument("--video-id", default=None)
-    ap.add_argument("--on-conflict", default="new", choices=sorted(ON_CONFLICT),
-                    help="what to do when a different file wants a taken id")
-    ap.add_argument("--name", default=None,
-                    help="what to call the video; default the filename")
-    ap.add_argument("--recorded-at", default=None,
-                    help="when it was recorded, ISO 8601; default the "
-                         "container's creation time, if it has one")
-    ap.add_argument("--policy", default="uniform", choices=sorted(boundaries.POLICIES))
-    ap.add_argument("--sampler", default="uniform",
-                    help="comma-separated; any may carry a question after a "
-                         "colon, e.g. `yolo:overview`")
-    ap.add_argument("--no-video", action="store_true")
-    ap.add_argument("--no-audio", action="store_true")
-    ap.add_argument("--describer", default=None,
-                    help="a provider or provider/model, e.g. ollama/gemma3:4b; "
-                         "default VIDRA_DESCRIBER, then openai")
-    ap.add_argument("--embedder", default=None,
-                    help="a provider or provider/model, e.g. local; "
-                         "default VIDRA_EMBEDDER, then openai")
-    ap.add_argument("--no-resume", action="store_true",
-                    help="describe and embed everything again, ignoring what "
-                         "an earlier run left in the folder")
-    ap.add_argument("--database", default=None,
-                    help=f"also write a copy to a database; known: "
-                         f"{', '.join(DATABASES)}")
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-
-    options = Options(
-        source=args.source, into=args.into, video_id=args.video_id,
-        on_conflict=args.on_conflict, name=args.name,
-        recorded_at=args.recorded_at, policy=args.policy,
-        use_video=not args.no_video, use_audio=not args.no_audio,
-        sampler=args.sampler, describer=args.describer, embedder=args.embedder,
-        resume=not args.no_resume, database=args.database)
-    return report(options, lambda on_step: process(options, on_step), args.json)
-
-
-def report(options: Any, execute: Callable[[Callable], Run],
-           as_json: bool) -> int:
-    """Validate, run and print, for this CLI and `workflow`'s. `options` may be
-    `workflow.Options`, which `workflow.validate` has already checked.
-    """
-    import json
-
-    problems = validate(options) if isinstance(options, Options) else []
-    if problems:
-        for problem in problems:
-            print(f"error: {problem}")
-        return 2
-
-    def on_step(component: str, produced: Optional[Produced]) -> None:
-        if as_json:
-            return
-        if produced is None:                       # about to run
-            print(f"  {component:<22} ...", flush=True)
-            return
-        print(f"  {component:<22} -> {', '.join(produced.artifacts) or '-'}")
-
-    if not as_json:
-        where = getattr(options, "into", None)
-        print(f"{options.source}   policy={options.policy}"
-              f"{f'   into={where}' if where else ''}")
-    try:
-        run = execute(on_step)
-    except Exception as exc:                             # noqa: BLE001
-        print(f"error: {exc}")
-        return 1
-
-    if as_json:
-        print(json.dumps(run.as_dict(), indent=2))
-        return 0
-    for name, why in run.skipped.items():
-        print(f"  {name:<22} -- skipped: {why}")
-    print(f"\n{run.video_id} -> {run.folder}")
-    print(f"  artifacts: {', '.join(run.artifacts())}")
-    return 0
-
-
-__all__ = ["DATABASES", "Options", "Run", "export", "layout",
-           "main", "process", "report", "validate", "video_rag", "vocabulary"]
+__all__ = ["DATABASES", "Options", "Run", "export", "layout", "process",
+           "validate", "video_rag", "vocabulary"]

@@ -34,7 +34,8 @@ from ..shared.reporting import logs
 from ..shared.contracts.documents import (Aggregate, Excerpt, Produced, Sightings,
                                           Timeline, Transcript, fingerprint_of)
 from ..shared.reporting.errors import VidraError
-from ..shared.models.roles import Models, keys_of, unpack
+from ..shared.models.base import Embedder, LLM
+from ..shared.models.roles import Models, unpack
 from ..shared.storage import files
 from . import (available, build, definitions, kind_of, settings_of, takes_inputs,
                tier_of, uses_embedder)
@@ -103,7 +104,7 @@ _HOW = {"a record": "aggregates.record(timeline=..., ...)",
 
 
 def answer(name: str, data: Any, answer_id: Optional[str] = None,
-           llm: Optional[str] = None, embedder: Optional[str] = None,
+           llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
            previous: Optional[Aggregate] = None,
            settings: Optional[Mapping[str, Any]] = None,
            models: Optional[Models] = None) -> Aggregate:
@@ -114,17 +115,16 @@ def answer(name: str, data: Any, answer_id: Optional[str] = None,
     profile. `previous` is an earlier answer, returned unchanged when it read
     the same text under the same version and model. `settings` go to the
     aggregator's constructor and may override `llm` / `embedder`. `models`
-    carries the llm, the embedder and their keys; a role set there and as a
-    keyword is refused. Raises `Inapplicable` when there is nothing to answer.
+    carries the llm and the embedder; a role set there and as a keyword is
+    refused. Raises `Inapplicable` when there is nothing to answer.
     """
     roles = unpack(models, llm=llm, embedder=embedder)
-    with keys_of(models):
-        return _answer(name, data, answer_id, roles["llm"], roles["embedder"],
-                       previous, settings)
+    return _answer(name, data, answer_id, roles["llm"], roles["embedder"],
+                   previous, settings)
 
 
 def _answer(name: str, data: Any, answer_id: Optional[str],
-            llm: Optional[str], embedder: Optional[str],
+            llm: Optional[LLM], embedder: Optional[Embedder],
             previous: Optional[Aggregate],
             settings: Optional[Mapping[str, Any]]) -> Aggregate:
     if name not in available():
@@ -326,7 +326,7 @@ def plan(settings: Optional[Mapping[str, Mapping[str, Any]]] = None,
 
 
 def validate(settings: Optional[Mapping[str, Mapping[str, Any]]] = None,
-             llm: Optional[str] = None, embedder: Optional[str] = None,
+             llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
              **aggregators: Given) -> list[str]:
     """Everything that stops a pipeline before it starts, as messages."""
     wanted, problems = plan(settings, **aggregators)
@@ -347,13 +347,18 @@ def validate(settings: Optional[Mapping[str, Mapping[str, Any]]] = None,
                         "name one, e.g. ner=record.excerpt(transcript=True)")
     if problems:
         return problems
-    from ..shared.models import providers
-    for spec in sorted({p.settings.get("llm", llm) or "" for p in wanted
-                        if tier_of(p.name) == "llm"}):
-        problems += providers.problems("llm", spec or None)
-    for spec in sorted({p.settings.get("embedder", embedder) or "" for p in wanted
-                        if uses_embedder(p.name)}):
-        problems += providers.problems("embed", spec or None)
+    from ..shared.models import base
+    from ..shared.models.roles import resolve
+    # Each model once: the default is one model, not one per aggregator.
+    checked: list[tuple[str, Any]] = []
+    for planned in wanted:
+        for role, given, applies in (
+                ("llm", planned.settings.get("llm", llm), tier_of(planned.name) == "llm"),
+                ("embedder", planned.settings.get("embedder", embedder),
+                 uses_embedder(planned.name))):
+            if applies and not any(r == role and g is given for r, g in checked):
+                checked.append((role, given))
+                problems += base.problems(role, resolve(role, given))
     return problems
 
 
@@ -362,7 +367,7 @@ def aggregate(*, out: str | Path,
               database: Optional[Any] = None,
               previous: Optional[str | Path] = None,
               settings: Optional[Mapping[str, Mapping[str, Any]]] = None,
-              llm: Optional[str] = None, embedder: Optional[str] = None,
+              llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
               **aggregators: Given) -> Produced:
     """Run the aggregators handed an input, and only those, cheapest first.
 
@@ -374,20 +379,19 @@ def aggregate(*, out: str | Path,
 
     Each answer is a file in `out`, and what it read a file in `out/inputs`.
     `previous` is a folder of earlier answers, each reused while it would be
-    computed identically. `models` carries the llm, the embedder and their keys.
+    computed identically. `models` carries the llm and the embedder.
     `database` (a name or a built `Database`) also gets a copy: the source,
     every answer, its items, and the embedded summary, chapters and entities;
     failed writes are listed in `stats["problems"]`.
     """
-    with keys_of(models):
-        return _aggregate(out, models, database, previous, settings, llm,
-                          embedder, aggregators)
+    return _aggregate(out, models, database, previous, settings, llm,
+                      embedder, aggregators)
 
 
 def _aggregate(out: str | Path, models: Optional[Models], database: Optional[Any],
                previous: Optional[str | Path],
                settings: Optional[Mapping[str, Mapping[str, Any]]],
-               llm: Optional[str], embedder: Optional[str],
+               llm: Optional[LLM], embedder: Optional[Embedder],
                aggregators: Mapping[str, Given]) -> Produced:
     roles = unpack(models, llm=llm, embedder=embedder)
     llm, embedder = roles["llm"], roles["embedder"]
@@ -476,121 +480,7 @@ def definition_rows(used: dict[str, str]) -> list[dict[str, Any]]:
     return entries
 
 
-# ---------------------------------------------------------------------- CLI
-
-def report(produced: Produced, as_json: bool = False) -> int:
-    """How the CLI prints a receipt."""
-    import json
-    if as_json:
-        print(json.dumps(produced.as_dict(), indent=2))
-        return 0
-    s = produced.stats
-    print(f"{produced.video_id}   {produced.component}")
-    for name, where in produced.artifacts.items():
-        print(f"  {name:<24} -> {where}")
-    for name, why in (s.get("skipped") or {}).items():
-        print(f"  {name:<24} -- skipped: {why}")
-    if "computed" in s:
-        print(f"\n  {s['computed']} computed, {s['current']} reused")
-    return 0
-
-
-#: The keys a spec may have.
-SPEC_KEYS = ("out", "previous", "llm", "embedder", "database", "record", "inputs",
-             "run", "settings")
-
-
-def from_spec(spec: Mapping[str, Any], base: Optional[Path] = None) -> Produced:
-    """Run the pipeline a spec describes -- the CLI's input, as data:
-
-        {"out": "d/aggregates", "previous": "d/aggregates",
-         "llm": "openai", "embedder": "local",
-         "record": {"timeline": "d/timeline.json", "transcript": "d/transcript.json",
-                    "descriptions": "d/descriptions.json"},
-         "inputs": {"said": {"excerpt": {"transcript": true}},
-                    "people": {"sightings": {"profile": "people", "answers": ["yolo"]}}},
-         "run": {"summary": "said", "ner": "said", "entities:people": "people",
-                 "sentiment": {"spoken": "said"}, "stats": "record"},
-         "settings": {"ner": {"labels": ["person"]}}}
-
-    `run` names an input -- or `record` -- per aggregator. Relative paths are
-    read from `base`.
-    """
-    from .core.record import record as open_record
-
-    def at(where: Any) -> Any:
-        return where if base is None or where is None else base / where
-
-    unknown = set(spec) - set(SPEC_KEYS)
-    if unknown:
-        raise AggregateError(f"unknown spec key(s) {', '.join(sorted(unknown))}; "
-                             f"a spec has {', '.join(SPEC_KEYS)}")
-    video = open_record(**{k: at(v) for k, v in (spec.get("record") or {}).items()})
-    built: dict[str, Any] = {"record": video}
-    for label, how in (spec.get("inputs") or {}).items():
-        if set(how) == {"excerpt"}:
-            built[label] = video.excerpt(**how["excerpt"])
-        elif set(how) == {"sightings"}:
-            built[label] = video.sightings(**how["sightings"])
-        else:
-            raise AggregateError(f"input {label!r} is {{\"excerpt\": {{...}}}} or "
-                                 f"{{\"sightings\": {{...}}}}")
-
-    def resolve(label: str) -> Any:
-        if label not in built:
-            raise AggregateError(f"no input {label!r}; the spec defines "
-                                 f"{', '.join(built)}")
-        return built[label]
-
-    handed = {key.replace(":", "_"):
-              ({label: resolve(n) for label, n in value.items()}
-               if isinstance(value, Mapping) else resolve(value))
-              for key, value in (spec.get("run") or {}).items()}
-    return aggregate(out=at(spec["out"]), previous=at(spec.get("previous")),
-                     llm=spec.get("llm"), embedder=spec.get("embedder"),
-                     database=spec.get("database"), settings=spec.get("settings"),
-                     **handed)
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-    import json
-
-    ap = argparse.ArgumentParser(
-        description="Run the aggregators a JSON spec names, each on the input it "
-                    "names. The format is in `vidra.aggregates.driver.from_spec`.")
-    ap.add_argument("spec", nargs="?", help="a JSON spec file")
-    ap.add_argument("--list", action="store_true",
-                    help="every aggregator: its name, cost and what it reads")
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-
-    if args.list:
-        from . import about
-        for name in available():
-            print(f"{name:<22} {tier_of(name):<6} {wants(name):<12} {about(name)}")
-        for where, found in definitions.load()["problems"].items():
-            print(f"  ignored {where}: {'; '.join(found)}")
-        return 0
-    if not args.spec:
-        ap.error("a spec file is required unless --list")
-    where = Path(args.spec)
-    try:
-        produced = from_spec(json.loads(where.read_text(encoding="utf-8")),
-                             base=where.parent)
-    except (KeyError, ValueError, FileNotFoundError) as exc:
-        print(f"error: {exc}")
-        return 1
-    return report(produced, args.json)
-
-
-__all__ = ["AggregateError", "Given", "Inapplicable", "One", "Planned", "SPEC_KEYS",
-           "aggregate", "answer", "answers", "context", "definition_rows",
-           "from_spec", "load", "load_all", "load_input", "made_by", "name_of",
-           "plan", "report", "validate", "wants"]
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+__all__ = ["AggregateError", "Given", "Inapplicable", "One", "Planned",
+           "aggregate", "answer", "answers", "context", "definition_rows", "load",
+           "load_all", "load_input", "made_by", "name_of", "plan", "validate",
+           "wants"]

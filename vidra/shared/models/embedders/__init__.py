@@ -1,35 +1,32 @@
-"""The Embedder protocol, and resolving a name to one.
+"""The ready-made embedders, and what every embedder shares.
 
-One vector space per embedder: its key is `provider:model:dims`, and vectors
-from different keys are never compared. A query and a document are embedded
-with the prefixes the model was trained with (e5, nomic, bge, mxbai); a
-prefix set by hand changes the key.
+    OpenAIEmbedder("text-embedding-3-small")     OpenAI, or any server's /embeddings
+    LocalEmbedder("BAAI/bge-small-en-v1.5")      a Hugging Face model in this process
+    HashEmbedder()                               no model: for exercising a pipeline
+
+One vector space per embedder: its key is `name:model:dims`, and vectors from
+different keys are never compared. A query and a document are embedded with
+the prefixes the model was trained with (e5, nomic, bge, mxbai); a prefix set
+by hand changes the key.
 """
 
 from __future__ import annotations
 
 import hashlib
 import math
-from typing import Any, Optional, Protocol, Sequence
+from typing import Any, Sequence
+
 from ...reporting.errors import Unavailable
+from ..base import Embedder
 
 
 class EmbedderUnavailable(Unavailable):
     """No client, no key, or a model this account cannot reach."""
 
 
-class Embedder(Protocol):
-    def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
-    def embed_query(self, text: str) -> list[float]: ...
-    @property
-    def key(self) -> str: ...
-    def config(self) -> dict[str, Any]: ...
-
-
 def query_vector(embedder: Any, text: str) -> list[float]:
-    """The vector for a search, through the query side where there is one."""
-    side = getattr(embedder, "embed_query", None)
-    return side(text) if side else embedder.embed([text])[0]
+    """The vector for a search, through the query side."""
+    return embedder.embed_query(text)
 
 
 _BGE = "Represent this sentence for searching relevant passages: "
@@ -64,15 +61,14 @@ def key_for(name: str, model: str, dims: int,
     return key
 
 
-class HashEmbedder:
-    """Deterministic vectors from a hash. No model, no network: for exercising the
-    pipeline without a key. Its key says `hash`.
+class HashEmbedder(Embedder):
+    """Deterministic vectors from a hash of each word. No model, no network: for
+    exercising the pipeline without a key. Its key says `hash`.
     """
-
-    name = "hash"
 
     def __init__(self, dims: int = 256) -> None:
         self.dims = dims
+        self.key = f"hash:none:{dims}"
 
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         out = []
@@ -86,38 +82,17 @@ class HashEmbedder:
             out.append([v / norm for v in vector])
         return out
 
-    def embed_query(self, text: str) -> list[float]:
-        return self.embed([text])[0]
 
-    @property
-    def key(self) -> str:
-        return f"{self.name}:none:{self.dims}"
-
-    def config(self) -> dict[str, Any]:
-        return {"embedder": self.name, "dims": self.dims}
-
-
-def build(name: Optional[str] = None, **kwargs) -> Embedder:
-    """An embedder from a provider name, `provider/model`, `hash`, or None for the
-    default.
-    """
-    from .. import providers
-
-    chosen, model = providers.choose("embed", name)
-    if chosen == providers.OFFLINE["embed"]:
-        return HashEmbedder(**({"dims": kwargs["dims"]} if kwargs.get("dims") else {}))
-    provider = providers.get(chosen)
-    if provider.protocol == "local":
+def __getattr__(name: str) -> Any:
+    """PEP 562: the two that import an SDK resolve on first use."""
+    if name == "OpenAIEmbedder":
+        from .remote import OpenAIEmbedder
+        return OpenAIEmbedder
+    if name == "LocalEmbedder":
         from .local import LocalEmbedder
-        return LocalEmbedder(model, **kwargs)
-    from .remote import RemoteEmbedder
-    return RemoteEmbedder(chosen, model, **kwargs)
+        return LocalEmbedder
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def available() -> list[str]:
-    from .. import providers
-    return providers.names("embed")
-
-
-__all__ = ["Embedder", "EmbedderUnavailable", "HashEmbedder", "PREFIXES",
-           "available", "build", "key_for", "prefixes_for", "query_vector"]
+__all__ = ["Embedder", "EmbedderUnavailable", "HashEmbedder", "LocalEmbedder",
+           "OpenAIEmbedder", "PREFIXES", "key_for", "prefixes_for", "query_vector"]

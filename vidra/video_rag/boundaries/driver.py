@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Sequence
 
 from vidra.shared.reporting import logs
 from vidra.shared.config.paths import MissingArtifact
@@ -199,10 +199,10 @@ def timeline(media: Media, policy: str = "uniform",
     # A floor above the ceiling is refused.
     ceiling = chunk_s if max_s is None else max_s
     if ceiling and min_s > ceiling:
-        which = ("--max-chunk" if max_s is not None
-                 else "--chunk-duration, which --max-chunk defaults to")
+        which = ("max_s" if max_s is not None
+                 else "chunk_s, which max_s defaults to")
         raise Refused(
-            f"--min-chunk {min_s:g} is larger than the ceiling {ceiling:g} "
+            f"min_s {min_s:g} is larger than the ceiling {ceiling:g} "
             f"({which}). Raise the ceiling or lower the floor.")
 
     if media.duration_s is None:
@@ -267,119 +267,17 @@ def boundaries(media: str | Path, out: str | Path, policy: str = "uniform",
     )
 
 
-def main(argv: Optional[list[str]] = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-    import json
+def calibrate(cuts: str | Path | Cuts,
+              thresholds: Optional[Sequence[float]] = None) -> list[dict[str, Any]]:
+    """How many cuts each threshold would give, from the scores a cuts file
+    caches -- nothing is decoded. Reports; does not choose: a threshold is a
+    property of the footage, not a default. `thresholds` defaults to a spread
+    on the detector's own scale (scene scores, or seconds of silence).
 
-    ap = argparse.ArgumentParser(
-        description="Find boundary evidence, and decide the chunk grid.")
-    ap.add_argument("media", help="path to media.json")
-    ap.add_argument("out", help="where to write timeline.json (or cuts.json "
-                                "with --evidence / --retune)")
-    ap.add_argument("--cuts", default=None,
-                    help="path to cuts.json, for a policy that needs evidence")
-    ap.add_argument("--raw-transcript", default=None, dest="raw_transcript",
-                    help="path to transcript.raw.json, for a speech policy")
-    ap.add_argument("--policy", default="uniform", choices=sorted(POLICIES))
-    ap.add_argument("--evidence", action="store_true",
-                    help="run only the precursor this policy needs")
-    ap.add_argument("--chunk-duration", type=float, default=20.0, dest="chunk_s",
-                    help="uniform: the length; otherwise the maximum (default 20)")
-    ap.add_argument("--min-chunk", type=float, default=5.0, dest="min_s")
-    ap.add_argument("--max-chunk", type=float, default=None, dest="max_s",
-                    help="defaults to --chunk-duration")
-    ap.add_argument("--stride", type=int, default=scenes.DEFAULT_STRIDE,
-                    help="scene: score every Nth frame (default 5). Higher is "
-                         "cheaper and needs a HIGHER --threshold")
-    ap.add_argument("--threshold", type=float, default=scenes.DEFAULT_THRESHOLD,
-                    help="scene: content difference that opens a scene")
-    ap.add_argument("--detect-width", type=int, default=scenes.DETECT_WIDTH,
-                    dest="detect_width",
-                    help="scene: width the frame is scaled to for detection "
-                         "(default 320). A cut is a global property of the "
-                         "frame, so full resolution buys only time")
-    ap.add_argument("--silence", type=float, default=speech.DEFAULT_SILENCE_S,
-                    help="vad: a gap this long or longer is a boundary")
-    ap.add_argument("--retune", type=float, default=None, metavar="VALUE",
-                    help="re-threshold the cached scores. Runs no model")
-    ap.add_argument("--calibrate", action="store_true",
-                    help="what every threshold would cost here. Reads the "
-                         "cached scores; runs nothing")
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-
-    try:
-        if args.calibrate:
-            if args.cuts is None:
-                print("error: --calibrate reads a cuts.json; pass --cuts")
-                return 1
-            cuts = load_cuts(args.cuts)
-            rows = scenes.sweep(cuts, [5, 10, 15, 20, 27, 35, 45, 60, 80]
-                                if cuts.source == "video"
-                                else [0.25, 0.5, 0.65, 1.0, 1.5, 2.0, 3.0])
-            current = cuts.params.get("threshold", cuts.params.get("silence_s"))
-            print(f"{cuts.video_id}   {cuts.detector}   "
-                  f"{len(cuts.scores['values'])} scored   currently {current}")
-            print(f"  {'value':>10} {'cuts':>6} {'rate':>8} {'median gap':>12}")
-            for r in rows:
-                gap = "--" if r["median_gap_s"] is None else f"{r['median_gap_s']:g}s"
-                mark = "  <- current" if r["threshold"] == current else ""
-                print(f"  {r['threshold']:>10g} {r['cuts']:>6} {r['rate']:>8.1%} "
-                      f"{gap:>12}{mark}")
-            print("\n  A threshold is a property of the footage, not a default. "
-                  "This reports; it does not choose.")
-            return 0
-
-        if args.retune is not None:
-            if args.cuts is None:
-                print("error: --retune re-thresholds a cuts.json; pass --cuts")
-                return 1
-            produced = retune(args.cuts, args.out, args.retune)
-        elif args.evidence:
-            produced = evidence(args.out, args.policy, media=args.media,
-                                raw_transcript=args.raw_transcript,
-                                stride=args.stride, threshold=args.threshold,
-                                detect_width=args.detect_width,
-                                silence_s=args.silence)
-            if "evidence" in produced.skipped and not args.json:
-                print(f"{produced.video_id}: policy {args.policy!r} needs no "
-                      "evidence -- it is arithmetic over the container "
-                      "duration")
-                return 0
-        else:
-            produced = boundaries(args.media, args.out, args.policy,
-                                  args.cuts, args.chunk_s, args.min_s,
-                                  args.max_s)
-    except (KeyError, ValueError, FileNotFoundError, scenes.NoPicture) as exc:
-        print(f"error: {exc}")
-        return 1
-
-    if args.json:
-        print(json.dumps(produced.as_dict(), indent=2))
-        return 0
-
-    s = produced.stats
-    if produced.component == "boundaries":
-        print(f"{produced.video_id}   policy={s['policy']}  "
-              f"derived_from={s['derived_from']}")
-        print(f"  chunks       {s['chunks']}   over {s['duration_s']:g}s")
-        print(f"  span         min {s['shortest_s']:g}s   max {s['longest_s']:g}s")
-        if s["cuts_offered"]:
-            print(f"  cuts offered {s['cuts_offered']}")
-        print(f"  fingerprint  {s['fingerprint']}")
-        print(f"\ntimeline -> {produced.artifacts['timeline']}")
-    else:
-        print(f"{produced.video_id}   {produced.component}")
-        for key in ("frames_read", "frames_scored", "speech_spans", "elapsed_s",
-                    "ms_per_frame", "threshold", "silence_s", "stride",
-                    "cuts_found", "was"):
-            if key in s and s[key] is not None:
-                print(f"  {key:<14} {s[key]}")
-        print(f"\ncuts -> {produced.artifacts['cuts']}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    Each row is `{threshold, cuts, rate, median_gap_s}`.
+    """
+    found = cuts if isinstance(cuts, Cuts) else load_cuts(cuts)
+    if thresholds is None:
+        thresholds = ([5, 10, 15, 20, 27, 35, 45, 60, 80] if found.source == "video"
+                      else [0.25, 0.5, 0.65, 1.0, 1.5, 2.0, 3.0])
+    return scenes.sweep(found, thresholds)

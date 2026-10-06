@@ -6,7 +6,7 @@ moments and higher-level answers out.
     aggregates/  answers over what video_rag extracted: counts, speakers,
                  summaries, chapters, events, entities
     shared/      what both tiers use: config, reporting, document contracts,
-                 storage, model providers
+                 storage, models
 
 `workflow.py` runs video_rag's driver, then aggregates'.
 """
@@ -22,8 +22,18 @@ from .shared.config.settings import configure
 logging.getLogger("vidra").addHandler(logging.NullHandler())
 
 #: Resolved on first access: `__version__` from the installed metadata, and the
-#: values a caller builds once (`Models`, `Database`, `Supabase`, `Folder`).
+#: values a caller builds once: the models, `Models`, and the databases.
 _LAZY = {"Models": "vidra.shared.models.roles",
+         "VLM": "vidra.shared.models.base",
+         "LLM": "vidra.shared.models.base",
+         "Embedder": "vidra.shared.models.base",
+         "OpenAI": "vidra.shared.models.llm",
+         "Chat": "vidra.shared.models.llm",
+         "Anthropic": "vidra.shared.models.llm",
+         "Stub": "vidra.shared.models.llm",
+         "OpenAIEmbedder": "vidra.shared.models.embedders.remote",
+         "LocalEmbedder": "vidra.shared.models.embedders.local",
+         "HashEmbedder": "vidra.shared.models.embedders",
          "Database": "vidra.shared.storage.database",
          "Supabase": "vidra.shared.storage.supabase",
          "Folder": "vidra.shared.storage.folder"}
@@ -46,6 +56,8 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["Database", "VidraError", "Folder", "ModelUnavailable", "Models", "Supabase",
-           "Unavailable", "__version__", "configure"]
+__all__ = ["Anthropic", "Chat", "Database", "Embedder", "Folder", "HashEmbedder", "LLM",
+           "LocalEmbedder", "ModelUnavailable", "Models", "OpenAI", "OpenAIEmbedder",
+           "Stub", "Supabase", "Unavailable", "VLM", "VidraError", "__version__",
+           "configure"]
 

@@ -8,13 +8,14 @@ job.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from vidra.shared.reporting import logs, progress
 from vidra.shared.contracts.documents import (Descriptions, Embedded,
                                                   Produced, Timeline,
                                                   Transcript)
-from vidra.shared.models import embedders as embedders_mod
+from vidra.shared.models.base import require
+from vidra.shared.models.roles import resolve
 from vidra.shared.storage.files import maybe, read, write
 from vidra.shared.contracts.documents import same_video
 from . import readable
@@ -23,24 +24,27 @@ from . import units as units_mod
 from .units import Unit
 from vidra.shared.reporting.errors import Refused
 
+if TYPE_CHECKING:
+    from vidra.shared.models.base import Embedder
+
 
 def encode(descriptions: Optional[Descriptions] = None,
            transcript: Optional[Transcript] = None,
            previous: Optional[Embedded] = None,
-           embedder: Optional[str] = None,
+           embedder: Optional["Embedder"] = None,
            batch: int = 64,
            on_progress: Optional[progress.Reporter] = None) -> list[Unit]:
     """Documents in hand -> units carrying their vectors. Writes nothing.
 
     Name at least one of the two documents. `previous` is an earlier
     `Embedded`: units whose text is unchanged under the same embedder keep their
-    vectors. `embedder` is a provider or `provider/model`; None resolves to
-    VIDRA_EMBEDDER, then openai, as `retrieve` does.
+    vectors. `embedder` is the model (None is OpenAI's default); a search must
+    use the same one.
     """
     if batch < 1:
         raise Refused(f"batch must be at least 1, not {batch}")
-    from vidra.shared.models import providers
-    providers.require("embed", embedder)
+    built = resolve("embedder", embedder)
+    require("embedder", built)
     if descriptions is None and transcript is None:
         raise Refused(
             "nothing to embed -- pass descriptions=, transcript=, or both")
@@ -50,8 +54,6 @@ def encode(descriptions: Optional[Descriptions] = None,
         wanted += units_mod.from_descriptions(descriptions)
     if transcript is not None:
         wanted += units_mod.from_transcript(transcript)
-
-    built = embedders_mod.build(embedder)
 
     # Hashes from a previous run, only under the same embedder.
     hashes: dict[str, str] = {}
@@ -88,7 +90,7 @@ def embed(out: str | Path,
           transcript: Optional[str | Path] = None,
           previous: Optional[str | Path] = None,
           timeline: Optional[str | Path] = None,
-          embedder: Optional[str] = None,
+          embedder: Optional["Embedder"] = None,
           batch: int = 64,
           on_progress: Optional[progress.Reporter] = None) -> Produced:
     """Embed what changed, into `out`. Name at least one input document. `encode`
@@ -97,8 +99,8 @@ def embed(out: str | Path,
     """
     if batch < 1:
         raise Refused(f"batch must be at least 1, not {batch}")
-    from vidra.shared.models import providers
-    providers.require("embed", embedder)
+    built = resolve("embedder", embedder)
+    require("embedder", built)
 
     described = maybe(descriptions, Descriptions)
     spoken = maybe(transcript, Transcript)
@@ -113,8 +115,8 @@ def embed(out: str | Path,
                           previous=stored, timeline=grid)
 
     with logs.timed("embed", video_id) as done:
-        units = encode(described, spoken, stored, embedder, batch, on_progress)
-        key = embedders_mod.build(embedder).key
+        units = encode(described, spoken, stored, built, batch, on_progress)
+        key = built.key
         carried = 0 if stored is None or stored.embedder != key else sum(
             1 for u in units if stored.stored().get(u.key) == u.text_hash)
 
@@ -137,53 +139,3 @@ def embed(out: str | Path,
 def load(path: str | Path) -> Embedded:
     """Read an `embedded.json` back, typed: text and vectors."""
     return read(path, Embedded)
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-    import json
-
-    ap = argparse.ArgumentParser(description="Embed what changed.")
-    ap.add_argument("out", help="where to write embedded.json")
-    ap.add_argument("--descriptions", default=None,
-                    help="path to descriptions.json")
-    ap.add_argument("--transcript", default=None, help="path to transcript.json")
-    ap.add_argument("--previous", default=None,
-                    help="an earlier embedded.json; unchanged vectors are "
-                         "carried forward. Usually the same path as `out`")
-    ap.add_argument("--timeline", default=None,
-                    help="path to timeline.json, for the fingerprint")
-    ap.add_argument("--embedder", default=None,
-                    help="a provider or provider/model; default VIDRA_EMBEDDER, "
-                         f"then openai. Known: {', '.join(embedders_mod.available())}")
-    ap.add_argument("--batch", type=int, default=64)
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-
-    try:
-        produced = embed(args.out, args.descriptions, args.transcript,
-                         args.previous, args.timeline, args.embedder,
-                         args.batch)
-    except (KeyError, ValueError, FileNotFoundError,
-            embedders_mod.EmbedderUnavailable) as exc:
-        print(f"error: {exc}")
-        return 1
-
-    if args.json:
-        print(json.dumps(produced.as_dict(), indent=2))
-        return 0
-
-    s = produced.stats
-    print(f"{produced.video_id}   {s['embedder']}")
-    print(f"  units        {s['units']}   from {', '.join(s['samplers'])}")
-    print(f"  embedded     {s['embedded']}   ({s['unchanged']} unchanged)")
-    print()
-    for name, where in produced.artifacts.items():
-        print(f"  {name:<12} -> {where}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

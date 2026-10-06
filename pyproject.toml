@@ -83,10 +83,6 @@ all = ["vidra[local,audio]"]
 # and a package left off is not a build error -- it is an `ImportError` for
 # whoever installs the wheel.
 #
-# `recovery/` is excluded here and has no `__init__.py`, deliberately. It is
-# the standalone kit: hand someone those files, a manifest and the video and
-# they rebuild the store with only `av`, `opencv-python` and `numpy`.
-# Installing it beside the pipeline is the first step towards it importing
-# from one. `eval` and `db` are not part of the library either.
+# `eval` and `db` are not part of the library.
 include = ["vidra*"]
-exclude = ["recovery*", "eval*", "db*", "data*", "samples*"]
+exclude = ["eval*", "db*", "data*", "samples*"]

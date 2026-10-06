@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Optional
 
+from ....shared.models.base import LLM, Embedder
+
 from ... import definitions
 from ...core.base import WINDOW, DefinitionRunner, schema
 from ..fold import fold
@@ -26,8 +28,8 @@ BATCH = 64
 
 
 class SpansAggregator(DefinitionRunner):
-    def __init__(self, definition_id: str, llm: Optional[str] = None,
-                 embedder: Optional[str] = None,
+    def __init__(self, definition_id: str, llm: Optional[LLM] = None,
+                 embedder: Optional[Embedder] = None,
                  max_spans: Optional[int] = None,
                  min_span_s: float = 30.0) -> None:
         super().__init__(definition_id, llm)
@@ -38,8 +40,10 @@ class SpansAggregator(DefinitionRunner):
         if not isinstance(min_span_s, (int, float)) or min_span_s < 0:
             from ....shared.reporting.errors import Refused
             raise Refused(f"min_span_s must be 0 or more seconds; got {min_span_s!r}")
-        from ....shared.models import embedders
-        self.embedder = embedders.build(embedder)
+        from ....shared.models.base import require
+        from ....shared.models.roles import resolve
+        self.embedder = resolve("embedder", embedder)
+        require("embedder", self.embedder)
         self.max_spans = max_spans
         self.min_span_s = float(min_span_s)
 

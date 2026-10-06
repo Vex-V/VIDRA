@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
 from ..shared.contracts.documents import Aggregate, Excerpt, Produced, Sightings
+from ..shared.models.base import Embedder, LLM
 from ..shared.models.roles import Models
 from ..shared.reporting import logs
 from ..shared.storage import files
@@ -56,8 +57,8 @@ def _given(name: str, data: Any) -> Any:
 
 
 def _run(name: str, data: Any, out: PathLike, previous: Optional[PathLike],
-         models: Optional[Models], llm: Optional[str] = None,
-         embedder: Optional[str] = None, **settings: Any) -> Produced:
+         models: Optional[Models], llm: Optional[LLM] = None,
+         embedder: Optional[Embedder] = None, **settings: Any) -> Produced:
     """`answer` with a write at the end: what every function here is."""
     own = {k: v for k, v in settings.items() if v is not None}
     earlier = files.maybe(previous, Aggregate)
@@ -120,14 +121,14 @@ def sentiment(*, input: InputLike, out: PathLike,
 
 def summary(*, input: InputLike, out: PathLike,
             previous: Optional[PathLike] = None, models: Optional[Models] = None,
-            llm: Optional[str] = None) -> Produced:
+            llm: Optional[LLM] = None) -> Produced:
     """One account of the whole video: a summary, topics, setting, notable."""
     return _run("summary", _given("summary", input), out, previous, models, llm)
 
 
 def chapters(*, input: InputLike, out: PathLike,
              previous: Optional[PathLike] = None, models: Optional[Models] = None,
-             llm: Optional[str] = None, embedder: Optional[str] = None,
+             llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
              max_spans: Optional[int] = None,
              min_span_s: Optional[float] = None) -> Produced:
     """Consecutive chapters: the embedder places the boundaries, the llm names
@@ -138,14 +139,14 @@ def chapters(*, input: InputLike, out: PathLike,
 
 def events(*, input: InputLike, out: PathLike,
            previous: Optional[PathLike] = None, models: Optional[Models] = None,
-           llm: Optional[str] = None) -> Produced:
+           llm: Optional[LLM] = None) -> Produced:
     """Discrete things that happened, each tied to the chunk it happened in."""
     return _run("events", _given("events", input), out, previous, models, llm)
 
 
 def prompt(*, name: str, input: InputLike, out: PathLike,
            previous: Optional[PathLike] = None, models: Optional[Models] = None,
-           llm: Optional[str] = None, embedder: Optional[str] = None,
+           llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
            **settings: Any) -> Produced:
     """Any prompt by name: one added with `add_prompt`, or a built-in. A `spans`
     prompt also takes `embedder`, `max_spans` and `min_span_s`."""
@@ -162,7 +163,7 @@ def prompt(*, name: str, input: InputLike, out: PathLike,
 
 def entities(*, profile: str, input: InputLike, out: PathLike,
              previous: Optional[PathLike] = None, models: Optional[Models] = None,
-             llm: Optional[str] = None, embedder: Optional[str] = None) -> Produced:
+             llm: Optional[LLM] = None, embedder: Optional[Embedder] = None) -> Produced:
     """The same person, object or text linked across chunks, with an account of
     each. The embedder decides who is who; the llm writes the accounts."""
     name = (profile if profile.startswith(definitions.PROFILE_PREFIX)

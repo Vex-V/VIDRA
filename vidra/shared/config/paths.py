@@ -97,8 +97,6 @@ _LAZY: dict[str, Any] = {
     "PROMPTS": lambda: data_root() / "prompts.json",
     #: Custom aggregate prompts and link profiles.
     "AGGREGATE_DEFINITIONS": lambda: data_root() / "aggregates.json",
-    #: Model endpoints added or overridden; names key variables, never keys.
-    "PROVIDERS": lambda: data_root() / "providers.json",
 }
 
 

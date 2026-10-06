@@ -1,7 +1,3 @@
-"""The describers the registry in `base.py` resolves to.
-
-`stub.py` loads nothing and fills the same keys a real answer would, so a stub
-run exercises the shape the document has to hold. `model.py` is every real
-one -- OpenAI, Anthropic, Gemini, Ollama and the rest, through `shared.models.llm` --
-and is imported only when asked for.
+"""The describer: `model.py` asks a `VLM` -- a ready-made one or a caller's
+own -- for each (chunk, sampler, question).
 """

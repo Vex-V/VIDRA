@@ -13,11 +13,12 @@ from __future__ import annotations
 from typing import Any, Optional, Sequence
 
 from ...shared.reporting.errors import Refused
-from ...shared.models.roles import Models, keys_of, unpack
+from ...shared.models.base import require
+from ...shared.models.roles import Models, resolve, unpack
 from .export import LEVELS
 
 
-def search(query: str, level: str = "source", embedder: Optional[str] = None,
+def search(query: str, level: str = "source", embedder: Optional[Any] = None,
            limit: int = 5, source_ids: Optional[Sequence[str]] = None,
            database: Optional[Any] = None,
            models: Optional[Models] = None) -> list[dict[str, Any]]:
@@ -37,8 +38,8 @@ def search(query: str, level: str = "source", embedder: Optional[str] = None,
         raise Refused("a search needs a query; this one is empty")
     if limit < 1:
         raise Refused("limit must be 1 or more")
-    with keys_of(models):
-        built = embedders.build(unpack(models, embedder=embedder)["embedder"])
+    built = resolve("embedder", unpack(models, embedder=embedder)["embedder"])
+    require("embedder", built)
     # Some models embed a query differently from a passage.
     vector = embedders.query_vector(built, query)
     return as_database(database or "supabase").search_aggregates(

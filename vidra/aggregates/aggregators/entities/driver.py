@@ -14,6 +14,8 @@ import asyncio
 from itertools import combinations
 from typing import Any, Optional
 
+from ....shared.models.base import LLM, Embedder
+
 from ... import definitions
 from ...core import inputs
 from .linking import Mentions, link_similar, mentions_of, similarity
@@ -22,12 +24,14 @@ from ...core.base import DefinitionRunner, listing, schema
 
 
 class EntitiesAggregator(DefinitionRunner):
-    def __init__(self, definition_id: str, llm: Optional[str] = None,
-                 embedder: Optional[str] = None) -> None:
+    def __init__(self, definition_id: str, llm: Optional[LLM] = None,
+                 embedder: Optional[Embedder] = None) -> None:
         super().__init__(definition_id, llm)
         # The same embedder resolution `embed` uses.
-        from ....shared.models import embedders
-        self.embedder = embedders.build(embedder)
+        from ....shared.models.base import require
+        from ....shared.models.roles import resolve
+        self.embedder = resolve("embedder", embedder)
+        require("embedder", self.embedder)
 
     @property
     def model_key(self) -> str:

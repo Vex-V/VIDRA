@@ -8,9 +8,9 @@
 from __future__ import annotations
 
 #: The public surface: entry points, errors and return types.
-from .driver import (EVIDENCE_SETTINGS, boundaries, detect, evidence, load,
-                     retune, timeline)
+from .driver import (EVIDENCE_SETTINGS, boundaries, calibrate, detect, evidence,
+                     load, retune, timeline)
 from .grid import POLICIES
 
-__all__ = ["EVIDENCE_SETTINGS", "POLICIES", "boundaries", "detect",
+__all__ = ["EVIDENCE_SETTINGS", "POLICIES", "boundaries", "calibrate", "detect",
            "evidence", "load", "retune", "timeline"]

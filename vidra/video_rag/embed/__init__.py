@@ -8,8 +8,7 @@ from __future__ import annotations
 from . import readable  # noqa: F401
 from .driver import embed, encode, load
 from .units import Unit
-#: The embedder registry lives in `shared/models`; re-exported here.
-from vidra.shared.models.embedders import EmbedderUnavailable, available
+#: The embedders live in `shared/models`; the error is re-exported here.
+from vidra.shared.models.embedders import EmbedderUnavailable
 
-__all__ = ["EmbedderUnavailable", "Unit", "available", "embed",
-           "encode", "load"]
+__all__ = ["EmbedderUnavailable", "Unit", "embed", "encode", "load"]

@@ -9,13 +9,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from ....shared.models.llm import Model
+from ....shared.models.base import Calls
 from ... import definitions
 from ...core.rendering import batched, resolve_span
 from ...core.base import BATCH, DefinitionRunner, schema
 
 
-async def fold(context: Any, llm: Model, parts: list[tuple[list[int], str]],
+async def fold(context: Any, llm: Calls, parts: list[tuple[list[int], str]],
                until: int, batch: int = BATCH, instruction: str = "",
                ) -> tuple[list[tuple[list[int], str]], list[dict[str, Any]]]:
     """Fold `(chunk_ids, text)` parts in batches until at most `until` remain. A

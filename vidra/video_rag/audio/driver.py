@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from vidra.shared.config import env
 from vidra.shared.reporting import logs
 from vidra.shared.contracts.documents import Media, Produced, RawTranscript
 from vidra.shared.storage.files import read, write
@@ -111,74 +110,3 @@ def audio(media: str | Path, out: str | Path,
 def load(path: str | Path) -> RawTranscript:
     """Read a `transcript.raw.json` back, typed."""
     return read(path, RawTranscript)
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-    import json
-
-    ap = argparse.ArgumentParser(
-        description="Transcribe and diarize a whole file. No chunking.")
-    ap.add_argument("media", help="path to media.json")
-    ap.add_argument("out", help="where to write transcript.raw.json")
-    ap.add_argument("--transcriber", default=DEFAULT_TRANSCRIBER,
-                    choices=sorted(models.TRANSCRIBERS))
-    ap.add_argument("--diarizer", default=DEFAULT_DIARIZER,
-                    choices=sorted(models.DIARIZERS))
-    ap.add_argument("--model", default=None, help="whisper: tiny|base|small|...")
-    ap.add_argument("--language", default=None, help="skip detection")
-    ap.add_argument("--no-vad-filter", dest="vad_filter", action="store_false",
-                    default=None,
-                    help="whisper: transcribe the whole track, including what "
-                         "its voice-activity filter would drop")
-    ap.add_argument("--compute-type", default=None,
-                    help="whisper: float16 | int8 | ... (default float16 on "
-                         "cuda, int8 on cpu)")
-    ap.add_argument("--device", default=None,
-                    help="cuda | cpu (default: cuda where torch finds one; "
-                         "pyannote then tries mps, which whisper cannot use)")
-    ap.add_argument("--diarizer-model", default=None,
-                    help="pyannote: a checkpoint id (default "
-                         "pyannote/speaker-diarization-3.1). Named here rather "
-                         "than read off the backend, which is imported lazily")
-    ap.add_argument("--overlaps", dest="exclusive", action="store_false",
-                    default=None,
-                    help="pyannote: keep overlapping speech rather than "
-                         "resolving it. A word then belongs to two speakers")
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-
-    try:
-        produced = audio(args.media, args.out, args.transcriber,
-                         args.diarizer, args.model, args.language,
-                         args.vad_filter, args.compute_type, args.device,
-                         args.diarizer_model, args.exclusive)
-    except (NoAudio, KeyError, ValueError, FileNotFoundError,
-            models.ModelUnavailable) as exc:
-        print(f"error: {exc}")
-        return 1
-
-    if args.json:
-        print(json.dumps(produced.as_dict(), indent=2))
-        return 0
-
-    s = produced.stats
-    print(f"{produced.video_id}")
-    if s.get("silent"):
-        print("  silent -- no model was loaded, and no speech is the finding")
-    else:
-        print(f"  segments     {s['segments']}   words {s['words']}")
-        print(f"  speakers     {s['speakers']}   turns {s['turns']}   "
-              f"speech {s['speech_s']:g}s")
-        print(f"  attributed   {s['attributed']}/{s['words']} words")
-        print(f"  decode       {s['decode_s']:.2f}s   "
-              f"transcribe {s['transcribe_s']:.2f}s   "
-              f"diarize {s['diarize_s']:.2f}s")
-    print()
-    print(f"raw transcript -> {produced.artifacts['raw_transcript']}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

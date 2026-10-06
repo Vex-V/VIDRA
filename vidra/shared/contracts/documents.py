@@ -362,7 +362,7 @@ class Manifest:
     #: The grid this was cut on.
     timeline_fingerprint: str
     #: What was decoded: path, container, duration and the video stream.
-    #: `recovery/` rebuilds a store from this.
+    #: `video.recreate` rebuilds a store from this.
     source: dict[str, Any] = field(default_factory=dict)
     #: The decimator, every sampler's configuration, and where frames went.
     config: dict[str, Any] = field(default_factory=dict)
@@ -466,7 +466,7 @@ class Descriptions:
     timeline_fingerprint: str = ""
     #: Which ingest produced the frames.
     manifest_fingerprint: str = ""
-    #: Which describer, its settings, and `{question: hash}` for every prompt.
+    #: Which VLM, its settings, and `{question: hash}` for every prompt.
     model: dict[str, Any] = field(default_factory=dict)
     #: One entry per chunk, with a block per sampler id: its summary and
     #: structured answer.
@@ -508,7 +508,7 @@ class Embedded:
     video_id: str
     #: The grid they were built on; see `Manifest.timeline_fingerprint`.
     timeline_fingerprint: str = ""
-    #: Who made the vectors, as `embedders.build().key`.
+    #: Who made the vectors: the embedder's `key`.
     embedder: str = ""
     #: One entry per unit: the text, its hash, and `vector` when it was embedded.
     units: list[dict[str, Any]] = field(default_factory=list)

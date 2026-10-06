@@ -15,7 +15,6 @@ from vidra.shared.contracts.documents import same_video
 from . import samplers as samplers_mod
 #: The pipeline's `ingest` takes built samplers; this module's takes a spec.
 from .pipeline import ingest as _pass
-from .reader import UnreadableSource
 from ..helpers import FrameStore
 from vidra.shared.reporting.errors import Refused, UnknownOption
 
@@ -244,94 +243,3 @@ def video(media: str | Path, timeline: str | Path, out: str | Path,
 def load(path: str | Path) -> Manifest:
     """Read a `manifest.json` back, typed."""
     return read(path, Manifest)
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-    import json
-
-    ap = argparse.ArgumentParser(
-        description="Decide which frames are worth describing.")
-    ap.add_argument("media", help="path to media.json")
-    ap.add_argument("timeline", help="path to timeline.json")
-    ap.add_argument("out", help="where to write manifest.json")
-    ap.add_argument("--store", default=None,
-                    help="directory for the kept frames. Omit to keep none")
-    ap.add_argument("--sampler", default="uniform",
-                    help=f"comma-separated; known: "
-                         f"{', '.join(samplers_mod.available())}. Any may carry "
-                         f"a question after a colon, e.g. `yolo:overview`")
-    ap.add_argument("--per-second", type=float, default=1.0,
-                    help="frames kept per second of media time (default 1)")
-    ap.add_argument("--every-frames", type=int, default=None, dest="every_n",
-                    help="uniform: stride over the decimated stream (default 1)")
-    ap.add_argument("--min-interval", type=float, default=0.0)
-    ap.add_argument("--max-per-chunk", type=int, default=None)
-    ap.add_argument("--threshold", type=float, default=None,
-                    help="change samplers: per-sampler default if unset")
-    ap.add_argument("--vocabulary", default=None,
-                    help="objects: comma-separated class names")
-    ap.add_argument("--confidence", type=float, default=None,
-                    help="objects: how sure the detector must be of a box "
-                         "(default 0.3). Not --threshold, which is how much "
-                         "the frame must have changed")
-    ap.add_argument("--languages", default=None,
-                    help="text: comma-separated EasyOCR codes (default en)")
-    ap.add_argument("--prune-store", action="store_true",
-                    help="delete stored frames this manifest does not name. "
-                         "A store accumulates across runs; this is the only "
-                         "irreversible thing ingest can do, so it is opt-in")
-    ap.add_argument("--store-scope", default="sampled",
-                    choices=("sampled", "decimated"))
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-
-    vocab = ([v.strip() for v in args.vocabulary.split(",") if v.strip()]
-             if args.vocabulary else None)
-    langs = ([l.strip() for l in args.languages.split(",") if l.strip()]
-             if args.languages else None)
-    try:
-        produced = video(args.media, args.timeline, args.out, args.store,
-                       args.sampler, args.per_second, args.every_n,
-                       args.min_interval, args.max_per_chunk, args.threshold,
-                       vocab, args.confidence, langs, args.store_scope,
-                       args.prune_store)
-    except (KeyError, ValueError, FileNotFoundError, UnreadableSource) as exc:
-        print(f"error: {exc}")
-        return 1
-
-    if args.json:
-        print(json.dumps(produced.as_dict(), indent=2))
-        return 0
-
-    s = produced.stats
-    manifest = load(produced.artifacts['manifest'])
-    print(f"{produced.video_id}")
-    print(f"  decimated    {s['frames_decimated']}   "
-          f"over {s['chunks']} chunks ({s['chunks_with_frames']} with frames)")
-    print(f"  sampled      {s['frames_sampled']}")
-    print(f"  elapsed      {s['elapsed_s']:.2f}s")
-    if "stored_frames" in s:
-        print(f"  stored       {s['stored_frames']} frames, {s['stored_mb']:g} MB")
-    if s.get("pruned_frames"):
-        print(f"  pruned       {s['pruned_frames']} frames no longer named")
-    print()
-    for sampler_id in s["samplers"]:
-        counts = [c["samplers"].get(sampler_id, {}).get("frame_count", 0)
-                  for c in manifest.chunks]
-        total = sum(counts)
-        pct = total / max(s["frames_decimated"], 1) * 100
-        print(f"  {sampler_id:<18} {total:>4} frames ({pct:.1f}% of decimated)"
-              f"   per chunk {counts[:6]}"
-              + (" ..." if len(counts) > 6 else ""))
-    print()
-    print(f"  timeline fp  {s['timeline_fingerprint']}")
-    print(f"  manifest fp  {s['manifest_fingerprint']}")
-    print(f"\nmanifest -> {produced.artifacts['manifest']}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -1,8 +1,7 @@
-"""Reading a `.env` into the environment: by an entry point, or when asked.
+"""Reading a `.env` into the environment, when asked.
 
-The library never calls this by itself. Every `python -m vidra...` CLI
-calls `load()` first; in code, use `vidra.configure(env_file=...)` or
-`load_dotenv()`. With no path, `load()` reads the checkout's `.env`, or the
+The library never calls this by itself: use `vidra.configure(env_file=...)`
+or `load_dotenv()`. With no path, `load()` reads the checkout's `.env`, or the
 working directory's when installed. A variable already set is never
 overridden. Keys only: the data root is not read from here.
 """
@@ -18,7 +17,7 @@ _loaded = False
 
 
 def env_file() -> Optional[Path]:
-    """The `.env` a CLI would read, or None if there is none."""
+    """The `.env` `load()` reads when given no path, or None if there is none."""
     candidate = (paths.CHECKOUT / ".env" if paths.CHECKOUT is not None
                  else Path.cwd() / ".env")
     return candidate if candidate.exists() else None

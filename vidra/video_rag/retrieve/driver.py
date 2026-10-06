@@ -14,7 +14,8 @@ from ..boundaries import load as load_timeline
 from vidra.shared.models import embedders as embedders_mod
 from .search import Moment, to_moments
 from vidra.shared.reporting.errors import Refused
-from vidra.shared.models.roles import Models, keys_of, unpack
+from vidra.shared.models.base import Embedder, require
+from vidra.shared.models.roles import Models, resolve, unpack
 from vidra.shared.storage.database import Database, as_database
 from vidra.shared.config.paths import MissingArtifact
 
@@ -53,7 +54,7 @@ def chunks_in(spans: Sequence[tuple[float, float]],
 
 
 def search(query: str, video_id: Optional[str | Sequence[str]] = None,
-           embedder: Optional[str] = None,
+           embedder: Optional[Embedder] = None,
            moments: int = 5,
            sampler: Optional[str] = None,
            candidates: int = 20,
@@ -91,17 +92,16 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
 
     Read `notes` when `moments` is empty: they say why. A `Moment.score` is a rank
     fusion, not a similarity. `database` is a built `Database` or a name
-    (`supabase` by default); `models` supplies the embedder the index was built
-    with.
+    (`supabase` by default). `embedder` (or `models.embedder`) must be the one
+    the index was built with; None is OpenAI's default.
     """
     if not (query or "").strip():
         # An empty query is refused here rather than at the provider.
         raise Refused("a search needs a query; this one is empty")
 
     scope = scope_of(video_id, video_ids)
-    # The client reads its key when built.
-    with keys_of(models):
-        built = embedders_mod.build(unpack(models, embedder=embedder)["embedder"])
+    built = resolve("embedder", unpack(models, embedder=embedder)["embedder"])
+    require("embedder", built)
     return _search(built, query, scope, moments, sampler, question,
                    candidates, strategy, chunk_ids, window, after, before,
                    structured, grids, as_database(database or "supabase"))
@@ -180,90 +180,3 @@ def _all_videos(database: Database) -> list[str]:
         return database.video_ids()
     except Exception:                                    # noqa: BLE001
         return []
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-    import json
-
-    ap = argparse.ArgumentParser(description="Search one video's moments.")
-    ap.add_argument("query")
-    ap.add_argument("video_id")
-    ap.add_argument("--embedder", default=None,
-                    help="the one that built the index: a provider or "
-                         "provider/model; default VIDRA_EMBEDDER, then openai")
-    ap.add_argument("--moments", type=int, default=5)
-    ap.add_argument("--sampler", default=None,
-                    help="narrow to one pairing, e.g. `clip:text`")
-    ap.add_argument("--question", default=None,
-                    help="narrow to one question across every sampler that "
-                         "asked it, e.g. `text`")
-    ap.add_argument("--strategy", default=None,
-                    help="one sampler's whole output, e.g. `clip`")
-    ap.add_argument("--chunks", default=None, dest="chunk_ids",
-                    help="comma-separated chunk ids to search within")
-    ap.add_argument("--window", type=int, default=0,
-                    help="widen --chunks by N neighbours each side")
-    ap.add_argument("--after", type=float, default=None,
-                    help="seconds; resolved to chunk ids through the grid")
-    ap.add_argument("--before", type=float, default=None, help="seconds")
-    ap.add_argument("--where", default=None, metavar="FIELD=VALUE",
-                    help="exact structured values, comma-separated, e.g. "
-                         "`severity=severe,environment=outdoor`")
-    ap.add_argument("--candidates", type=int, default=20,
-                    help="units ranked per half before fusion (default 20)")
-    ap.add_argument("--database", default="supabase",
-                    help="where the index is read from: `supabase`, or `folder` "
-                         "for the output folder itself, no server")
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-
-    chunk_ids = ([int(c) for c in args.chunk_ids.split(",") if c.strip()]
-                 if args.chunk_ids else None)
-    structured = None
-    if args.where:
-        structured = dict(pair.split("=", 1) for pair in args.where.split(",")
-                          if "=" in pair)
-
-    try:
-        found, notes = search(args.query, args.video_id, args.embedder,
-                              args.moments, args.sampler,
-                              args.candidates,
-                              question=args.question, strategy=args.strategy,
-                              chunk_ids=chunk_ids, window=args.window,
-                              after=args.after, before=args.before,
-                              structured=structured, database=args.database)
-    except (KeyError, ValueError, FileNotFoundError,
-            embedders_mod.EmbedderUnavailable) as exc:
-        print(f"error: {exc}")
-        return 1
-
-    if args.json:
-        print(json.dumps([m.as_dict() for m in found], indent=2))
-        return 0
-
-    print(f"{args.query!r} in {args.video_id or 'every video'}")
-    for note in notes:
-        print(f"  note: {note}")
-    for moment in found:
-        marks = " ".join(
-            f"{h['sampler_id']}(v{h['dense_rank']}"
-            + (f",t{h['text_rank']}" if h["text_rank"] else ",tNone") + ")"
-            for h in moment.hits)
-        print(f"\n  chunk {moment.chunk_id}  "
-              f"{moment.start_ts:.1f}-{moment.end_ts:.1f}s   "
-              f"score {moment.score:.4f}")
-        print(f"    {marks}")
-        for hit in moment.hits[:2]:
-            text = hit["content"].replace("\n", " ")
-            print(f"    {hit['sampler_id']}: {text[:110]}"
-                  + ("..." if len(text) > 110 else ""))
-    if not found:
-        print("  no matches")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from vidra.shared.reporting import logs
 from vidra.shared.contracts.documents import (Produced, RawTranscript,
@@ -51,41 +50,3 @@ def cut(timeline: str | Path, raw_transcript: str | Path,
 def load(path: str | Path) -> Transcript:
     """Read a `transcript.json` back, typed."""
     return read(path, Transcript)
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-    import json
-
-    ap = argparse.ArgumentParser(description="Cut a transcript to the grid.")
-    ap.add_argument("timeline", help="path to timeline.json")
-    ap.add_argument("raw_transcript", help="path to transcript.raw.json")
-    ap.add_argument("out", help="where to write transcript.json")
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-
-    try:
-        produced = cut(args.timeline, args.raw_transcript, args.out)
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"error: {exc}")
-        return 1
-
-    if args.json:
-        print(json.dumps(produced.as_dict(), indent=2))
-        return 0
-
-    s = produced.stats
-    print(f"{produced.video_id}")
-    print(f"  chunks       {s['chunks']}   ({s['chunks_with_speech']} with speech)")
-    print(f"  words        {s['words']}/{s['words_in_transcript']} placed")
-    if s["words_outside_grid"]:
-        print(f"  outside grid {s['words_outside_grid']}")
-    print(f"  speakers     {s['speakers']}")
-    print(f"\ntranscript -> {produced.artifacts['transcript']}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -8,12 +8,11 @@ describer and question hash still match. The question vocabulary
 from __future__ import annotations
 
 #: The public surface: entry points, errors and return types.
-from .base import DescriberUnavailable, available
+from .base import DescriberUnavailable
 from .driver import answer, describe, load
 from .frames import StoreUnavailable
 from .library import (PromptError, ProtectedPrompt, add_question, question,
                       questions, remove_question)
 
 __all__ = ["DescriberUnavailable", "PromptError", "ProtectedPrompt",
-           "StoreUnavailable", "add_question", "answer", "available",
-           "describe", "load", "question", "questions", "remove_question"]
+           "StoreUnavailable", "add_question", "answer", "describe", "load", "question", "questions", "remove_question"]

@@ -8,6 +8,7 @@ from __future__ import annotations
 from .driver import SAMPLER_SETTINGS, ingest, load, video
 from ..helpers import FrameStore
 from .reader import UnreadableSource
+from .recovery import Mismatch, MissingVideo, recreate
 
-__all__ = ["SAMPLER_SETTINGS", "FrameStore",
-           "UnreadableSource", "ingest", "load", "video"]
+__all__ = ["SAMPLER_SETTINGS", "FrameStore", "Mismatch", "MissingVideo",
+           "UnreadableSource", "ingest", "load", "recreate", "video"]

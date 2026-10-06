@@ -16,8 +16,10 @@
       db.py         the Supabase client, and the one list of its key names
       supabase.py   documents -> rows; the only module that knows table names
     models/         who answers a model call
-      providers.py  which provider serves a role, and how to reach it
-      llm.py        asking a model for text or a JSON shape
+      base.py       VLM, LLM, Embedder: what a model is, and how it is called
+      llm.py        the ready-made VLMs and LLMs: OpenAI, Chat, Anthropic, Stub
+      embedders/    the ready-made embedders: OpenAI, local, hash
+      roles.py      `Models`: one model per role, and the defaults
 
 `reporting/errors` and `contracts/documents` import nothing of ours but each
 other's leaf; `config/paths` only errors. A module only one component needs

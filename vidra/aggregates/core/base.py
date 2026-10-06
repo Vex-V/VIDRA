@@ -17,6 +17,7 @@ from ...shared.contracts.documents import (Descriptions, Manifest, Timeline,
                                            Transcript, fingerprint_of)
 #: Re-exported, the one class shared with audio.
 from ...shared.reporting.errors import ModelUnavailable
+from ...shared.models.base import LLM
 
 #: Cheapest first.
 TIERS = ("free", "local", "llm")
@@ -140,15 +141,16 @@ class DefinitionRunner:
     depends_on: tuple[str, ...] = ()
     takes_inputs = True
 
-    def __init__(self, definition_id: str, llm: Optional[str] = None) -> None:
-        from ...shared.models.llm import Model
+    def __init__(self, definition_id: str, llm: Optional[LLM] = None) -> None:
+        from ...shared.models.base import calls
+        from ...shared.models.roles import resolve
         from .. import definitions
         self.name = definition_id
         self.section, self.definition = definitions.locate(definition_id)
         self.entry = definitions.get(self.section, self.definition)
         self.about = self.entry.get("about", "")
         self.version = definitions.version_of(self.section, self.definition)
-        self.llm = Model(llm, role="llm")
+        self.llm = calls("llm", resolve("llm", llm))
 
     @property
     def model_key(self) -> str:

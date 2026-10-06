@@ -1,14 +1,14 @@
-"""The Describer protocol, and a registry.
+"""The Describer protocol, and building one from a VLM.
 
 A describer takes frames and a context and returns a summary plus the
-structured fields its question's shape holds: the `stub`, which loads
-nothing, or `ModelDescriber` for any provider. Resolved lazily.
+structured fields its question's shape holds. `ModelDescriber` is the one
+there is: it asks whichever `VLM` it is handed.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from .frames import LoadedFrame
 from vidra.shared.reporting.errors import Unavailable
@@ -36,32 +36,13 @@ class Describer(Protocol):
     def config(self) -> dict[str, Any]: ...
 
 
-#: Describers that are not a model provider: the stub.
-_REGISTRY: dict[str, Any] = {}
-
-
-def register(cls) -> Any:
-    _REGISTRY[cls.name] = cls
-    return cls
-
-
-def build(name: Optional[str] = None, **kwargs) -> Describer:
-    """A provider, `provider/model`, `stub`, or None for the default."""
-    from vidra.shared.models import providers
-
-    chosen, _ = providers.choose("describe", name)
-    if chosen == providers.OFFLINE["describe"]:
-        from .backends import stub  # noqa: F401  -- self-registers
-    if chosen in _REGISTRY:
-        return _REGISTRY[chosen]()
+def build(vlm: Any = None, **kwargs) -> Describer:
+    """A describer asking `vlm` (None is the default VLM). Checked here, before
+    any frame is read: the right kind of model, a key, an API key."""
+    from vidra.shared.models.base import calls
+    from vidra.shared.models.roles import resolve
     from .backends.model import ModelDescriber
-    return ModelDescriber(name, **kwargs)
+    return ModelDescriber(calls("vlm", resolve("vlm", vlm)), **kwargs)
 
 
-def available() -> list[str]:
-    from vidra.shared.models import providers
-    return sorted(set(_REGISTRY) | set(providers.names("describe")))
-
-
-__all__ = ["Describer", "DescriberUnavailable", "Description", "available",
-           "build", "register"]
+__all__ = ["Describer", "DescriberUnavailable", "Description", "build"]

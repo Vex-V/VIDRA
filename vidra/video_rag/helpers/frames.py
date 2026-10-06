@@ -2,7 +2,7 @@
 
 `video` writes frames and `describe` reads them. A frame is addressed by its
 read index, the reader's count over every frame in the container.
-`recovery/` rebuilds a store from a manifest.
+`video.recreate` rebuilds a store from a manifest.
 """
 
 from __future__ import annotations

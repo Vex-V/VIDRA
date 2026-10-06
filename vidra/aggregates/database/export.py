@@ -169,10 +169,11 @@ def units_of(document: dict[str, Any], items: list[dict[str, Any]]
 
 def export(source_id: str, timeline: Timeline, answers: dict[str, str],
            definitions_used: dict[str, str], database: Any,
-           embedder: Optional[str] = None) -> tuple[list[str], int]:
-    """Every answer file in `answers` into `database`. Returns (problems, units).
-    Failures are reported, not raised; the source goes first, and if it fails
-    nothing else is tried.
+           embedder: Optional[Any] = None) -> tuple[list[str], int]:
+    """Every answer file in `answers` into `database`. Returns (problems, units
+    written). Failures are reported, not raised; the source goes first, and if
+    it fails nothing else is tried. The units are embedded only when the
+    database implements `write_aggregate_units`: that is a model call.
     """
     from ...shared.storage import files
 
@@ -198,16 +199,19 @@ def export(source_id: str, timeline: Timeline, answers: dict[str, str],
         problems.append(f"definitions -> {database.name}: {exc}")
 
     written = 0
-    if units:
+    if units and database.implements("write_aggregate_units"):
         try:
-            from ...shared.models import embedders
-            built = embedders.build(embedder)
+            from ...shared.models.base import require
+            from ...shared.models.roles import resolve
+            built = resolve("embedder", embedder)
+            require("embedder", built)
             texts = [u["content"] for u in units]
             vectors = [v for at in range(0, len(texts), BATCH)
                        for v in built.embed(texts[at:at + BATCH])]
             for unit, vector in zip(units, vectors):
                 unit["vector"] = vector
-            written = database.write_aggregate_units(source_id, units, built.key)
+            database.write_aggregate_units(source_id, units, built.key)
+            written = len(units)
         except Exception as exc:                              # noqa: BLE001
             problems.append(f"aggregate vectors -> {database.name}: {exc}")
     return problems, written

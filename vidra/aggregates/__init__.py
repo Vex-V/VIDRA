@@ -38,6 +38,7 @@ from .aggregators.coverage import CoverageAggregator
 from .aggregators.speakers import SpeakersAggregator
 from .aggregators.stats import StatsAggregator
 from vidra.shared.reporting.errors import Refused
+from vidra.shared.models.base import Embedder, LLM
 
 REGISTRY: dict[str, Any] = {
     cls.name: cls for cls in
@@ -137,7 +138,7 @@ def uses_embedder(name: str) -> bool:
     return "embedder" in _runner_params(name)
 
 
-def build(name: str, llm: Optional[str] = None, embedder: Optional[str] = None,
+def build(name: str, llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
           **settings: Any) -> Any:
     """One aggregator, constructed with its llm, its embedder (if it takes one) and
     its settings.

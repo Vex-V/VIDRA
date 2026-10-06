@@ -5,9 +5,10 @@ server.
     search("a man in a red cap", "test", embedder="local", database=db)
 
 Reads `embedded.json` and `timeline.json` where they lie. Dense only: units
-are ranked by cosine in the embedder's space. Writes copy only `timeline` and
-`embedded` (a no-op when the root is the run's own folder). Aggregate vectors
-are kept per embedder in `aggregate_units.json` in the source's folder.
+are ranked by cosine in the embedder's space. Of the write hooks it fills in
+only what search reads: `write_timeline` and `write_embedded` copy the file (a
+no-op when the root is the run's own folder), and aggregate vectors are kept
+per embedder in `aggregate_units.json` in the source's folder.
 """
 
 from __future__ import annotations
@@ -19,8 +20,6 @@ from ..config import paths
 from . import files
 from .database import Database
 
-#: What search reads, by artifact name.
-KEPT = ("timeline", "embedded")
 #: An aggregate source's row and its vectors, per embedder.
 AGGREGATE_UNITS = "aggregate_units.json"
 
@@ -50,19 +49,15 @@ class Folder(Database):
 
     # --------------------------------------------------------------- writing
 
-    def write(self, video_id: str, artifact: str, document: dict[str, Any]) -> bool:
-        if artifact not in KEPT:
-            return False
+    def _copy(self, video_id: str, artifact: str, document: dict[str, Any]) -> None:
         if self._read(video_id, artifact) != document:
             files.write_json(self._file(video_id, artifact), document)
-        return True
 
-    def write_prompts(self, rows: list[dict[str, Any]]) -> int:
-        # Prompt rows are not kept here.
-        return 0
+    def write_timeline(self, video_id: str, document: dict[str, Any]) -> None:
+        self._copy(video_id, "timeline", document)
 
-    def write_definitions(self, rows: list[dict[str, Any]]) -> int:
-        return 0
+    def write_embedded(self, video_id: str, document: dict[str, Any]) -> None:
+        self._copy(video_id, "embedded", document)
 
     def _units_file(self, source_id: str) -> tuple[Path, dict[str, Any]]:
         where = self.root / paths.check_id(source_id) / AGGREGATE_UNITS
@@ -76,13 +71,9 @@ class Folder(Database):
         held["source"] = source
         files.write_json(where, held)
 
-    def write_answer(self, source_id: str, answer: dict[str, Any],
-                     items: list[dict[str, Any]], mentions: list[dict[str, Any]]) -> None:
-        # Answers are already files; only the vectors are kept.
-        return None
-
     def write_aggregate_units(self, source_id: str, units: list[dict[str, Any]],
-                              embedder_key: str) -> int:
+                              embedder_key: str) -> None:
+        # Answers are already files; only the source and the vectors are kept.
         where, held = self._units_file(source_id)
         answers = {u["aggregate_id"] for u in units}
         kept = [u for u in held["units"].get(embedder_key, [])
@@ -92,7 +83,6 @@ class Folder(Database):
                                    "text_hash", "start_ts", "end_ts", "vector")}
             for u in units if u.get("vector")]
         files.write_json(where, held)
-        return sum(1 for u in units if u.get("vector"))
 
     # --------------------------------------------------------------- reading
 
@@ -196,4 +186,4 @@ def _matches(have: dict[str, Any], want: dict[str, Any]) -> bool:
     return True
 
 
-__all__ = ["Folder", "KEPT", "AGGREGATE_UNITS"]
+__all__ = ["Folder", "AGGREGATE_UNITS"]

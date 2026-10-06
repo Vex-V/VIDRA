@@ -6,61 +6,108 @@
     video_rag("x.mp4", "data/out", database=db)      # copies go here
     search("the reactor", "x", database=db)          # and are read from here
 
-Each backend is its own module (`supabase.py`, `folder.py`) implementing
-these methods; `DATABASES` maps a name to it. A pipeline writes to a
-database; components never do.
+A database is a set of hooks, one per thing a run saves and one per thing a
+search reads. Subclass `Database` and fill in only the ones you want:
+
+    class VectorsOnly(Database):
+        name = "vectors"
+        def write_embedded(self, video_id, document):
+            for unit in document["units"]:
+                index.upsert(f"{video_id}/{unit['chunk_id']}/{unit['sampler_id']}",
+                             unit["vector"], unit)
+
+    video_rag("x.mp4", "data/out", database=VectorsOnly())
+
+A write hook left alone does nothing, so a run simply does not save that
+artifact. A read hook left alone raises `Unsupported`: a search answered with
+nothing would look like a search that found nothing.
+
+`Supabase` and `Folder` are backends built this way; `DATABASES` maps a name
+to each. A pipeline writes to a database; components never do.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from typing import Any, Optional, Sequence
 
-from ..reporting.errors import UnknownOption
+from ..reporting.errors import Unavailable, UnknownOption
 
 
-class Database(ABC):
-    """Where a run's copies go, and what a search reads. Every method raises on
-    failure; the pipeline decides to report and continue.
+class Unsupported(Unavailable, NotImplementedError):
+    """This database does not implement that read."""
+
+
+class Database:
+    """Where a run's copies go, and what a search reads.
+
+    The write hooks are called by the pipelines as each stage finishes, with
+    the stage's document as a dict -- exactly what its JSON file holds. Every
+    hook raises on failure; the pipeline reports the failure and continues.
     """
 
     #: The name a run reports problems under, and the string that builds one.
     name: str = ""
 
-    # --------------------------------------------------------------- writing
+    # ------------------------------------------------------- video_rag writes
+    #
+    # One per artifact, named `write_<artifact>`, so the pipeline calls each by
+    # the artifact's own name. `document` is the artifact's JSON as a dict.
 
-    @abstractmethod
-    def write(self, video_id: str, artifact: str, document: dict[str, Any]) -> bool:
-        """One artifact's document. False when it has no row representation."""
+    def write_media(self, video_id: str, document: dict[str, Any]) -> None:
+        """`media.json`: the file, its container and its streams."""
 
-    @abstractmethod
-    def write_prompts(self, rows: list[dict[str, Any]]) -> int:
+    def write_raw_transcript(self, video_id: str, document: dict[str, Any]) -> None:
+        """`transcript.raw.json`: words, segments and speaker turns, uncut."""
+
+    def write_cuts(self, video_id: str, document: dict[str, Any]) -> None:
+        """`cuts.json`: the boundary evidence (scene scores, speech cuts)."""
+
+    def write_timeline(self, video_id: str, document: dict[str, Any]) -> None:
+        """`timeline.json`: the chunk grid, `chunks[]` with `start_ts`/`end_ts`."""
+
+    def write_manifest(self, video_id: str, document: dict[str, Any]) -> None:
+        """`manifest.json`: per chunk, the frames each sampler kept."""
+
+    def write_transcript(self, video_id: str, document: dict[str, Any]) -> None:
+        """`transcript.json`: the transcript cut onto the grid, per chunk."""
+
+    def write_descriptions(self, video_id: str, document: dict[str, Any]) -> None:
+        """`descriptions.json`: per chunk and sampler, the model's answer."""
+
+    def write_embedded(self, video_id: str, document: dict[str, Any]) -> None:
+        """`embedded.json`: `embedder` (the space's key) and `units[]`, each
+        with `chunk_id`, `sampler_id`, `sampler`, `question`, `content`,
+        `structured`, `text_hash` and `vector`."""
+
+    def write_prompts(self, rows: list[dict[str, Any]]) -> None:
         """The questions a describe run asked, at the version it asked them."""
 
-    @abstractmethod
-    def write_definitions(self, rows: list[dict[str, Any]]) -> int:
-        """The aggregate definitions a run used, at the version it used them."""
+    # ------------------------------------------------------ aggregates writes
+    #
+    # Rows built by `aggregates.database.export`.
 
-    @abstractmethod
     def write_source(self, source: dict[str, Any]) -> None:
         """What a set of aggregate answers is about: `source_id`, `video_ids`,
         `members` (each video's chunk and time offsets), duration, chunks."""
 
-    @abstractmethod
     def write_answer(self, source_id: str, answer: dict[str, Any],
                      items: list[dict[str, Any]], mentions: list[dict[str, Any]]) -> None:
-        """One aggregate answer, the items it places in time and, for a linked entity,
-        its sightings. Rows built by `aggregates.database.export`.
-        """
+        """One aggregate answer, the items it places in time and, for a linked
+        entity, its sightings."""
 
-    @abstractmethod
     def write_aggregate_units(self, source_id: str, units: list[dict[str, Any]],
-                              embedder_key: str) -> int:
-        """Embedded summaries, chapters and entities, each with its `level`."""
+                              embedder_key: str) -> None:
+        """Embedded summaries, chapters and entities, each with its `level` and
+        `vector`. Embedding them costs a call, so it happens only when this
+        hook is implemented."""
+
+    def write_definitions(self, rows: list[dict[str, Any]]) -> None:
+        """The aggregate definitions a run used, at the version it used them."""
 
     # --------------------------------------------------------------- reading
+    #
+    # Needed only to search through this database.
 
-    @abstractmethod
     def search(self, vector: Sequence[float], query: str, embedder_key: str,
                limit: int = 20, video_ids: Optional[Sequence[str]] = None,
                sampler: Optional[str] = None, question: Optional[str] = None,
@@ -68,21 +115,22 @@ class Database(ABC):
                chunk_ids: Optional[Sequence[int]] = None,
                structured: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
         """Ranked units for one query; `video_ids=None` is every video."""
+        raise self._unsupported("search")
 
-    @abstractmethod
     def search_aggregates(self, vector: Sequence[float], query: str, embedder_key: str,
                           level: str, limit: int = 5,
                           source_ids: Optional[Sequence[str]] = None) -> list[dict[str, Any]]:
         """Summaries (`source`), chapters (`span`) or entities (`entity`),
         ranked within that one level."""
+        raise self._unsupported("search_aggregates")
 
-    @abstractmethod
     def spans(self, video_id: str) -> list[tuple[float, float]]:
         """One video's grid, as the database holds it."""
+        raise self._unsupported("spans")
 
-    @abstractmethod
     def video_ids(self) -> list[str]:
         """Every video the database holds."""
+        raise self._unsupported("video_ids")
 
     # ------------------------------------------------------------- lifetime
 
@@ -94,6 +142,19 @@ class Database(ABC):
 
     def __exit__(self, *exc: Any) -> None:
         self.close()
+
+    # ---------------------------------------------------------------- helpers
+
+    def implements(self, hook: str) -> bool:
+        """Whether this database fills in `hook`, rather than inheriting the
+        default. The pipelines skip the work behind a hook nobody implemented."""
+        if not hasattr(Database, hook):
+            raise UnknownOption(f"a Database has no hook {hook!r}")
+        return getattr(type(self), hook) is not getattr(Database, hook)
+
+    def _unsupported(self, hook: str) -> Unsupported:
+        return Unsupported(f"{type(self).__name__} does not implement {hook}(); "
+                           f"subclass it and define {hook} to read through it")
 
 
 #: Name -> "module:Class" for its backend.
@@ -125,4 +186,4 @@ def as_database(value: "Optional[str | Database]") -> Optional[Database]:
     return backend(value)()
 
 
-__all__ = ["DATABASES", "Database", "as_database", "backend"]
+__all__ = ["DATABASES", "Database", "Unsupported", "as_database", "backend"]

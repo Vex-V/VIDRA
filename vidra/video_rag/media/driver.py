@@ -14,10 +14,10 @@ from typing import Optional
 
 from vidra.shared.reporting import logs
 from vidra.shared.config import paths
-from vidra.shared.reporting.errors import VidraError, Refused, UnknownOption
+from vidra.shared.reporting.errors import VidraError, UnknownOption
 from vidra.shared.contracts.documents import Media, Produced
 from vidra.shared.storage.files import WRITTEN_BY, read, write
-from .split import UnusableMedia, split
+from .split import split
 
 #: `media.json`, from the library's filename table.
 FILENAME = WRITTEN_BY[Media][1]
@@ -159,73 +159,3 @@ def _kept(parent: Path, described: Media, named: bool, timed: bool) -> Media:
 def load(path: str | Path) -> Media:
     """Read a `media.json` back, typed."""
     return read(path, Media)
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    from vidra.shared.config import env
-    env.load()        # an entry point reads .env; the library never does
-    import argparse
-    import json
-
-    ap = argparse.ArgumentParser(
-        description="Describe the two streams a media file carries.")
-    ap.add_argument("media", type=Path)
-    ap.add_argument("into", type=Path,
-                    help="the directory that holds one folder per video")
-    ap.add_argument("--video-id", default=None, help="defaults to the filename stem")
-    ap.add_argument("--on-conflict", default="new", choices=ON_CONFLICT,
-                    help="when a DIFFERENT file already holds this id: "
-                         "new mints clip-2, replace deletes the old output, "
-                         "refuse raises. The same file always reuses its own "
-                         "directory")
-    ap.add_argument("--name", default=None,
-                    help="what to call the video; default the filename")
-    ap.add_argument("--recorded-at", default=None,
-                    help="when it was recorded, ISO 8601; default the "
-                         "container's creation time, if it has one")
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
-
-    try:
-        produced = media(args.media, args.into, args.video_id,
-                         args.on_conflict, args.name, args.recorded_at)
-    # A bad id is an error message, not a traceback.
-    except (UnusableMedia, VideoIdTaken, paths.UnusableVideoId, Refused) as exc:
-        print(f"error: {exc}")
-        return 1
-
-    if args.json:
-        print(json.dumps(produced.as_dict(), indent=2))
-        return 0
-
-    m = load(produced.artifacts['media'])
-    length = f"  {m.duration_s:.3f}s" if m.duration_s else ""
-    print(f"{m.path}  [{m.container_format}]{length}")
-    print(f"  name   {m.name}")
-    print(f"  time   {m.recorded_at or '-- the file does not say'}")
-    if m.video:
-        v = m.video
-        rate = f"  {v.rate:g} fps" if v.rate else ""
-        print(f"  video  {v.codec}  {v.width}x{v.height}{rate}")
-        print(f"         time_base={v.time_base}  frames={v.frames}  "
-              f"duration={v.duration_s}")
-    else:
-        print("  video  -- none")
-    if m.audio:
-        a = m.audio
-        print(f"  audio  {a.codec}  {a.rate} Hz  {a.channels} ch")
-        print(f"         duration={a.duration_s}")
-    else:
-        print("  audio  -- none")
-    print()
-    # Say so when the id differs from the one asked for.
-    if produced.video_id != produced.stats["requested_id"]:
-        print(f"  {produced.stats['requested_id']!r} is a different file; "
-              f"this one is {produced.video_id!r}")
-    print(f"folder  -> {produced.stats['folder']}")
-    print(f"media -> {produced.artifacts['media']}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
