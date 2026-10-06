@@ -100,8 +100,13 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
     reads = {} if languages is None else {"languages": list(languages)}
 
     grouped: dict[str, list[str]] = {}
+    # Named alone somewhere: its own question is asked even when another spec
+    # adds more, so `clip,clip:checkout` is `clip:[clip,checkout]`.
+    bare: set[str] = set()
     for spec in [s.strip() for s in specs if s.strip()]:
         name, asked = parse_spec(spec)
+        if not asked:
+            bare.add(name)
         for question in asked:
             if questions is not None and question not in questions:
                 raise UnknownOption(
@@ -123,6 +128,10 @@ def build_samplers(specs: Sequence[str], every_n: Optional[int] = None,
         raise Refused(
             f"no chosen sampler reads {', '.join(unreachable)} "
             f"(chosen: {', '.join(sorted(grouped))}) -- {detail}")
+
+    for name, asked in grouped.items():
+        if asked and name in bare and name not in asked:
+            asked.insert(0, name)
 
     built: list[samplers_mod.Sampler] = []
     for name, asked in grouped.items():
