@@ -48,6 +48,7 @@ PAGES = [
     ("pages/concepts.html", "Concepts", "Get started"),
     ("pages/recipes.html", "Recipes", "Get started"),
     ("pages/pipeline.html", "The pipeline", "video_rag"),
+    ("pages/live.html", "Live streams", "video_rag"),
     ("pages/stages.html", "Stages", "video_rag"),
     ("pages/samplers.html", "Samplers", "video_rag"),
     ("pages/questions.html", "Questions", "video_rag"),
@@ -264,6 +265,7 @@ COVERAGE: dict[str, list[str]] = {
             "cut.cut", "cut.apply", "cut.load",
             "describe.describe", "describe.answer", "describe.load",
             "embed.embed", "embed.encode", "embed.load", "embed.Unit")],
+    "pages/live.html": ["vidra.video_rag.video_rag_live", "vidra.video_rag.live.send"],
     "pages/samplers.html": [],
     "pages/questions.html": [f"vidra.video_rag.describe.{n}" for n in
                        ("add_question", "question", "questions", "remove_question")],

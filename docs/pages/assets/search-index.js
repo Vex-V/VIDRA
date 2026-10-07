@@ -181,6 +181,60 @@ window.VIDRA_DOCS_INDEX = [
 "text": "workflow.process runs video_rag , then every aggregator up to a cost tier . Answers go to <folder>/aggregates/ and are reused while current. from pathlib import Path from vidra import LocalEmbedder, Models, OpenAI, Supabase, workflow run = workflow.process(workflow.Options( source=Path(\"shop.mp4\"), sampler=\"clip,yolo\", policy=\"scene\", tier=\"llm\", models=Models(vlm=OpenAI(), llm=OpenAI(), embedder=LocalEmbedder()), database=Supabase())) answers = run.steps[-1] # the aggregate step's receipt answers.artifacts # {\"summary\": \".../aggregates/summary.json\", ...} answers.stats[\"skipped\"] # {\"speakers\": \"...\", ...} workflow.Options(source, into=None, video_id=None, name=None, recorded_at=None, policy=\"uniform\", use_video=True, use_audio=True, sampler=\"uniform\", vlm=None, embedder=None, llm=None, tier=\"free\", database=None, models=None) video_rag() 's fields, plus: Field Default Meaning into the data root's out/ Optional here. llm OpenAI() The text model for the llm tier. Or set it in models . tier \"free\" The costliest tier to run: free , local or llm . Tier Runs Each reads free stats , coverage , speakers the record local the above, ner , sentiment the transcript and every answer's prose llm the above, summary , chapters , events , every custom prompt, and every linking profile ( entities:people , entities:objects , entities:text , custom ones) prompts: the transcript and every answer's prose; profiles: every answer An aggregator with nothing to read ( speakers on a silent video) is skipped with the reason. To choose inputs yourself, run the aggregates directly. workflow.validate(options) lists every problem either tier would raise, including a missing LLM key. workflow.process(options, on_step) reports \"aggregate\" as a final step. workflow.extraction(options) returns the video_rag.Options part. workflow.Run is a Run with the aggregate step last in steps ."
 },
 {
+"page": "Live streams",
+"title": "Live streams",
+"url": "pages/live.html",
+"text": "Describe a stream while it plays: every frame a sampler keeps is answered as soon as it arrives, not when its chunk ends."
+},
+{
+"page": "Live streams",
+"title": "Running one",
+"url": "pages/live.html#basics",
+"text": "from vidra import LocalEmbedder, Models, OpenAI from vidra.video_rag import video_rag_live def check(o): # every answer, as it is ready if o.structured.get(\"rule\") == \"no_hard_hat\": print(f\"{o.seen_at} chunk {o.chunk_id} t={o.media_ts:.1f}s {o.description}\") run = video_rag_live(\"tcp://0.0.0.0:9000?listen=1\", \"data/out\", video_id=\"dock-3\", sampler=\"clip:safety\", on_unit=check, models=Models(vlm=OpenAI(), embedder=LocalEmbedder())) print(run.observations, \"answers,\", run.dropped, \"dropped, lag\", run.lag_s) The call blocks until the stream ends. Detection belongs in your on_unit : the pipeline describes and embeds, your application decides what counts as an event. An exact match on a one_of field ( fields ) is more reliable than comparing vectors: embeddings handle negation badly, so \"wearing a hard hat\" and \"without a hard hat\" sit close together."
+},
+{
+"page": "Live streams",
+"title": "Testing with a file",
+"url": "pages/live.html#testing",
+"text": "live.send pushes a file to a port at the pace it was recorded. Start the receiver first; the sender retries until it connects. import threading from vidra.video_rag import live, video_rag_live threading.Thread(target=live.send, args=(\"samples/test.mp4\", \"tcp://127.0.0.1:9000\"), kwargs={\"speed\": 1.0}).start() run = video_rag_live(\"tcp://127.0.0.1:9000?listen=1\", \"data/out\", video_id=\"test-live\") send(path, url, speed=1.0, connect_timeout_s=30.0, format=\"mpegts\") remuxes the picture into MPEG-TS without re-encoding. A file path is also a valid source : it is then read as fast as it decodes, which keeps exactly the frames video_rag keeps with the uniform policy. Sources are anything PyAV opens: tcp://host:port?listen=1 , udp:// , rtmp:// , an rtsp:// camera. The PyAV wheels have no SRT."
+},
+{
+"page": "Live streams",
+"title": "Arguments",
+"url": "pages/live.html#arguments",
+"text": "video_rag_live(source, into, video_id=None, name=None, sampler=\"uniform\", vlm=None, embedder=None, database=None, on_unit=None, on_step=None, models=None, chunk_s=20.0, per_second=1.0, context=(0, 0), queue=64, record=False, stop_after_s=None, stop=None, open_timeout_s=60.0, read_timeout_s=10.0) -> LiveRun Argument Default Meaning source required A stream URL, or a file. into required The folder that holds one folder per video. video_id file stem, or live-<UTC time> The run's folder. A folder already in use gets -2 , -3 . name the id What to call the video in media.json . sampler \"uniform\" The same spec as video_rag ( samplers ). vlm , embedder , models OpenAI's The models, as in video_rag . database none Copy the documents here when the stream ends. on_unit none Called with each Observation . Raise live.StopStream to end the run. on_step none on_step(component, produced) : once when the stream opens, then per document written. chunk_s 20.0 Chunk length. A chunk is int(media_ts // chunk_s) : an id and a point where samplers reset. per_second 1.0 Decimated frames per second. context (0, 0) (before, after) : decimated frames sent with each kept frame ( below ). queue 64 Kept frames that may wait for the model; when full, the oldest is dropped. record False True keeps the stream as recording.ts in the run's folder; or a path. stop_after_s none Stop when the stream's clock reaches this. stop none A threading.Event ; set it from anywhere to end the run. open_timeout_s , read_timeout_s 60.0 , 10.0 How long to wait for a sender, and for the next packet. Everything is checked before the stream opens: an unknown sampler or question, a bad context , a model without a key."
+},
+{
+"page": "Live streams",
+"title": "What each answer carries",
+"url": "pages/live.html#observations",
+"text": "Observation Is chunk_id , media_ts , frame_index Where the kept frame is. sampler_id , sampler , question Which answer this is, as in video_rag . frames , frame_ts Every frame the model was shown, in time order. description , structured The answer. content , vector What was embedded, and its vector. seen_at , answered_at , lag_s When the frame arrived and when its answer was ready (UTC), and the seconds between. gap_before The stream's clock jumped just before this frame. Each one is also appended to observations.jsonl as it arrives."
+},
+{
+"page": "Live streams",
+"title": "Context frames",
+"url": "pages/live.html#context",
+"text": "One frame cannot show movement. context=(1, 0) sends the previous decimated frame too; (0, 1) the next one; (1, 1) both. A frame after the kept one delays its answer by one decimation interval (1 s at per_second=1 ); frames before cost nothing but tokens."
+},
+{
+"page": "Live streams",
+"title": "When the model falls behind",
+"url": "pages/live.html#falling-behind",
+"text": "If frames are kept faster than the model answers, the oldest waiting frame is dropped and counted in run.dropped ; the lag stays bounded instead of growing. To keep up, raise the model's concurrency , keep fewer frames ( min_interval_s , max_per_chunk on the sampler), or lower per_second ."
+},
+{
+"page": "Live streams",
+"title": "When the stream ends",
+"url": "pages/live.html#results",
+"text": "The run is written as media.json , timeline.json , manifest.json , descriptions.json and embedded.json , so search and aggregates read it like any other video. A chunk's description there is its frames' answers joined in time order, and each answer is kept whole under observations . LiveRun Is ended ended , stopped , stop_after_s or error . observations , failed , dropped Answers written, model calls that failed (the run goes on), frames dropped from the queue. lag_s Seconds from arrival to answer: p50 , p95 , max . gaps Where the stream's clock jumped. duration_s , chunks , frames_decimated , frames_sampled How much was read. recording , steps , problems The recording's path, the documents written, and what failed. An exception from on_unit (other than StopStream ) stops the run, and is raised after the documents are written."
+},
+{
+"page": "Live streams",
+"title": "How it differs from video_rag",
+"url": "pages/live.html#differences",
+"text": "No audio. Speakers can only be told apart over the whole recording. Record the stream and run video_rag on the recording afterwards for the transcript. Uniform chunks only , and a short last chunk is not merged into the one before. Time starts at the first frame. A jump forward of more than 2 s is a gap; a jump backward (a reconnect) continues the clock instead of going back. Damaged packets are skipped and counted in the manifest, not fatal."
+},
+{
 "page": "Stages",
 "title": "Stages",
 "url": "pages/stages.html",
