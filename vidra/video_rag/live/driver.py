@@ -259,6 +259,11 @@ def process(options: Options,
     describer = describe_base.build(options.vlm)
     embedder = resolve("embedder", options.embedder)
     require("embedder", embedder)
+    from vidra.shared.models.embedders.local import LocalEmbedder
+    if isinstance(embedder, LocalEmbedder):
+        # Loaded now, or the first answers wait seconds for the weights. A
+        # remote embedder is not called: nothing is sent before the stream.
+        embedder.embed(["warm up"])
 
     video_id = _claim(options)
     folder = Path(options.into) / video_id

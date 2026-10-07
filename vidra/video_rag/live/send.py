@@ -20,48 +20,64 @@ from .source import StreamUnavailable
 
 
 def send(path: str | Path, url: str, speed: float = 1.0,
-         connect_timeout_s: float = 30.0, format: str = "mpegts") -> dict[str, Any]:
+         connect_timeout_s: float = 120.0, format: str = "mpegts") -> dict[str, Any]:
     """Send `path`'s picture to `url`, paced at `speed` times real time. Retries
     the connection for `connect_timeout_s`, since a receiver may start late.
     Returns what was sent.
+
+    Run it in its own process, as a camera would be. PyAV holds the GIL while a
+    connection attempt waits (about 5 s each on Windows), so a sender retrying
+    on a thread of the receiver's process starves it: building `clip`, `yolo`
+    and `objects` took 255 s instead of 16 s beside one. Once connected it no
+    longer matters, and the receiver's own reads release the GIL.
     """
     import av
 
     if speed <= 0:
         raise Refused(f"speed must be positive, not {speed}")
-    source = av.open(str(path))
-    if not source.streams.video:
-        source.close()
-        raise Refused(f"{path} carries no video stream")
-    stream = source.streams.video[0]
+    with av.open(str(path)) as probe:
+        if not probe.streams.video:
+            raise Refused(f"{path} carries no video stream")
 
+    # PyAV connects on the first write, not on open, so the connection is only
+    # made when a packet has gone out. Until then a refusal means nothing is
+    # listening yet: start over from the first packet and try again.
     deadline = time.monotonic() + connect_timeout_s
     while True:
+        source = av.open(str(path))
+        stream = source.streams.video[0]
+        out = av.open(url, "w", format=format)
+        target = out.add_stream_from_template(stream)
+        packets = (p for p in source.demux(stream) if p.dts is not None)
+        first_packet = next(packets, None)
+        if first_packet is None:
+            out.close()
+            source.close()
+            raise Refused(f"{path} has no packets to send")
+        first = first_packet.dts
+        first_packet.stream = target
         try:
-            out = av.open(url, "w", format=format)
+            out.mux(first_packet)
             break
-        except Exception as exc:                             # noqa: BLE001
+        except (av.error.FFmpegError, OSError) as exc:
+            for closing in (out, source):
+                try:
+                    closing.close()
+                except (av.error.FFmpegError, OSError):
+                    pass
             if time.monotonic() > deadline:
-                source.close()
                 raise StreamUnavailable(
                     f"nothing is listening at {url} ({type(exc).__name__}: {exc})"
                 ) from None
             time.sleep(0.25)
 
-    sent = 0
-    first = None
+    sent = 1
     closed = False
     started = time.perf_counter()
     try:
-        target = out.add_stream_from_template(stream)
-        for packet in source.demux(stream):
-            if packet.dts is None:
-                continue
+        for packet in packets:
             # Paced on decode order, which only moves forward.
-            ts = packet.dts
-            if first is None:
-                first = ts
-            due = float(Fraction(ts - first) * stream.time_base) / speed
+            due = float(Fraction(packet.dts - first) * stream.time_base) / speed
             wait = due - (time.perf_counter() - started)
             if wait > 0:
                 time.sleep(wait)
@@ -81,6 +97,5 @@ def send(path: str | Path, url: str, speed: float = 1.0,
         source.close()
     return {"packets": sent, "elapsed_s": round(time.perf_counter() - started, 3),
             "url": url, "speed": speed, "closed_by_receiver": closed}
-
 
 __all__ = ["send"]

@@ -70,6 +70,10 @@ class Source:
         #: The media clock at the newest decoded frame, and one frame's length.
         self.last_ts: Optional[float] = None
         self.step = 1.0 / 30.0
+        #: The picture stream and the container, as read when the stream opened:
+        #: PyAV refuses to answer about a stream once it is closed.
+        self._described: dict[str, Any] = {}
+        self._format = ""
 
     # ------------------------------------------------------------- opening
     def open(self) -> "Source":
@@ -87,6 +91,15 @@ class Source:
         self.stream = self.container.streams.video[0]
         # Required for decode speed.
         self.stream.thread_type = "AUTO"
+        codec = self.stream.codec_context
+        rate = self.stream.average_rate or self.stream.guessed_rate
+        self._described = {
+            "index": self.stream.index, "codec": codec.name,
+            "rate": float(rate) if rate else None,
+            "time_base": (str(self.stream.time_base)
+                          if self.stream.time_base is not None else None),
+            "width": codec.width, "height": codec.height, "frames": None}
+        self._format = self.container.format.name
         if self.record is not None:
             self.record.parent.mkdir(parents=True, exist_ok=True)
             self._recording = av.open(str(self.record), "w")
@@ -94,20 +107,12 @@ class Source:
         return self
 
     def describe(self, duration_s: Optional[float] = None) -> VideoStream:
-        """The picture stream as `media.json` records it."""
-        codec = self.stream.codec_context
-        rate = self.stream.average_rate or self.stream.guessed_rate
-        return VideoStream(
-            index=self.stream.index, codec=codec.name,
-            rate=float(rate) if rate else None,
-            time_base=(str(self.stream.time_base)
-                       if self.stream.time_base is not None else None),
-            width=codec.width, height=codec.height, frames=None,
-            duration_s=duration_s)
+        """The picture stream as `media.json` records it; valid after `close`."""
+        return VideoStream(**self._described, duration_s=duration_s)
 
     @property
     def container_format(self) -> str:
-        return self.container.format.name if self.container is not None else ""
+        return self._format
 
     # ------------------------------------------------------------- reading
     def frames(self, keep: Callable[[float], bool]) -> Iterator[tuple[Frame, Arrival]]:
