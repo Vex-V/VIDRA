@@ -10,7 +10,7 @@ from vidra.shared.contracts.documents import (Descriptions, Manifest,
                                            Produced, Timeline)
 from vidra.shared.storage.files import maybe, read, write
 from vidra.shared.contracts.documents import same_video
-from ...core.describe import base, library, prompts
+from ...core.describe import base, prompts
 from ...core.describe.frames import FrameSource, store_of
 from ...core.frames import FrameStore
 from vidra.shared.reporting.errors import Refused, UnknownOption
@@ -104,25 +104,6 @@ def describe(manifest: str | Path, timeline: str | Path,
 def _named(model: dict[str, object]) -> str:
     """The VLM's name, whichever key the stored block records it under."""
     return str(model.get("name") or model.get("describer") or "")
-
-
-def prompt_rows(versions: dict[str, str]) -> list[dict[str, object]]:
-    """What each question said, at the version a run asked it under, as rows for a
-    database. Writes nothing.
-    """
-    entries: list[dict[str, object]] = []
-    for name, version in sorted(versions.items()):
-        entry = library.load()["questions"].get(name) or {}
-        shape = library.shape_of(name)
-        entries.append({
-            "name": name, "version": version,
-            "instruction": library.instruction_of(name),
-            "shape": shape,
-            "summary": shape.get("summary", "standard"),
-            "builtin": bool(entry.get("builtin")),
-            "about": entry.get("about") or None,
-        })
-    return entries
 
 
 def load(path: str | Path) -> Descriptions:

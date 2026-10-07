@@ -35,6 +35,7 @@ from vidra.shared.models.base import Embedder, VLM
 from vidra.shared.models.roles import Models, unpack
 from vidra.shared.storage.database import DATABASES as _DATABASES
 from vidra.shared.storage.database import Database, as_database
+from ..core.export import export
 
 #: The databases a run may name by string.
 DATABASES = tuple(_DATABASES)
@@ -160,51 +161,6 @@ def validate(options: Options) -> list[str]:
         wanted.append(("vlm", options.vlm))
     for role, model in wanted:
         problems += base.problems(role, resolve(role, model))
-    return problems
-
-
-def export(produced: Produced, database: str | Database) -> list[str]:
-    """Write a component's artifacts to a database. Returns what failed.
-
-    Reads each artifact file back from the receipt and hands it to the
-    database's `write_<artifact>`. Directories are skipped, and so is an
-    artifact whose hook the database left alone; a failure is reported rather
-    than raised.
-    """
-    target = as_database(database)
-    from vidra.shared.storage import files
-
-    problems: list[str] = []
-    for artifact, where in sorted(produced.artifacts.items()):
-        if not where or Path(where).is_dir():
-            continue
-        hook = f"write_{artifact}"
-        if not hasattr(Database, hook):
-            # A new artifact with no hook is a bug here, not the caller's.
-            raise RuntimeError(f"{produced.component} produced {artifact!r} and "
-                               f"Database has no {hook}; add one")
-        if not target.implements(hook):
-            continue
-        try:
-            getattr(target, hook)(produced.video_id, files.read_json(Path(where)))
-        except Exception as exc:                          # noqa: BLE001
-            message = f"{artifact} -> {target.name}: {exc}"
-            problems.append(message)
-            logs.logger(produced.component).warning(
-                "%s", message,
-                extra={"component": produced.component, "event": "export",
-                       "video_id": produced.video_id, "artifact": artifact,
-                       "reason": str(exc)[:300]})
-
-    # The prompt text behind each question hash this run used.
-    if produced.component == "describe" and target.implements("write_prompts"):
-        try:
-            from .describe.driver import prompt_rows
-            document = files.read_json(Path(produced.artifacts["descriptions"]))
-            target.write_prompts(
-                prompt_rows((document.get("model") or {}).get("prompts") or {}))
-        except Exception as exc:                          # noqa: BLE001
-            problems.append(f"prompts -> {target.name}: {exc}")
     return problems
 
 

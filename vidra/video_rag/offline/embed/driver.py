@@ -18,10 +18,10 @@ from vidra.shared.models.base import require
 from vidra.shared.models.roles import resolve
 from vidra.shared.storage.files import maybe, read, write
 from vidra.shared.contracts.documents import same_video
-from . import readable
-from . import units as units_mod
+from ...core.embed import readable
+from ...core.embed import units as units_mod
 # The published type.
-from .units import Unit
+from ...core.embed.units import Unit
 from vidra.shared.reporting.errors import Refused
 
 if TYPE_CHECKING:

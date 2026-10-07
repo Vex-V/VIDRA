@@ -53,6 +53,18 @@ class FrameStore:
         self.bytes_written += path.stat().st_size
         return path
 
+    def write_bytes(self, index: int, data: bytes) -> Path:
+        """Store a frame already encoded with `encode`. Counted like `write`."""
+        path = self.path_for(index)
+        if index in self._indexes:
+            return path
+        self.root.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self._indexes.add(index)
+        self.written += 1
+        self.bytes_written += len(data)
+        return path
+
     def read(self, index: int) -> bytes:
         """The frame's bytes, from disk. `KeyError` when the store does not hold it."""
         path = self.path_for(index)
@@ -83,4 +95,15 @@ class FrameStore:
                 "quality": self.quality}
 
 
-__all__ = ["FrameStore"]
+def encode(image: "np.ndarray", quality: int = 95) -> bytes:
+    """A frame as the JPEG bytes `FrameStore.write` would put on disk: the same
+    encoder and quality, so a frame encoded once can be both stored and sent."""
+    import cv2
+
+    ok, data = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        raise OSError("could not encode a frame as JPEG")
+    return data.tobytes()
+
+
+__all__ = ["FrameStore", "encode"]
