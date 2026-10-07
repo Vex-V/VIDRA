@@ -1,5 +1,11 @@
 """video_rag -- a video in, a searchable index of moments out, and the search.
 
+    core/       what every pipeline uses: samplers, the question vocabulary,
+                the frame store, search
+    offline/    the batch pipeline: a whole file, every stage in order
+
+The batch stages, in order:
+
     media        1  what streams the file carries
     audio        2  the soundtrack, scanned whole
     boundaries 3+4  the grid, from the picture or the soundtrack
@@ -24,31 +30,39 @@ Every component takes the paths it reads and the path it writes:
 
 Each also has a verb over documents in hand (`split`, `listen`, `detect`,
 `timeline`, `ingest`, `apply`, `answer`, `encode`). `video_rag(source, into,
-...)` runs them all: `media` makes `<into>/<id>/` and `driver.layout()` names
-every path inside it. `helpers/` holds the frame store both `video` and
-`describe` use.
+...)` runs them all: `media` makes `<into>/<id>/` and `layout()` names every
+path inside it.
+
+Every name here is reached as `from vidra.video_rag import ...`, whichever
+folder it lives in; a component is the module itself.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 #: Resolved on first use, so importing the package does not import every
-#: component.
-_LAZY = {"video_rag": ("driver", "video_rag"),
-         "process": ("driver", "process"),
-         "Options": ("driver", "Options"),
-         "Run": ("driver", "Run"),
-         "validate": ("driver", "validate"),
-         "layout": ("driver", "layout"),
-         "search": ("retrieve", "search")}
+#: component. An attribute of None is the module itself.
+_LAZY: dict[str, tuple[str, Optional[str]]] = {
+    "video_rag": ("offline.driver", "video_rag"),
+    "process": ("offline.driver", "process"),
+    "Options": ("offline.driver", "Options"),
+    "Run": ("offline.driver", "Run"),
+    "validate": ("offline.driver", "validate"),
+    "layout": ("offline.driver", "layout"),
+    "search": ("core.retrieve", "search"),
+    **{name: (f"offline.{name}", None) for name in (
+        "media", "audio", "boundaries", "video", "cut", "describe", "embed")},
+    "retrieve": ("core.retrieve", None),
+}
 
 
 def __getattr__(name: str) -> Any:
     if name in _LAZY:
         import importlib
         module, attribute = _LAZY[name]
-        return getattr(importlib.import_module(f".{module}", __name__), attribute)
+        found = importlib.import_module(f".{module}", __name__)
+        return found if attribute is None else getattr(found, attribute)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

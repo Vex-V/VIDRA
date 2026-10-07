@@ -10,7 +10,7 @@ import os
 from typing import Any, Optional
 
 from ..models import Diarization, ModelUnavailable, Turn
-from ....shared.models.devices import default_device
+from vidra.shared.models.devices import default_device
 from ..source import Track
 
 DEFAULT_MODEL = "pyannote/speaker-diarization-3.1"

@@ -12,7 +12,7 @@ from typing import Any
 
 from vidra.shared.contracts.documents import Manifest
 from vidra.shared.reporting.errors import Unavailable
-from ..helpers import FrameStore
+from ..frames import FrameStore
 
 
 class StoreUnavailable(Unavailable):

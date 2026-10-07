@@ -11,10 +11,10 @@ import time
 from typing import Any, Callable, Optional, Sequence
 
 from vidra.shared.contracts.documents import Manifest, Media, Timeline
-from .decimate import Decimator
-from .reader import read_frames
-from .samplers import Sampler
-from ..helpers import FrameStore
+from ...core.frames import FrameStore
+from ...core.sampling.decimate import Decimator
+from ...core.sampling.reader import read_frames
+from ...core.sampling.samplers import Sampler
 from vidra.shared.reporting.errors import Refused, UnknownOption
 
 

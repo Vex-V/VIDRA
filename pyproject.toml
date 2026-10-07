@@ -74,7 +74,7 @@ all = ["vidra[local,audio]"]
 # `py.typed` (PEP 561) is what makes the annotations visible to a consumer's
 # type checker. Without it every one of them is invisible outside this tree.
 "vidra" = ["py.typed"]
-"vidra.video_rag.describe" = ["prompts.json"]
+"vidra.video_rag.core.describe" = ["prompts.json"]
 "vidra.aggregates.definitions" = ["definitions.json"]
 
 [tool.setuptools.packages.find]

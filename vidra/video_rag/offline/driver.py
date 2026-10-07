@@ -11,8 +11,8 @@
     speaker    audio runs first
 
 Per-stage tuning (a scene threshold, a sampler's `confidence`) lives on the
-components; call them directly to set it. `vocabulary()` at the bottom is
-what `aggregates` asks of this tier.
+components; call them directly to set it. What `aggregates` asks of this tier,
+`vocabulary()`, is in `core`: it is the same for every pipeline.
 """
 
 from __future__ import annotations
@@ -138,9 +138,9 @@ def validate(options: Options) -> list[str]:
     # Both halves of every `name:question` pair, against the sampler registry and
     # the question vocabulary.
     if options.use_video:
-        from .describe import prompts
-        from .video import samplers as _samplers
-        from .video.driver import parse_spec, split_specs
+        from ..core.describe import prompts
+        from ..core.sampling import samplers as _samplers
+        from ..core.sampling.specs import parse_spec, split_specs
         known_samplers, known_questions = _samplers.available(), prompts.questions()
         for spec in split_specs(options.sampler):
             name, asked = parse_spec(spec)
@@ -386,25 +386,5 @@ def video_rag(source: str | Path,
     ), on_step)
 
 
-# ------------------------------------------- the one thing aggregates asks
-def vocabulary() -> dict[str, Any]:
-    """What an aggregate's input may name: every sampler, and every question with
-    its fields -- `{field: [entry keys]}` for a list of objects, None otherwise.
-    """
-    from .describe import library
-    from .video import samplers as _samplers
-
-    def fields(question: str) -> dict[str, Optional[list[str]]]:
-        out: dict[str, Optional[list[str]]] = {}
-        for name, spec in (library.shape_of(question).get("fields") or {}).items():
-            items = spec.get("items") if isinstance(spec, dict) else None
-            nested = items.get("properties") if isinstance(items, dict) else None
-            out[name] = list(nested) if nested else None
-        return out
-
-    return {"samplers": _samplers.available(),
-            "questions": {q: fields(q) for q in library.questions()}}
-
-
 __all__ = ["DATABASES", "Options", "Run", "export", "layout", "process",
-           "validate", "video_rag", "vocabulary"]
+           "validate", "video_rag"]

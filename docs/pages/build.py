@@ -354,19 +354,20 @@ def check(built: dict[Path, str]) -> list[str]:
     # Every public name, somewhere.
     everywhere = [c for p in parsed.values() for c in p.code]
     for module in PUBLIC:
-        for name in getattr(importlib.import_module(module), "__all__", []):
+        for name in getattr(resolve(module), "__all__", []):
             if name.startswith("__"):
                 continue
             if not any(re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", c) for c in everywhere):
                 problems.append(f"{module}.{name} is public and appears on no page")
 
     # Every sampler, sampler setting, question and shape, on its page.
-    from vidra.video_rag.video import SAMPLER_SETTINGS, samplers
-    from vidra.video_rag.describe import prompts
+    from vidra.video_rag.core.sampling import samplers
+    from vidra.video_rag.core.sampling.specs import SAMPLER_SETTINGS
+    from vidra.video_rag.core.describe import prompts
     for name in [*samplers.available(), *SAMPLER_SETTINGS]:
         if not mentioned("pages/samplers.html", name):
             problems.append(f"pages/samplers.html: sampler or setting `{name}` is not documented")
-    builtin = json.loads((ROOT / "vidra/video_rag/describe/prompts.json").read_text())
+    builtin = json.loads((ROOT / "vidra/video_rag/core/describe/prompts.json").read_text())
     for name in [*builtin["questions"], *builtin["shapes"]]:
         if not mentioned("pages/questions.html", name):
             problems.append(f"pages/questions.html: built-in `{name}` is not documented")

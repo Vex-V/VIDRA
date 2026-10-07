@@ -22,7 +22,7 @@ from typing import Any, Callable, Optional
 from . import aggregates
 from .shared.config import paths
 from .shared.contracts.documents import Produced
-from .video_rag import driver as video_rag
+from .video_rag.offline import driver as video_rag
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.models.base import Embedder, LLM, VLM
 from vidra.shared.models.roles import Models, unpack

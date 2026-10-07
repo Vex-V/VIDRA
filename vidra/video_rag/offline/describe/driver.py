@@ -10,9 +10,9 @@ from vidra.shared.contracts.documents import (Descriptions, Manifest,
                                            Produced, Timeline)
 from vidra.shared.storage.files import maybe, read, write
 from vidra.shared.contracts.documents import same_video
-from . import base, library, prompts
-from ..helpers import FrameStore
-from .frames import FrameSource, store_of
+from ...core.describe import base, library, prompts
+from ...core.describe.frames import FrameSource, store_of
+from ...core.frames import FrameStore
 from vidra.shared.reporting.errors import Refused, UnknownOption
 
 if TYPE_CHECKING:

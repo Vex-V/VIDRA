@@ -390,9 +390,9 @@ def add(section: str, name: str, entry: dict[str, Any]) -> dict[str, Any]:
         raise ProtectedDefinition(f"{name!r} is a built-in {section[:-1]} and cannot be "
                         "replaced; pick another name")
     clean = {k: v for k, v in entry.items() if v is not None and k != "builtin"}
-    from ...video_rag import driver as video_rag
+    from ...video_rag.core import vocabulary
     problems = CHECKERS[section](name, _with_defaults(section, clean),
-                                 video_rag.vocabulary())
+                                 vocabulary())
     if problems:
         raise DefinitionError("; ".join(problems), problems)
     with _lock:

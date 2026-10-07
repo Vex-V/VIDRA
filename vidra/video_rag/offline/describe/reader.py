@@ -13,10 +13,10 @@ import time
 from typing import Any, Optional, Sequence
 
 from vidra.shared.contracts.documents import Descriptions, Manifest, Timeline
-from . import prompts
-from .base import Describer
+from ...core.describe import prompts
+from ...core.describe.base import Describer
+from ...core.describe.frames import FrameSource
 from vidra.shared.reporting import progress
-from .frames import FrameSource
 
 
 def _model_block(describer: Describer, questions: Sequence[str]) -> dict[str, Any]:

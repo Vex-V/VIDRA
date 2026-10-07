@@ -220,8 +220,8 @@ class Record:
         """Every field named exists in its question's shape."""
         import re
 
-        from ...video_rag import driver as video_rag
-        problems = check([one], video_rag.vocabulary())
+        from ...video_rag.core import vocabulary
+        problems = check([one], vocabulary())
         if problems:
             # `yolo:yolo` is how the answer `yolo` is matched; say `yolo`.
             raise RecordError("; ".join(re.sub(r"\b([a-z][a-z0-9_-]*):\1\b", r"\1", p)

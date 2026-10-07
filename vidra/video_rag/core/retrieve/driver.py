@@ -10,7 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from ..boundaries import load as load_timeline
+from vidra.shared.contracts.documents import Timeline
+from vidra.shared.storage.files import read
 from vidra.shared.models import embedders as embedders_mod
 from .search import Moment, to_moments
 from vidra.shared.reporting.errors import Refused
@@ -41,7 +42,7 @@ def spans_of(video_id: str,
              database: Optional[str | Database] = None) -> list[tuple[float, float]]:
     """The grid: from a `timeline.json` if one is named, else from the database."""
     if timeline is not None and Path(timeline).exists():
-        return load_timeline(timeline).spans
+        return read(timeline, Timeline).spans
     return as_database(database or "supabase").spans(video_id)
 
 
