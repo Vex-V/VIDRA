@@ -207,7 +207,7 @@ embed_query(text) -&gt; list[float]</div>
 <tr><td><code>key</code></td><td>Required identity (<a href="#keys">below</a>). May be a lazy property.</td></tr>
 <tr><td><code>concurrency</code></td><td>Calls in flight at once. Default 8.</td></tr>
 <tr><td><code>problems()</code></td><td>Reasons it can't run (e.g. no key), checked before work; the first raises <code>ModelUnavailable</code>.</td></tr>
-<tr><td><code>name</code>, <code>model</code></td><td>The parts of <code>key</code> before and after the first colon.</td></tr>
+<tr><td><code>name</code>, <code>model</code></td><td>The parts of <code>key</code> before and after the first colon. Read-only: keep your own client or weights under another attribute (<code>self.client</code>, <code>self.encoder</code>).</td></tr>
 </table>
 
 <h3 id="keys">Keys</h3>
@@ -325,10 +325,10 @@ class MyEmbedder(Embedder):
 
     def __init__(self):
         from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        self.encoder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
     def embed(self, texts):
-        return self.model.encode(list(texts), normalize_embeddings=True).tolist()
+        return self.encoder.encode(list(texts), normalize_embeddings=True).tolist()
 
     # Override embed_query only when a query is embedded differently.
 

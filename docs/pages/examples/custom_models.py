@@ -84,10 +84,10 @@ class MyEmbedder(Embedder):
 
     def __init__(self):
         from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        self.encoder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
     def embed(self, texts):
-        return self.model.encode(list(texts), normalize_embeddings=True).tolist()
+        return self.encoder.encode(list(texts), normalize_embeddings=True).tolist()
 
     # Override embed_query only when a query is embedded differently.
 
