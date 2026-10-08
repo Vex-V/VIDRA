@@ -1,7 +1,7 @@
 """The `items` kind: discrete things, each pinned to a chunk. `events` is one.
 
-Items are independent of each other, so a long video is asked in windows, all
-at once, and the answers concatenated in time order.
+A long video is asked in windows, all at once, and the answers concatenated
+in time order.
 """
 
 from __future__ import annotations

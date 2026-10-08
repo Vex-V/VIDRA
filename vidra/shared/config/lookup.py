@@ -4,9 +4,6 @@ first asked for, and read what its constructor accepts.
     imported("folder:Folder", __package__)    # `.folder`, relative to the caller
     imported("vidra.shared.storage.folder:Folder")
     keyword_parameters(WhisperTranscriber)    # ["model", "device", ...]
-
-A registry names a class as `module:Class` so the heavy module behind it (a
-model, a client library) is imported only by a run that uses it.
 """
 
 from __future__ import annotations

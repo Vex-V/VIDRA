@@ -142,7 +142,7 @@ def _run(options: Options, whole: Any,
     problems = validate(options)
     if problems:
         raise Refused("; ".join(problems))
-    # Built once, so a missing setting fails before the first step.
+    # Built once, before the first step.
     database = as_database(options.database)
 
     say = on_step or (lambda *_: None)
@@ -250,8 +250,8 @@ def _run(options: Options, whole: Any,
 
 
 def _takes_progress(on_step: Optional[Callable[..., None]]) -> bool:
-    """Whether a step callback takes a third argument, a `Progress`. Read off
-    its signature, so a two-argument callback written earlier keeps working."""
+    """Whether a step callback takes a third argument, a `Progress`, read off
+    its signature."""
     if on_step is None:
         return False
     try:

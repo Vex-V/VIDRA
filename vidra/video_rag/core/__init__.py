@@ -5,9 +5,8 @@
     describe    the question vocabulary and the model call that answers one
     retrieve    a query to ranked moments, over what any pipeline wrote
 
-`vocabulary()` is the one thing `aggregates` asks of this tier. It lives here
-because a sampler or question name means the same thing in every pipeline.
-Nothing here imports a pipeline.
+`vocabulary()` is the one thing `aggregates` asks of this tier. Nothing here
+imports a pipeline.
 """
 
 from __future__ import annotations

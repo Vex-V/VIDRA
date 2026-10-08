@@ -30,7 +30,7 @@ def speech_spans(transcript: RawTranscript) -> list[tuple[float, float]]:
 def vad_cuts(transcript: RawTranscript,
              silence_s: float = DEFAULT_SILENCE_S) -> list[tuple[float, float]]:
     """Cut in the middle of every silence longer than `silence_s`. Returns
-    `(cut_ts, gap_length)`, so the threshold can be retuned over the cached gaps.
+    `(cut_ts, gap_length)`; the gaps are cached for retuning.
     """
     spans = speech_spans(transcript)
     return [((end + start) / 2.0, start - end)

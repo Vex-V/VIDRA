@@ -270,9 +270,9 @@ def boundaries(media: str | Path, out: str | Path, policy: str = "uniform",
 def calibrate(cuts: str | Path | Cuts,
               thresholds: Optional[Sequence[float]] = None) -> list[dict[str, Any]]:
     """How many cuts each threshold would give, from the scores a cuts file
-    caches -- nothing is decoded. Reports; does not choose: a threshold is a
-    property of the footage, not a default. `thresholds` defaults to a spread
-    on the detector's own scale (scene scores, or seconds of silence).
+    caches -- nothing is decoded. Reports; does not choose. `thresholds`
+    defaults to a spread on the detector's own scale (scene scores, or seconds
+    of silence).
 
     Each row is `{threshold, cuts, rate, median_gap_s}`.
     """

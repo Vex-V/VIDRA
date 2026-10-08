@@ -154,8 +154,7 @@ class Folder(Database):
                             structured: Optional[dict[str, Any]] = None
                             ) -> list[dict[str, Any]]:
         """Dense only: each run's own `observations.jsonl`, read where the live
-        run appends it -- so a run still going is searched up to its last
-        answer."""
+        run appends it; a run still going is searched up to its last answer."""
         from datetime import datetime
 
         def when(stamp: Optional[str]) -> Optional[datetime]:

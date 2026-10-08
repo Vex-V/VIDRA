@@ -33,8 +33,7 @@ _LAZY: dict[str, str] = {
 }
 _REGISTRY: dict[str, Type[Sampler]] = {"uniform": UniformSampler}
 
-#: The shipped samplers. Their names cannot be taken by a registered class, so
-#: `clip` means the same thing in every deployment.
+#: The shipped samplers. Their names cannot be taken by a registered class.
 BUILTIN = frozenset({"uniform", *_LAZY})
 
 #: A sampler name: what a spec string can carry (`name:question` splits on the

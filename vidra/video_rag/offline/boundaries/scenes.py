@@ -2,7 +2,7 @@
 
 Frames are decoded straight to the detection size. A `stride` scores every
 Nth frame; the threshold should rise with it. `cuts.json` keeps the per-frame
-score series, so `rethreshold` needs no second decode; `detect` and
+score series, which `rethreshold` reads without decoding; `detect` and
 `rethreshold` both go through `cuts_from_scores`.
 """
 

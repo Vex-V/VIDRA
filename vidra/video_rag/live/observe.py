@@ -2,14 +2,14 @@
 the chunk, offer the frame to every sampler, and hand each kept frame on as
 soon as its context is complete.
 
-A chunk is `int(media_ts // chunk_s)` -- known the moment a frame arrives, so
-nothing waits for a chunk to close. Samplers reset when the chunk changes,
-exactly as in `offline`, so the same frames are kept from the same file.
+A chunk is `int(media_ts // chunk_s)`, known the moment a frame arrives.
+Samplers reset when the chunk changes, exactly as in `offline`, and keep the
+same frames from the same file.
 
 Context: `before` decimated frames are kept in a ring and sent ahead of the
 kept frame; `after` makes the kept frame wait for that many more decimated
 frames, which delays its answer by `after / per_second` seconds. Every frame a
-model is shown is written to the store, so an answer names frames that exist.
+model is shown is written to the store.
 """
 
 from __future__ import annotations

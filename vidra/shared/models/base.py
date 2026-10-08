@@ -15,9 +15,8 @@ Subclass one and fill in its method to bring any model:
 
 `key` is the model's identity and is required. It is recorded with every
 answer and every vector, and it decides whether stored work is still current:
-change the model behind a key and the library cannot tell, so change the key.
-For an embedder it names the vector space -- vectors under different keys are
-never compared.
+a different model needs a different key. For an embedder it names the vector
+space -- vectors under different keys are never compared.
 
 A method may be `async def` or a plain `def` (run in a thread). The library
 calls it through `calls()`, which caps calls in flight at `concurrency`, parses
@@ -190,7 +189,7 @@ def require(role: str, model: Any) -> None:
 
 def _gate(model: Any) -> asyncio.Semaphore:
     """`model`'s cap on calls in flight, for this event loop (a semaphore
-    belongs to one loop). Kept on the model, so every caller shares it."""
+    belongs to one loop). Kept on the model: every caller shares it."""
     gates = model.__dict__.setdefault("_vidra_gates", weakref.WeakKeyDictionary())
     loop = asyncio.get_running_loop()
     if loop not in gates:

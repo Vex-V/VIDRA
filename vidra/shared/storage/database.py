@@ -18,9 +18,8 @@ search reads. Subclass `Database` and fill in only the ones you want:
 
     video_rag("x.mp4", "data/out", database=VectorsOnly())
 
-A write hook left alone does nothing, so a run simply does not save that
-artifact. A read hook left alone raises `Unsupported`: a search answered with
-nothing would look like a search that found nothing.
+A write hook left alone does nothing: a run does not save that artifact. A
+read hook left alone raises `Unsupported`.
 
 `Supabase` and `Folder` are backends built this way; `DATABASES` maps a name
 to each. A pipeline writes to a database; components never do.
@@ -50,8 +49,8 @@ class Database:
 
     # ------------------------------------------------------- video_rag writes
     #
-    # One per artifact, named `write_<artifact>`, so the pipeline calls each by
-    # the artifact's own name. `document` is the artifact's JSON as a dict.
+    # One per artifact, named `write_<artifact>`; the pipeline calls each by
+    # the artifact's name. `document` is the artifact's JSON as a dict.
 
     def write_media(self, video_id: str, document: dict[str, Any]) -> None:
         """`media.json`: the file, its container and its streams."""
@@ -106,8 +105,7 @@ class Database:
     def write_aggregate_units(self, source_id: str, units: list[dict[str, Any]],
                               embedder_key: str) -> None:
         """Embedded summaries, chapters and entities, each with its `level` and
-        `vector`. Embedding them costs a call, so it happens only when this
-        hook is implemented."""
+        `vector`. They are embedded only when this hook is implemented."""
 
     def write_definitions(self, rows: list[dict[str, Any]]) -> None:
         """The aggregate definitions a run used, at the version it used them."""

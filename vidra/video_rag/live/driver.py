@@ -9,18 +9,15 @@ the samplers (`observe`). The event loop describes each kept frame as soon as
 its context is complete, embeds the answer, appends it to
 `observations.jsonl` and hands it to `on_unit`. Between them is a bounded
 queue: when the model falls behind, the oldest waiting frame is dropped and
-counted, rather than the backlog -- and every answer's lag -- growing without
-end.
+counted.
 
 When the stream ends (or `stop_after_s`, `stop`, or `StopStream` from a
 callback), the run is written out as `media.json`, `timeline.json`,
-`manifest.json`, `descriptions.json` and `embedded.json`, so search and the
-aggregates read a live run exactly as they read a batch one. A chunk's
-description there is its frames' answers joined in time order; each answer is
-kept whole under `observations`.
+`manifest.json`, `descriptions.json` and `embedded.json`, in `offline`'s
+shapes. A chunk's description there is its frames' answers joined in time
+order; each answer is kept whole under `observations`.
 
-There is no audio: the soundtrack needs the whole recording to diarize, and
-`record=` keeps the stream for an `offline` run afterwards.
+There is no audio; `record=` keeps the stream for an `offline` run afterwards.
 """
 
 from __future__ import annotations
@@ -320,8 +317,7 @@ class _State:
         self.lags: list[float] = []
         self.questions: set[str] = set()
         #: Rows waiting for the database, how many reached it, how many did not,
-        #: and the first few reasons -- a database down for a shift would
-        #: otherwise add one message per write.
+        #: and the first 20 reasons.
         self.unsent: list[dict[str, Any]] = []
         self.written = 0
         self.unwritten = 0

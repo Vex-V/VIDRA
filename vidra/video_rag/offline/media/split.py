@@ -123,7 +123,7 @@ def split(path: str | Path, video_id: Optional[str] = None,
             codec=v.codec_context.name,
             # `guessed_rate` is derived from the timestamps; prefer it.
             rate=float(v.guessed_rate or v.average_rate or 0) or None,
-            # As a string, so the exact rational survives JSON.
+            # As a string: the exact rational.
             time_base=str(v.time_base) if v.time_base else None,
             width=v.codec_context.width,
             height=v.codec_context.height,

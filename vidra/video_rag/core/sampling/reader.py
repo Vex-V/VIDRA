@@ -1,9 +1,8 @@
 """Sequential decode, converting only the frames something asked for.
 
 The decimator decides from `media_ts` alone, before a frame is converted to
-an array, so declined frames cost only the decode. A generator: one frame in
-flight. `Frame.image` is released when no longer needed; copy anything kept.
-Rotation is read with OpenCV.
+an array. A generator: one frame in flight. `Frame.image` is released when no
+longer needed; copy anything kept. Rotation is read with OpenCV.
 """
 
 from __future__ import annotations
@@ -106,7 +105,7 @@ def read_frames(media: Media,
                 media_ts = index / fps
 
             if keep(media_ts):
-                image = av_frame.to_ndarray(format="bgr24")   # the 6.2 ms
+                image = av_frame.to_ndarray(format="bgr24")
                 if rotate is not None:
                     image = rotate(image)
                 yield Frame(index=index, media_ts=media_ts, pts=pts, image=image)

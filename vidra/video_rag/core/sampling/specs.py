@@ -1,8 +1,7 @@
 """The sampler spec: `"clip:[text,scene],yolo"`, or sampler objects, -> built
 samplers.
 
-Shared by every pipeline that samples, so a spec means the same run whether
-the frames come from a file or a stream. A spec is a string, or a list mixing
+Shared by every pipeline that samples. A spec is a string, or a list mixing
 strings and `Sampler` objects:
 
     "clip:[text,scene],yolo"                         by name, built-in settings
@@ -69,7 +68,7 @@ def parse_spec(spec: str) -> tuple[str, list[str]]:
     parts = [q.strip() for q in rest.replace("+", ",").split(",")]
     seen, questions = set(), []
     for q in parts:
-        if q and q not in seen:          # a repeat would pay for the same call twice
+        if q and q not in seen:          # each question once
             seen.add(q)
             questions.append(q)
     return name, questions

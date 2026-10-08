@@ -135,7 +135,7 @@ class EntitiesAggregator(DefinitionRunner):
 
         properties = self.properties()
         if flag:
-            # Doubts first, so the account is written without them.
+            # Doubts first; the account is written without them.
             properties = {**listing("doubts", {"observation": {"type": "integer"},
                                                "reason": {"type": "string"}}),
                           **properties}

@@ -33,7 +33,7 @@ class ModelDescriber:
         """Runs in flight at once: the VLM's cap on calls."""
         return self.vlm.concurrency
 
-    # -- request assembly, kept separate so it is testable without a network -
+    # -- request assembly -----------------------------------------------------
     def parts_for(self, images: Sequence[LoadedFrame],
                   context: dict[str, Any]) -> list[dict[str, Any]]:
         """The instruction, then every frame labelled with its own timestamp."""
@@ -74,8 +74,7 @@ class ModelDescriber:
 
     def config(self) -> dict[str, Any]:
         """Half of the resume key: the VLM's key, split at its first colon, and
-        the settings. For a ready-made VLM this is what the provider registry
-        wrote, so nothing stored before it went stale."""
+        the settings."""
         return {
             "name": self.name,
             "params": {

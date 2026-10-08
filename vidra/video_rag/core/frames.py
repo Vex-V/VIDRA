@@ -10,9 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-if TYPE_CHECKING:                            # numpy is ~60 ms to import, and
-    import numpy as np                       # `describe` reads bytes, never
-                                             # arrays. Annotation only.
+if TYPE_CHECKING:                            # annotations only
+    import numpy as np
 
 
 class FrameStore:

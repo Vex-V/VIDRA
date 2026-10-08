@@ -13,8 +13,7 @@ A live run's answers go to `vr_observations` as they arrive
 `vr_search_observations` and `ag_search` RPCs. The only module that
 knows a table name; `db.py` is the client and the batched upsert.
 
-`cuts` has no table: boundary evidence is a local cache, so `write_cuts` is
-left to the base class and does nothing.
+`cuts` has no table: `write_cuts` is left to the base class and does nothing.
 """
 
 from __future__ import annotations
@@ -87,7 +86,7 @@ class Supabase(Database):
 
     def write_timeline(self, video_id: str, document: dict[str, Any]) -> None:
         api = self.writer()
-        # A grid needs a `vr_videos` row, so a combination's is refused.
+        # A combination's grid has no `vr_videos` row, and is refused.
         db.upsert("vr_timelines", [{
             "video_id": video_id,
             "policy": document["policy"],
@@ -133,17 +132,8 @@ class Supabase(Database):
         } for c in chunks], api)
 
     def write_manifest(self, video_id: str, document: dict[str, Any]) -> None:
-        """The frames first, the row that claims them second.
-
-        There is no transaction across two REST writes, so an ordering is the only
-        guard there is. Observed: the `manifests` row landed and `chunk_samplers`
-        was refused, leaving a manifest that claimed a run with no sampled frames --
-        a partial state that reads exactly like a valid one, since a video whose
-        samplers kept nothing is a thing that can happen.
-
-        Written the other way round, the same failure leaves rows nobody points at
-        and no manifest claiming them, so a reader is told the truth: this video
-        has not been ingested here yet.
+        """The frames (`vr_chunk_samplers`) first, the row that claims them
+        (`vr_manifests`) second.
         """
         api = self.writer()
         # One row per (chunk, sampler run); `questions` lists what was asked of it.
@@ -204,7 +194,7 @@ class Supabase(Database):
         rows = [{
             "video_id": video_id, "chunk_id": u["chunk_id"],
             "sampler_id": u["sampler_id"], "embedder": embedder,
-            # Both halves of the sampler id, so each filter is an equality.
+            # Both halves of the sampler id, each filtered by equality.
             "sampler": u.get("sampler", ""), "question": u.get("question", ""),
             "text_hash": u.get("text_hash", ""), "content": u.get("content", ""),
             "structured": u.get("structured", {}),
@@ -212,7 +202,7 @@ class Supabase(Database):
         } for u in units if u.get("vector")]
         db.upsert_vectors("vr_embeddings", rows, api)
 
-        # Rows this document no longer holds, per chunk: the key is two columns.
+        # Rows this document no longer holds, deleted chunk by chunk.
         live: dict[int, list[str]] = {}
         for u in units:
             live.setdefault(u["chunk_id"], []).append(u["sampler_id"])
@@ -232,8 +222,7 @@ class Supabase(Database):
 
     def write_observations(self, video_id: str, rows: list[dict[str, Any]]) -> None:
         """A live run's answers into `vr_observations`, as they arrive. Keyed
-        (video, sampler_id, frame, embedder), so a retried batch overwrites
-        rather than duplicates."""
+        (video, sampler_id, frame, embedder): a retried batch overwrites."""
         db.upsert_vectors("vr_observations", [{
             "video_id": video_id, "sampler_id": r["sampler_id"],
             "frame_index": r["frame_index"], "embedder": r["embedder"],

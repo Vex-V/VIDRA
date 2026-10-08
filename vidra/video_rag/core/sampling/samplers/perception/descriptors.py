@@ -146,7 +146,7 @@ class BoxGeometryDescriptor(RegionDescriptor):
 
 class TextLayoutDescriptor(RegionDescriptor):
     """One descriptor for the whole frame's text: the frame masked to every text
-    region, so a line the detector splits or merges still covers the same pixels.
+    region.
     """
 
     name = "text_layout"

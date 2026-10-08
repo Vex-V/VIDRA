@@ -3,9 +3,7 @@
 Four steps over the whole file, in order. No chunking.
 
 A word goes to the speaker talking at its midpoint, and a segment to whoever
-holds most of it by duration: the two models estimate edges independently, so
-word spans routinely straddle a turn boundary and a sentence can begin during
-the previous speaker's tail.
+holds most of it by duration.
 
 A track below `SILENCE_RMS` gets no model at all and says so.
 """
@@ -30,9 +28,7 @@ def speaker_at(diarization: Diarization, ts: float) -> Optional[str]:
 
 def attribute(transcript: Transcript, diarization: Diarization) -> None:
     """Give every word a speaker, and every segment the one who holds most of it.
-
-    In place, because the alternative is a parallel structure keyed by index
-    that has to be kept in step with the transcript by hand.
+    In place.
     """
     if not diarization.turns:
         return

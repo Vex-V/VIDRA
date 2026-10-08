@@ -23,15 +23,14 @@ def run_problems(into: str | Path, database: Optional[str | Database],
             or database in DATABASES):
         problems.append(f"unknown database {database!r}; pass a "
                         f"Database, or one of: {', '.join(DATABASES)}")
-    # A file where `into` should be makes every write fail.
+    # `into` must be a directory, when it exists.
     where = Path(into)
     if where.exists() and not where.is_dir():
         problems.append(f"{where} is a file; `into` is the directory that holds "
                         f"one folder per video")
     if sampler is not None:
         # Every sampler and question the spec names, against the registry and
-        # the question vocabulary -- including a bare name's own question, which
-        # would otherwise fall back to the general one in silence.
+        # the question vocabulary, including a bare name's own question.
         from .describe import prompts
         from .sampling import specs
         problems += specs.problems(sampler, prompts.questions())

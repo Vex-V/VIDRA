@@ -270,7 +270,7 @@ def link_similar(mentions: Sequence[Mention], sim: Any, rule: str = "max",
                  if answers[i] == answers[j]]
     if threshold is None:
         if not different:
-            # Nothing is provably different, so nothing can be calibrated: no links.
+            # No provably different pair to calibrate on: no links.
             return Linked([[i] for i in range(count)], None, 0, 0)
         threshold = float(max(different) if rule == "max"
                           else np.quantile(different, {"q95": 0.95, "q90": 0.90}[rule]))

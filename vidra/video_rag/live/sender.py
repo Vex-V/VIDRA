@@ -28,15 +28,10 @@ def send(path: str | Path, url: str, speed: float = 1.0,
          connect_timeout_s: float = 120.0, format: Optional[str] = None
          ) -> dict[str, Any]:
     """Send `path`'s picture to `url`, paced at `speed` times real time. Retries
-    the connection for `connect_timeout_s`, since a receiver may start late.
-    `format` is the container on the wire; None picks MPEG-TS or Matroska by
-    the codec. Returns what was sent.
+    the connection for `connect_timeout_s`. `format` is the container on the
+    wire; None picks MPEG-TS or Matroska by the codec. Returns what was sent.
 
-    Run it in its own process, as a camera would be. PyAV holds the GIL while a
-    connection attempt waits (about 5 s each on Windows), so a sender retrying
-    on a thread of the receiver's process starves it: building `clip`, `yolo`
-    and `objects` took 255 s instead of 16 s beside one. Once connected it no
-    longer matters, and the receiver's own reads release the GIL.
+    Run it in its own process, as a camera would be.
     """
     import av
 
@@ -56,9 +51,8 @@ def send(path: str | Path, url: str, speed: float = 1.0,
     if format is None:
         format = "mpegts" if codec in MPEGTS_CODECS else "matroska"
 
-    # PyAV connects on the first write, not on open, so the connection is only
-    # made when a packet has gone out. Until then a refusal means nothing is
-    # listening yet: start over from the first packet and try again.
+    # Retried from the first packet until one is written: PyAV connects on
+    # the first write, not on open.
     deadline = time.monotonic() + connect_timeout_s
     while True:
         source = av.open(str(path))

@@ -114,7 +114,7 @@ class Sampler(ABC):
         return list(self.prompts) or [self.name]
 
     def config(self) -> dict[str, Any]:
-        """Serialised into the manifest so a run can be reproduced."""
+        """Serialised into the manifest."""
         return self._base_config()
 
 

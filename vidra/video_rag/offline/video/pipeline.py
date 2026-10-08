@@ -49,7 +49,7 @@ def ingest(media: Media, timeline: Timeline,
     offer = Offer(samplers)
     started = time.perf_counter()
 
-    # Read once: the reader applies it, and `recreate` reads it off the manifest.
+    # Applied by the reader, and recorded in the manifest for `recreate`.
     rotation = rotation_of(media.path) if media.has_video else 0.0
 
     for frame in read_frames(media, decimator.accepts, rotation):
@@ -87,7 +87,7 @@ def ingest(media: Media, timeline: Timeline,
         source={"path": media.path, "container": media.container_format,
                 "duration_s": media.duration_s,
                 **(media.video.as_dict() if media.video else {}),
-                # Only when there is one, so an upright video's manifest is unchanged.
+                # Only when there is one.
                 **({"rotation": int(rotation)} if int(rotation) else {})},
         config=config,
         stats=stats,

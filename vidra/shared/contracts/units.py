@@ -1,9 +1,8 @@
 """One embeddable unit, and how a document becomes its text.
 
 `render` joins a summary and its structured fields, keys sorted at every
-level so the text is the same wherever the document was read from. Three
-separators: `. ` between fields, ` | ` between entities, `; ` between an
-entity's attributes. Aggregates render fields through it too.
+level. Three separators: `. ` between fields, ` | ` between entities, `; `
+between an entity's attributes. Aggregates render fields through it too.
 """
 
 from __future__ import annotations

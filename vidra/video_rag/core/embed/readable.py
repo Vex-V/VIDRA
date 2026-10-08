@@ -1,7 +1,6 @@
 """`embedded.json` -- what `embed` produced, text and vectors together.
 
-Rewritten whole each time, under one embedder, so it holds no stale unit.
-`embed.load` reads it back.
+Rewritten whole each time, under one embedder. `embed.load` reads it back.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from .units import Unit
 
 def build(video_id: str, units: Sequence[Unit], embedder_key: str = "",
           timeline_fingerprint: str = "") -> Embedded:
-    """The document, in chunk order so it reads top to bottom like the video."""
+    """The document, in chunk order."""
     ordered = sorted(units, key=lambda u: (u.chunk_id, u.sampler_id))
     return Embedded(
         video_id=video_id,

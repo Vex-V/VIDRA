@@ -90,8 +90,8 @@ class Aggregator(Protocol):
 
 
 class Reader(Protocol):
-    """Answers once per input. `read` is separate from `run` so a stored answer can
-    be reused before anything is paid for.
+    """Answers once per input, in two steps: `read` gathers the input, `run`
+    answers it.
     """
 
     name: str

@@ -40,7 +40,7 @@ def ingest(media: Media, timeline: Timeline,
     """
     from ...core.describe import prompts
 
-    # Built before anything decodes, so a bad argument fails at once.
+    # Built before anything decodes.
     built = build_samplers(split_specs(sampler), every_n, min_interval_s,
                            max_per_chunk, threshold, vocabulary, confidence,
                            languages, questions=prompts.questions())

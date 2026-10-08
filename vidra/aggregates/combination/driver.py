@@ -3,13 +3,12 @@
     week = combine(records=[monday, tuesday], out="data/out/week")
 
 Writes a `Timeline`, `Descriptions`, `Transcript` and `Manifest` under the
-usual filenames and returns them as a record, so every aggregator reads it
-as it reads a video. Grids are
-laid end to end: chunks renumbered after the previous video's, times shifted
-onto one clock. `Timeline.params["combined"]` lists each source (its id,
-first chunk, chunk count and clock offset); `origin` maps a combined chunk
-back. Speakers are prefixed with their video (`monday:SPEAKER_00`). One video
-named twice is refused.
+usual filenames and returns them as a record, which every aggregator reads as
+it reads a video. Grids are laid end to end: chunks renumbered after the
+previous video's, times shifted onto one clock. `Timeline.params["combined"]`
+lists each source (its id, first chunk, chunk count and clock offset);
+`origin` maps a combined chunk back. Speakers are prefixed with their video
+(`monday:SPEAKER_00`). One video named twice is refused.
 """
 
 from __future__ import annotations

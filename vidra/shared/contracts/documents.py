@@ -220,7 +220,7 @@ class RawTranscript:
 @dataclass
 class Cuts:
     """Interior cut times, plus the per-frame score series they were thresholded
-    from, so a new threshold needs no second decode.
+    from. `retune` re-thresholds the series without decoding.
     """
 
     #: Which video these boundaries were found in.

@@ -97,7 +97,6 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
     the index was built with; None is OpenAI's default.
     """
     if not (query or "").strip():
-        # An empty query is refused here rather than at the provider.
         raise Refused("a search needs a query; this one is empty")
     for name, value, least in (("moments", moments, 1), ("candidates", candidates, 1),
                                ("window", window, 0)):
@@ -169,8 +168,7 @@ def _chunks_wanted(scope: Optional[Sequence[str]], chunk_ids: Optional[Sequence[
     timed = after is not None or before is not None
     if not chunk_ids and not timed:
         return None
-    # Every grid in scope: a chunk id means nothing without its video. With no
-    # scope that is every video, which a database that cannot list them refuses.
+    # Every grid in scope; with no scope, every video the database lists.
     known = list(scope) if scope else database.video_ids()
     # An empty list is no constraint, as with `video_ids`.
     wanted = {int(c) for c in chunk_ids} if chunk_ids else None

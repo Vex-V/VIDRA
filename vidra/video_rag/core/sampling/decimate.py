@@ -1,8 +1,8 @@
 """Rate reduction at the head of the pipeline: `per_second` frames per second of
 media time.
 
-Buckets on media time, never every Nth frame, so a lossy file stays aligned.
-Decides from a timestamp alone, before any pixels are converted.
+Buckets on media time, never every Nth frame. Decides from a timestamp alone,
+before any pixels are converted.
 """
 
 from __future__ import annotations

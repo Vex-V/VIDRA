@@ -2,8 +2,7 @@
 
 Decodes the whole waveform, transcribes, diarizes and attributes each word to
 a speaker, into `transcript.raw.json`: words, segments and turns. The file is
-processed whole, because speaker labels come from clustering the entire
-recording.
+processed whole.
 """
 
 from __future__ import annotations

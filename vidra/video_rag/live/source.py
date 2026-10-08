@@ -62,7 +62,7 @@ class Source:
         #: Jumps backward, continued rather than followed.
         self.rewinds = 0
         #: Packets the decoder could not read, and recording writes that failed:
-        #: skipped and counted, since a damaged packet is routine on a network.
+        #: skipped and counted.
         self.corrupt = 0
         self.unrecorded = 0
         #: When the first frame arrived, ISO 8601 UTC.
@@ -75,8 +75,7 @@ class Source:
         self._described: dict[str, Any] = {}
         self._format = ""
         #: The container's rotation in degrees, applied as `offline`'s reader
-        #: applies it. Read for a file only: OpenCV would open a stream a
-        #: second time, and MPEG-TS carries no rotation anyway.
+        #: applies it: read for a file, 0 for a stream.
         self.rotation = 0.0
 
     # ------------------------------------------------------------- opening

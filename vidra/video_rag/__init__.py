@@ -42,8 +42,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-#: Resolved on first use, so importing the package does not import every
-#: component. An attribute of None is the module itself.
+#: Resolved on first use. An attribute of None is the module itself.
 _LAZY: dict[str, tuple[str, Optional[str]]] = {
     "video_rag": ("offline.driver", "video_rag"),
     "process": ("offline.driver", "process"),

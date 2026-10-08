@@ -1,7 +1,6 @@
 """Tone per chunk, and where it turns.
 
-Signed, so a mean over the video is meaningful. Each chunk is scored over
-every piece of its text, weighted by length.
+Signed. Each chunk is scored over every piece of its text, weighted by length.
 """
 
 from __future__ import annotations

@@ -6,14 +6,11 @@
 A manifest names every frame a run kept by `index` (its position in a decode of
 every frame) and records the source it came from. This decodes the video again,
 writes those frames as the store did, and with `verify=` byte-compares them
-against an existing store -- a rebuilt store should match the original byte for
-byte. It is the end-to-end check on encoding and addressing: any change that
-makes a rebuild differ is wrong.
+against an existing store; a rebuilt store matches the original byte for byte.
 
-Self-contained on purpose: it decodes with `av` and `cv2` and imports nothing
-from the pipeline but the error base, so the manifest alone has to be enough --
-a default living in pipeline code could not stand in for something the manifest
-failed to record. The file can be handed over with a manifest and a video.
+Decodes with `av` and `cv2`, and imports nothing from the pipeline but the
+error base: the manifest alone is enough. The file can be handed over with a
+manifest and a video.
 """
 
 from __future__ import annotations
