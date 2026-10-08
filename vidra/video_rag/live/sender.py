@@ -4,8 +4,10 @@
     send("samples/test.mp4", "tcp://127.0.0.1:9000", speed=4.0)
 
 The receiver listens first (`video_rag_live("tcp://0.0.0.0:9000?listen=1",
-...)`); the file is remuxed, not re-encoded, into MPEG-TS, which survives being
-cut into network packets. Only the picture is sent: live reads no audio.
+...)`); the file is remuxed, not re-encoded: into MPEG-TS for the codecs it
+carries (H.264, HEVC, MPEG-2/4), into Matroska for the rest (VP9, AV1, ...),
+both of which survive being cut into network packets. Only the picture is
+sent: live reads no audio.
 """
 
 from __future__ import annotations
@@ -13,17 +15,22 @@ from __future__ import annotations
 import time
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from vidra.shared.reporting.errors import Refused
 from .source import StreamUnavailable
 
+#: Video codecs MPEG-TS carries; anything else goes in Matroska.
+MPEGTS_CODECS = {"h264", "hevc", "mpeg1video", "mpeg2video", "mpeg4"}
+
 
 def send(path: str | Path, url: str, speed: float = 1.0,
-         connect_timeout_s: float = 120.0, format: str = "mpegts") -> dict[str, Any]:
+         connect_timeout_s: float = 120.0, format: Optional[str] = None
+         ) -> dict[str, Any]:
     """Send `path`'s picture to `url`, paced at `speed` times real time. Retries
     the connection for `connect_timeout_s`, since a receiver may start late.
-    Returns what was sent.
+    `format` is the container on the wire; None picks MPEG-TS or Matroska by
+    the codec. Returns what was sent.
 
     Run it in its own process, as a camera would be. PyAV holds the GIL while a
     connection attempt waits (about 5 s each on Windows), so a sender retrying
@@ -38,6 +45,16 @@ def send(path: str | Path, url: str, speed: float = 1.0,
     with av.open(str(path)) as probe:
         if not probe.streams.video:
             raise Refused(f"{path} carries no video stream")
+        codec = probe.streams.video[0].codec_context.name
+    try:
+        av.Codec(codec, "w")
+    except Exception:                                        # noqa: BLE001
+        # Copying a stream needs its codec writable in this build.
+        raise Refused(f"{path} is {codec}, which this PyAV cannot write, so it "
+                      f"cannot be sent without re-encoding; re-encode it to "
+                      f"H.264 first") from None
+    if format is None:
+        format = "mpegts" if codec in MPEGTS_CODECS else "matroska"
 
     # PyAV connects on the first write, not on open, so the connection is only
     # made when a packet has gone out. Until then a refusal means nothing is
@@ -96,6 +113,7 @@ def send(path: str | Path, url: str, speed: float = 1.0,
             closed = True
         source.close()
     return {"packets": sent, "elapsed_s": round(time.perf_counter() - started, 3),
-            "url": url, "speed": speed, "closed_by_receiver": closed}
+            "url": url, "speed": speed, "format": format,
+            "closed_by_receiver": closed}
 
 __all__ = ["send"]

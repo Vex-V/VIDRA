@@ -444,6 +444,8 @@ RUNS = [
     ("custom_question.py", ["{a}"], True),
     ("several_videos.py", ["{a}", "{b}"], True),
     ("custom_database.py", ["{a}"], True),
+    # A live run, with a file as its stream: the detection-by-subclass recipe.
+    ("live_moments.py", ["{a}"], True),
     ("custom_models.py", ["{a}"], False),
 ]
 
