@@ -41,6 +41,7 @@
 <div class="group">Bring your own</div>
 <a href="models.html">Models</a>
 <a href="databases.html">Databases</a>
+<a href="custom-samplers.html">Custom samplers</a>
 <div class="group">Reference</div>
 <a href="reference.html">Reference</a>
 <!-- /nav -->
@@ -64,6 +65,7 @@ print(run.observations, "answers,", run.dropped, "dropped, lag", run.lag_s)</cod
 <p>The call blocks until the stream ends. Detection belongs in your <code>on_unit</code>: the pipeline describes and embeds, your application decides what counts as an event. An exact match on a <code>one_of</code> field (<a href="questions.html#fields">fields</a>) is more reliable than comparing vectors: embeddings handle negation badly, so "wearing a hard hat" and "without a hard hat" sit close together.</p>
 
 <h2 id="testing">Testing with a file</h2>
+<p>A complete run, sender and both searches included, is the <a href="recipes.html#live">live recipe</a>.</p>
 <p><code>live.send</code> pushes a file to a port at the pace it was recorded. The receiver loads its samplers' models before it listens (about 20-35 s for <code>clip</code>, <code>yolo</code> and <code>objects</code>), so the sender retries for up to <code>connect_timeout_s</code>.</p>
 <pre><code class="python">import multiprocessing
 from vidra.video_rag import live, video_rag_live
@@ -91,7 +93,7 @@ if __name__ == "__main__":
 <tr><td><code>into</code></td><td>required</td><td>The folder that holds one folder per video.</td></tr>
 <tr><td><code>video_id</code></td><td>file stem, or <code>live-&lt;UTC time&gt;</code></td><td>The run's folder. A folder already in use gets <code>-2</code>, <code>-3</code>.</td></tr>
 <tr><td><code>name</code></td><td>the id</td><td>What to call the video in <code>media.json</code>.</td></tr>
-<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>The same spec as <code>video_rag</code>: names, or sampler objects with their own settings (<a href="samplers.html#objects">samplers</a>).</td></tr>
+<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>The same spec as <code>video_rag</code>: names, or sampler objects with their own settings (<a href="samplers.html#per-call">samplers</a>).</td></tr>
 <tr><td><code>vlm</code>, <code>embedder</code>, <code>models</code></td><td>OpenAI's</td><td>The models, as in <code>video_rag</code>.</td></tr>
 <tr><td><code>database</code></td><td>none</td><td>Copy the documents here when the stream ends.</td></tr>
 <tr><td><code>on_unit</code></td><td>none</td><td>Called with each <code>Observation</code>. Raise <code>live.StopStream</code> to end the run.</td></tr>

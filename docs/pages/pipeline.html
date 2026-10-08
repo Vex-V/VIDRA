@@ -41,6 +41,7 @@
 <div class="group">Bring your own</div>
 <a href="models.html">Models</a>
 <a href="databases.html">Databases</a>
+<a href="custom-samplers.html">Custom samplers</a>
 <div class="group">Reference</div>
 <a href="reference.html">Reference</a>
 <!-- /nav -->
@@ -73,7 +74,7 @@ run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
 <tr><td><code>policy</code></td><td><code>"uniform"</code></td><td>Where chunks are cut: <code>uniform</code>, <code>scene</code>, <code>vad</code>, <code>speaker</code> (<a href="concepts.html#grid">the grid</a>).</td></tr>
 <tr><td><code>use_video</code></td><td><code>True</code></td><td>Read the picture (<code>video</code> and <code>describe</code>).</td></tr>
 <tr><td><code>use_audio</code></td><td><code>True</code></td><td>Read the soundtrack (<code>audio</code> and <code>cut</code>). Needs <code>vidra[audio]</code>.</td></tr>
-<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>Which frames to keep and what to ask, e.g. <code>"clip,yolo:overview"</code> (<a href="samplers.html#specs">specs</a>), or a list of names and sampler objects, to set a sampler's settings (<a href="samplers.html#objects">per call</a>).</td></tr>
+<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>Which frames to keep and what to ask, e.g. <code>"clip,yolo:overview"</code> (<a href="samplers.html#specs">specs</a>), or a list of names and sampler objects, to set a sampler's settings (<a href="samplers.html#per-call">per call</a>).</td></tr>
 <tr><td><code>vlm</code></td><td><code>OpenAI()</code></td><td>The vision model. Or set it in <code>models</code>.</td></tr>
 <tr><td><code>embedder</code></td><td><code>OpenAIEmbedder()</code></td><td>The embedder; search must use the same one. Or set it in <code>models</code>.</td></tr>
 <tr><td><code>resume</code></td><td><code>True</code></td><td>Reuse still-current descriptions and vectors. <code>False</code> redoes them.</td></tr>

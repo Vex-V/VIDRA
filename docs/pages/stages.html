@@ -41,6 +41,7 @@
 <div class="group">Bring your own</div>
 <a href="models.html">Models</a>
 <a href="databases.html">Databases</a>
+<a href="custom-samplers.html">Custom samplers</a>
 <div class="group">Reference</div>
 <a href="reference.html">Reference</a>
 <!-- /nav -->
@@ -168,7 +169,7 @@ grid = boundaries.timeline(m, "scene", cuts=boundaries.detect("scene", media=m))
 <tr><td><code>media</code>, <code>timeline</code></td><td>required</td><td>Paths to <code>media.json</code> and <code>timeline.json</code>.</td></tr>
 <tr><td><code>out</code></td><td>required</td><td>Where to write <code>manifest.json</code>.</td></tr>
 <tr><td><code>store</code></td><td>none</td><td>Frame folder. Without it no frames are kept and <code>describe</code> has nothing to read.</td></tr>
-<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>A <a href="samplers.html#specs">sampler spec</a>: <code>"clip,yolo:overview"</code>, or a list of specs and sampler objects (<a href="samplers.html#objects">per call</a>).</td></tr>
+<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>A <a href="samplers.html#specs">sampler spec</a>: <code>"clip,yolo:overview"</code>, or a list of specs and sampler objects (<a href="samplers.html#per-call">per call</a>).</td></tr>
 <tr><td><code>per_second</code></td><td><code>1.0</code></td><td>Frames offered to the samplers per second of video.</td></tr>
 <tr><td><code>every_n</code></td><td><code>1</code></td><td><code>uniform</code>: keep every Nth offered frame.</td></tr>
 <tr><td><code>min_interval_s</code></td><td><code>0.0</code></td><td>Every sampler: at least this many seconds between kept frames.</td></tr>

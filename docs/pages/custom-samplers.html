@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- head -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="docs-root" content="../">
+<title>Custom samplers · VIDRA docs</title>
+<link rel="stylesheet" href="assets/style.css">
+<script src="assets/search-index.js"></script>
+<script src="assets/docs.js"></script>
+<!-- /head -->
+</head>
+<body>
+<header class="top">
+<!-- top -->
+<a class="brand" href="../index.html">VIDRA <span>docs</span></a>
+<button class="icon menu" id="menu" type="button" aria-label="Menu">&#9776;</button>
+<div class="spacer"></div>
+<div class="search"><input id="q" type="search" placeholder="Search the docs  ( / )" autocomplete="off" aria-label="Search the docs"><div class="results" id="results"></div></div>
+<button class="icon" id="theme" type="button" aria-label="Light or dark">&#9680;</button>
+<!-- /top -->
+</header>
+<div class="layout">
+<nav class="side" aria-label="Pages">
+<!-- nav -->
+<div class="group">Get started</div>
+<a href="../index.html">Start here</a>
+<a href="concepts.html">Concepts</a>
+<a href="recipes.html">Recipes</a>
+<div class="group">video_rag</div>
+<a href="pipeline.html">The pipeline</a>
+<a href="live.html">Live streams</a>
+<a href="stages.html">Stages</a>
+<a href="samplers.html">Samplers</a>
+<a href="questions.html">Questions</a>
+<a href="search.html">Search</a>
+<div class="group">aggregates</div>
+<a href="aggregates.html">Aggregates</a>
+<a href="definitions.html">Custom prompts and profiles</a>
+<div class="group">Bring your own</div>
+<a href="models.html">Models</a>
+<a href="databases.html">Databases</a>
+<a href="custom-samplers.html" class="here">Custom samplers</a>
+<div class="group">Reference</div>
+<a href="reference.html">Reference</a>
+<!-- /nav -->
+</nav>
+<main>
+<h1>Custom samplers</h1>
+<p class="lede">Your own rule for which frames are kept, used anywhere a built-in sampler is: in <code>video_rag</code>, in <code>video_rag_live</code> and in the <code>video</code> stage.</p>
+
+<h2 id="short">In short</h2>
+<p>Subclass <code>Sampler</code>, give it a <code>name</code>, and fill in <code>propose</code>: keep this frame or not. Then put an object of it in a spec.</p>
+<pre><code class="python">from vidra import Sampler
+from vidra.video_rag import video_rag
+
+class Bright(Sampler):
+    """Keep a frame when it is brighter than `level` (0-255)."""
+    name = "bright"
+
+    def __init__(self, level=120, min_interval_s=0.0, max_per_chunk=None,
+                 sampler_id=None, prompts=None):
+        super().__init__(min_interval_s, max_per_chunk, sampler_id, prompts)
+        self.level = level
+
+    def propose(self, frame, chunk_local_index):
+        return frame.image.mean() &gt; self.level
+
+    def config(self):
+        return {**self._base_config(), "level": self.level}
+
+video_rag("x.mp4", "data/out", sampler=[Bright(level=140, prompts=["overview"]), "clip"])</code></pre>
+<p>The run decodes once and offers every decimated frame to both samplers. The frames <code>bright</code> keeps are described with the <code>overview</code> question and stored as <code>bright:overview</code>, beside <code>clip</code>'s answers.</p>
+
+<h2 id="class">The Sampler class</h2>
+<div class="sig">class Sampler(min_interval_s=0.0, max_per_chunk=None, sampler_id=None, prompts=None)</div>
+<table class="params">
+<tr><th>Member</th><th>Is</th></tr>
+<tr><td><code>name</code></td><td>A class attribute: the strategy's name, written in specs and stored with every answer (<code>motion:overview</code>). Lowercase letters, digits, <code>_</code>, <code>-</code>.</td></tr>
+<tr><td><code>propose(frame, chunk_local_index)</code></td><td>Required. Keep this frame? <code>frame.image</code> is the picture (BGR, borrowed: copy what you keep), <code>frame.media_ts</code> its time in seconds, <code>frame.index</code> its number in the video. <code>chunk_local_index</code> counts decimated frames in this chunk from 0.</td></tr>
+<tr><td><code>on_reset(chunk_id)</code></td><td>Called when a chunk opens, before its first frame: reset the strategy's state here.</td></tr>
+<tr><td><code>config()</code></td><td>What the manifest records about the run: <code>{**self._base_config(), ...your settings}</code>, plain JSON.</td></tr>
+<tr><td><code>last_score()</code></td><td>Optional: a number recorded beside each kept frame, e.g. how much the picture changed.</td></tr>
+<tr><td><code>__init__(...)</code></td><td>Your settings first, then <code>min_interval_s</code>, <code>max_per_chunk</code>, <code>sampler_id</code> and <code>prompts</code>, passed to <code>super().__init__</code>.</td></tr>
+</table>
+<table class="params">
+<tr><th>Base setting</th><th>Is</th></tr>
+<tr><td><code>min_interval_s</code></td><td>Smallest gap, in media seconds, between two kept frames.</td></tr>
+<tr><td><code>max_per_chunk</code></td><td>At most this many kept frames per chunk; None for no limit.</td></tr>
+<tr><td><code>sampler_id</code></td><td>The run's key in the manifest; None is <code>name</code>.</td></tr>
+<tr><td><code>prompts</code></td><td>The questions asked about the kept frames; none means the question named after the sampler.</td></tr>
+</table>
+
+<h2 id="base">What the base class does</h2>
+<ul>
+  <li><b>Rate limits come first.</b> A frame inside <code>min_interval_s</code> of the last kept one, or past <code>max_per_chunk</code>, is refused before <code>propose</code> sees it. When <code>propose</code> returns True, the frame is kept.</li>
+  <li><b>Every chunk keeps its first frame.</b> <code>propose</code> is still called on it, and its answer is ignored: the place to take a reference.</li>
+  <li><b>One frame at a time.</b> A sampler cannot look ahead or revisit a frame. The same class runs on a file and on a <a href="live.html">live stream</a>.</li>
+</ul>
+
+<h2 id="state">State between frames</h2>
+<p>Keep what the next frame needs on <code>self</code>, and clear it in <code>on_reset</code>: a reference picture, a count, the last score. Each run uses its own shallow copy of your object, so a model loaded in <code>__init__</code> is shared between runs while state assigned in <code>on_reset</code> belongs to one run. Assign new values there rather than changing a list or dict made in <code>__init__</code>, which every copy shares.</p>
+<pre><code class="python">def on_reset(self, chunk_id):
+    self.reference = None              # each chunk starts afresh
+
+def propose(self, frame, chunk_local_index):
+    small = frame.image[::8, ::8].mean(axis=2)
+    if self.reference is None:         # the chunk's first frame: kept anyway
+        self.reference = small
+        return True
+    moved = abs(small - self.reference).mean() / 255
+    if moved &gt;= self.threshold:
+        self.reference = small         # compare with the last kept frame
+        return True
+    return False</code></pre>
+
+<h2 id="use">Using it</h2>
+<h3 id="object">As an object</h3>
+<p>Put the object in the <code>sampler</code> list of <code>video_rag</code>, <code>video_rag_live</code> or <code>video.video</code>, beside names and other objects. It carries its own settings and questions. One sampler is one run: two objects with the same name, or a name and an object of the same sampler, are refused, so put every question on one object (<code>prompts=["overview", "safety"]</code>).</p>
+
+<h3 id="register">By name</h3>
+<pre><code class="python">from vidra.video_rag import samplers
+
+samplers.register(Bright)              # or @samplers.register above the class
+
+video_rag("x.mp4", "data/out", sampler="bright:overview,clip")
+samplers.build("bright", level=90, prompts=["overview"])   # an object, configured</code></pre>
+<p><code>samplers.register(cls)</code> lets spec strings name the class, in this process. A built-in's name (<code>samplers.BUILTIN</code>), a name a spec string cannot carry, or an abstract class is refused; registering a name again replaces the class. <code>samplers.class_of(name)</code> is the class a name builds and <code>samplers.available()</code> lists every name.</p>
+<p>A registered sampler named in a spec string gets the settings passed beside it, when its constructor takes them: <code>video.video(..., sampler="motion", threshold=0.2)</code> reaches the <a href="#example">motion</a> sampler's <code>threshold</code>. A setting no named sampler takes is refused.</p>
+
+<h3 id="questions">Questions</h3>
+<p>A sampler named alone asks the question named after it, and yours has none. Give it <code>prompts=[...]</code>, pair it in a spec (<code>bright:overview</code>), or add a question with its name using <a href="questions.html#add">describe.add_question</a>. Otherwise the run is refused before anything decodes.</p>
+
+<h3 id="elsewhere">Reading its output elsewhere</h3>
+<p>Search and the aggregates read the files, so a run's output stays readable in a process that never registered the class, and answers to a custom question stay readable where the question is not defined (another data root, another machine): a record vouches for the samplers and questions its answers came from, with the fields they carry.</p>
+
+<h2 id="example">Complete example: motion</h2>
+<p>Keeps a frame when enough of the picture moved since the last kept frame: no model, a downscaled difference. For fixed cameras only; on a moving camera nearly every frame moves. It runs the sampler as an object and by name, on a file and live.</p>
+<!-- example custom_sampler.py -->
+<div class="file">docs/pages/examples/custom_sampler.py</div>
+<pre><code class="python">"""A sampler of your own: keep a frame when enough of the picture moved.
+
+Cheap -- no model, a downscaled difference -- and for fixed cameras only. On
+shop CCTV, threshold 0.10 kept 10-18% of decimated frames (CLIP at its default
+keeps 13-18% there) and ignored sensor noise, which 0.05 and below did not. A
+moving camera or an edited film changes nearly every pixel every second: it
+kept 30-76% even at 0.45. Use `clip` for those.
+
+    python custom_sampler.py path/to/video.mp4
+"""
+
+import sys
+
+import numpy as np
+
+import vidra
+from vidra import Folder, LocalEmbedder, Models, OpenAI, Sampler
+from vidra.video_rag import samplers, video, video_rag, video_rag_live
+
+vidra.configure(env_file=".env")
+
+
+class Motion(Sampler):
+    """Keep a frame when the share of pixels that changed since the last kept
+    frame reaches `threshold`."""
+
+    name = "motion"                     # written in specs and stored with answers
+
+    def __init__(self, threshold=0.10, scale=8, min_interval_s=0.0,
+                 max_per_chunk=None, sampler_id=None, prompts=None):
+        super().__init__(min_interval_s, max_per_chunk, sampler_id, prompts)
+        self.threshold, self.scale = threshold, scale
+        self._last_score = None
+
+    def on_reset(self, chunk_id):
+        self.reference = None           # every chunk starts afresh
+
+    def propose(self, frame, chunk_local_index):
+        # frame.image is BGR and borrowed: copy anything kept past this call.
+        small = frame.image[::self.scale, ::self.scale].mean(axis=2)
+        if self.reference is None:
+            self.reference, self._last_score = small.copy(), None
+            return True                 # the first frame of a chunk is kept anyway
+        moved = float((np.abs(small - self.reference) &gt; 25).mean())
+        self._last_score = moved
+        if moved &gt;= self.threshold:
+            self.reference = small.copy()
+            return True
+        return False
+
+    def last_score(self):
+        return self._last_score         # recorded beside each kept frame
+
+    def config(self):
+        # What the manifest records about the run: plain JSON only.
+        return {**self._base_config(), "threshold": self.threshold, "scale": self.scale}
+
+
+source = sys.argv[1]
+models = Models(vlm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+
+# An object carries its own settings and questions; a built-in is configured
+# the same way through samplers.build.
+run = video_rag(source, "data/out", use_audio=False, models=models,
+                sampler=[Motion(threshold=0.10, prompts=["overview"]),
+                         samplers.build("uniform", every_n=10, prompts=["overview"])],
+                database=Folder("data/out"))
+manifest = video.load(run.folder / "manifest.json")
+for sid in ("motion", "uniform"):
+    print(sid, "kept per chunk:",
+          [c["samplers"].get(sid, {}).get("frame_count", 0) for c in manifest.chunks])
+
+# Registered, it can be named in a spec string too, with any question.
+samplers.register(Motion)
+print("samplers:", samplers.available())
+live = video_rag_live(source, "data/out", video_id="motion-live",
+                      sampler="motion:overview", models=models)
+print(live.observations, "answers from motion:overview, lag", live.lag_s)</code></pre>
+<!-- /example -->
+<!-- pager -->
+<div class="pager">
+<a href="databases.html"><small>Previous</small>Databases</a>
+<a class="next" href="reference.html"><small>Next</small>Reference</a>
+</div>
+<!-- /pager -->
+</main>
+</div>
+</body>
+</html>

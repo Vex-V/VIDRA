@@ -41,6 +41,7 @@
 <div class="group">Bring your own</div>
 <a href="models.html">Models</a>
 <a href="databases.html">Databases</a>
+<a href="custom-samplers.html">Custom samplers</a>
 <div class="group">Reference</div>
 <a href="reference.html">Reference</a>
 <!-- /nav -->
@@ -57,8 +58,11 @@
 <tr><td><a href="#aggregates-tour"><code>aggregates_tour.py</code></a></td><td>every aggregator, one at a time and all at once</td><td><code>[local]</code>, an OpenAI key, a folder from <code>hosted.py</code></td></tr>
 <tr><td><a href="definitions.html#example"><code>custom_aggregate.py</code></a></td><td>custom prompts and a linking profile</td><td><code>[local]</code>, an OpenAI key, a video folder</td></tr>
 <tr><td><a href="#several-videos"><code>several_videos.py</code></a></td><td>searching several videos and answering about them as one</td><td><code>[all]</code>, an OpenAI key</td></tr>
+<tr><td><a href="#live"><code>live_stream.py</code></a></td><td>a live stream: each kept frame answered as it arrives, then searched by frame and by moment</td><td><code>[local]</code>, an OpenAI key</td></tr>
+<tr><td><a href="live.html#moments"><code>live_moments.py</code></a></td><td>logging moments a live stream shows that match ones you describe, as they arrive</td><td><code>[local]</code>, OpenAI and Supabase keys</td></tr>
 <tr><td><a href="models.html#example"><code>custom_models.py</code></a></td><td>your own VLM, LLM and embedder classes</td><td><code>[local]</code>, an OpenAI key</td></tr>
 <tr><td><a href="databases.html#example"><code>custom_database.py</code></a></td><td>your own database: SQLite, with search</td><td><code>[all]</code>, an OpenAI key</td></tr>
+<tr><td><a href="custom-samplers.html#example"><code>custom_sampler.py</code></a></td><td>your own sampler: keep frames where the picture moved</td><td><code>[local]</code>, an OpenAI key</td></tr>
 </table>
 <p>Scripts read keys from <code>.env</code> in the folder you run them from, and write under <code>data/</code> there.</p>
 <pre><code>python docs/pages/examples/hosted.py samples/shop.mp4
@@ -318,6 +322,67 @@ together = aggregates.combine(records=records, out="data/out/combined")
 aggregates.summary(input=together.excerpt(transcript=True, answers={"clip": ["summary"]}),
                    out="data/out/combined/summary.json", models=models)
 print(aggregates.load("data/out/combined/summary.json").payload["summary"])</code></pre>
+<!-- /example -->
+
+<h2 id="live">A live stream</h2>
+<p>A file sent to a port at the pace it was recorded stands in for a camera, from its own process. Each frame <code>clip</code> keeps is answered with the frame before it as soon as it arrives; after a minute the run stops, and its answers are searched frame by frame, by when they arrived, and chunk by chunk, as any video is. Point the run at <code>rtsp://...</code> to use a real camera. <a href="live.html">Live streams</a>.</p>
+<!-- example live_stream.py -->
+<div class="file">docs/pages/examples/live_stream.py</div>
+<pre><code class="python">"""A live run end to end: a file sent to a port at the pace it was recorded,
+each kept frame answered as it arrives, then both searches -- frame by frame
+over the last ten minutes, and chunk by chunk once the stream has ended.
+
+    python live_stream.py path/to/video.mp4
+"""
+
+import multiprocessing
+import sys
+from datetime import datetime, timedelta, timezone
+
+import vidra
+from vidra import Folder, LocalEmbedder, Models, OpenAI
+from vidra.video_rag import live, search, search_observations, video_rag_live
+
+vidra.configure(env_file=".env")
+
+
+def show(o):
+    """Every answer, as soon as it is ready."""
+    print(f"{o.seen_at[11:19]}  t={o.media_ts:5.1f}s  lag {o.lag_s:4.1f}s  "
+          f"{o.sampler_id}: {o.description[:70]}")
+
+
+if __name__ == "__main__":
+    video = sys.argv[1]
+    models = Models(vlm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+    db = Folder("data/out")             # reads observations.jsonl while it grows
+
+    # The camera: its own process, sending to a port this run listens on.
+    camera = multiprocessing.Process(target=live.send,
+                                     args=(video, "tcp://127.0.0.1:9000"))
+    camera.start()
+    run = video_rag_live("tcp://127.0.0.1:9000?listen=1", "data/out",
+                         video_id="camera-1", sampler="clip:overview",
+                         context=(1, 0),          # the frame before, for motion
+                         stop_after_s=60,         # a minute of the stream
+                         on_unit=show, models=models, database=db)
+    camera.join()                       # the sender stops when the run closes
+    print(f"\n{run.observations} answers, {run.dropped} dropped, lag {run.lag_s}, "
+          f"ended: {run.ended}")
+
+    # One hit per kept frame, by when it arrived.
+    since = datetime.now(timezone.utc) - timedelta(minutes=10)
+    print("\nframes, last ten minutes:")
+    for hit in search_observations("a person at the counter", "camera-1", since=since,
+                                   limit=3, models=models, database=db):
+        print(f"  t={hit.media_ts:5.1f}s  {hit.description[:80]}")
+
+    # The stream ended as an ordinary video, so moment search reads it too.
+    moments, notes = search("a person at the counter", "camera-1", models=models,
+                            database=db)
+    print("\nmoments:")
+    for m in moments[:3]:
+        print(f"  chunk {m.chunk_id}  {m.start_ts:.0f}-{m.end_ts:.0f}s  {m.score:.3f}")</code></pre>
 <!-- /example -->
 <!-- pager -->
 <div class="pager">

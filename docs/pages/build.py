@@ -57,6 +57,7 @@ PAGES = [
     ("pages/definitions.html", "Custom prompts and profiles", "aggregates"),
     ("pages/models.html", "Models", "Bring your own"),
     ("pages/databases.html", "Databases", "Bring your own"),
+    ("pages/custom-samplers.html", "Custom samplers", "Bring your own"),
     ("pages/reference.html", "Reference", "Reference"),
 ]
 
@@ -268,11 +269,11 @@ COVERAGE: dict[str, list[str]] = {
     "pages/live.html": ["vidra.video_rag.video_rag_live", "vidra.video_rag.live.send",
                         "vidra.video_rag.search_observations"],
     "pages/samplers.html": ["vidra.video_rag.samplers.build",
-                            "vidra.video_rag.samplers.register",
-                            "vidra.video_rag.samplers.available",
-                            "vidra.video_rag.samplers.class_of",
-                            "vidra.Sampler", "vidra.Sampler.propose",
-                            "vidra.Sampler.on_reset"],
+                            "vidra.video_rag.samplers.available"],
+    "pages/custom-samplers.html": ["vidra.video_rag.samplers.register",
+                                   "vidra.video_rag.samplers.class_of",
+                                   "vidra.Sampler", "vidra.Sampler.propose",
+                                   "vidra.Sampler.on_reset"],
     "pages/questions.html": [f"vidra.video_rag.describe.{n}" for n in
                        ("add_question", "question", "questions", "remove_question")],
     "pages/search.html": ["vidra.video_rag.retrieve.search", "vidra.video_rag.retrieve.Moment"],
@@ -450,6 +451,8 @@ RUNS = [
     ("custom_question.py", ["{a}"], True),
     ("several_videos.py", ["{a}", "{b}"], True),
     ("custom_database.py", ["{a}"], True),
+    # A live run from a sender process, then both searches.
+    ("live_stream.py", ["{a}"], True),
     # A live run, with a file as its stream: the detection-by-subclass recipe.
     ("live_moments.py", ["{a}"], True),
     ("custom_sampler.py", ["{a}"], True),
