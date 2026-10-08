@@ -58,6 +58,8 @@ _LAZY: dict[str, tuple[str, Optional[str]]] = {
     **{name: (f"offline.{name}", None) for name in (
         "media", "audio", "boundaries", "video", "cut", "describe", "embed")},
     "retrieve": ("core.retrieve", None),
+    # Build a configured sampler, register one of your own, list them.
+    "samplers": ("core.sampling.samplers", None),
 }
 
 

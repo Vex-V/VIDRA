@@ -5,7 +5,7 @@ the frame store.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from vidra.shared.reporting import logs, progress
 from vidra.shared.contracts.documents import (Manifest, Media, Produced,
@@ -19,7 +19,7 @@ from .pipeline import ingest as _pass
 
 
 def ingest(media: Media, timeline: Timeline,
-           sampler: str | Sequence[str] = "uniform",
+           sampler: str | Sequence[Any] = "uniform",
            per_second: float = 1.0,
            every_n: Optional[int] = None,
            min_interval_s: float = 0.0,
@@ -61,7 +61,7 @@ def ingest(media: Media, timeline: Timeline,
 
 def video(media: str | Path, timeline: str | Path, out: str | Path,
           store: Optional[str | Path] = None,
-          sampler: str | Sequence[str] = "uniform",
+          sampler: str | Sequence[Any] = "uniform",
           per_second: float = 1.0,
           every_n: Optional[int] = None,
           min_interval_s: float = 0.0,

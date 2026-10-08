@@ -91,7 +91,7 @@ if __name__ == "__main__":
 <tr><td><code>into</code></td><td>required</td><td>The folder that holds one folder per video.</td></tr>
 <tr><td><code>video_id</code></td><td>file stem, or <code>live-&lt;UTC time&gt;</code></td><td>The run's folder. A folder already in use gets <code>-2</code>, <code>-3</code>.</td></tr>
 <tr><td><code>name</code></td><td>the id</td><td>What to call the video in <code>media.json</code>.</td></tr>
-<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>The same spec as <code>video_rag</code> (<a href="samplers.html">samplers</a>).</td></tr>
+<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>The same spec as <code>video_rag</code>: names, or sampler objects with their own settings (<a href="samplers.html#objects">samplers</a>).</td></tr>
 <tr><td><code>vlm</code>, <code>embedder</code>, <code>models</code></td><td>OpenAI's</td><td>The models, as in <code>video_rag</code>.</td></tr>
 <tr><td><code>database</code></td><td>none</td><td>Copy the documents here when the stream ends.</td></tr>
 <tr><td><code>on_unit</code></td><td>none</td><td>Called with each <code>Observation</code>. Raise <code>live.StopStream</code> to end the run.</td></tr>

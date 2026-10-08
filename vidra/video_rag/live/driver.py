@@ -35,7 +35,7 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from vidra.shared.config import paths
 from vidra.shared.contracts.documents import (Descriptions, Manifest, Media,
@@ -77,7 +77,8 @@ class Options:
     video_id: Optional[str] = None
     #: What to call the video; None is the id.
     name: Optional[str] = None
-    sampler: str = "uniform"
+    #: A spec string, or a list of strings and Sampler objects.
+    sampler: str | Sequence[Any] = "uniform"
     vlm: Optional[VLM] = None
     embedder: Optional[Embedder] = None
     database: Optional[str | Database] = None
@@ -221,18 +222,10 @@ def validate(options: Options) -> list[str]:
         problems.append(f"unknown database {options.database!r}; pass a "
                         f"Database, or one of: {', '.join(DATABASES)}")
 
-    from ..core.sampling import samplers as _samplers
-    from ..core.sampling.specs import parse_spec, split_specs
-    known_samplers, known_questions = _samplers.available(), prompts.questions()
-    for spec in split_specs(options.sampler):
-        name, asked = parse_spec(spec)
-        if name not in known_samplers:
-            problems.append(f"unknown sampler {name!r} in {spec!r}; "
-                            f"known: {', '.join(known_samplers)}")
-        for question in asked:
-            if question not in known_questions:
-                problems.append(f"unknown question {question!r} in {spec!r}; "
-                                f"known: {', '.join(known_questions)}")
+    # Every sampler and question the spec names -- including a bare name's own
+    # question, which would otherwise fall back to the general one in silence.
+    from ..core.sampling import specs
+    problems += specs.problems(options.sampler, prompts.questions())
 
     from vidra.shared.models import base
     for role, model in (("vlm", options.vlm), ("embedder", options.embedder)):
@@ -692,7 +685,7 @@ def video_rag_live(source: str | Path,
                    into: str | Path,
                    video_id: Optional[str] = None,
                    name: Optional[str] = None,
-                   sampler: str = "uniform",
+                   sampler: str | Sequence[Any] = "uniform",
                    vlm: Optional[VLM] = None,
                    embedder: Optional[Embedder] = None,
                    database: Optional[str | Database] = None,

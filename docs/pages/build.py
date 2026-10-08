@@ -267,7 +267,12 @@ COVERAGE: dict[str, list[str]] = {
             "embed.embed", "embed.encode", "embed.load", "embed.Unit")],
     "pages/live.html": ["vidra.video_rag.video_rag_live", "vidra.video_rag.live.send",
                         "vidra.video_rag.search_observations"],
-    "pages/samplers.html": [],
+    "pages/samplers.html": ["vidra.video_rag.samplers.build",
+                            "vidra.video_rag.samplers.register",
+                            "vidra.video_rag.samplers.available",
+                            "vidra.video_rag.samplers.class_of",
+                            "vidra.Sampler", "vidra.Sampler.propose",
+                            "vidra.Sampler.on_reset"],
     "pages/questions.html": [f"vidra.video_rag.describe.{n}" for n in
                        ("add_question", "question", "questions", "remove_question")],
     "pages/search.html": ["vidra.video_rag.retrieve.search", "vidra.video_rag.retrieve.Moment"],
@@ -296,7 +301,8 @@ COVERAGE: dict[str, list[str]] = {
 }
 
 #: Modules whose every public name must appear in code on some page.
-PUBLIC = ["vidra", "vidra.video_rag", "vidra.aggregates", "vidra.workflow"] + [
+PUBLIC = ["vidra", "vidra.video_rag", "vidra.video_rag.samplers", "vidra.aggregates",
+          "vidra.workflow"] + [
     f"vidra.video_rag.{m}" for m in
     ("media", "audio", "boundaries", "video", "cut", "describe", "embed", "retrieve")]
 
@@ -446,6 +452,7 @@ RUNS = [
     ("custom_database.py", ["{a}"], True),
     # A live run, with a file as its stream: the detection-by-subclass recipe.
     ("live_moments.py", ["{a}"], True),
+    ("custom_sampler.py", ["{a}"], True),
     ("custom_models.py", ["{a}"], False),
 ]
 

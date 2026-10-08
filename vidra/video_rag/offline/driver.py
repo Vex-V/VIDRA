@@ -22,7 +22,7 @@ import inspect
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Sequence
 
 from vidra.shared.reporting import logs
 from vidra.shared.config import paths
@@ -68,7 +68,8 @@ class Options:
     policy: str = "uniform"                  # decides who runs first
     use_video: bool = True
     use_audio: bool = True
-    sampler: str = "uniform"                 # what to look at
+    #: What to look at: a spec string, or a list of strings and Sampler objects.
+    sampler: str | Sequence[Any] = "uniform"
     # A model object; None is the default (OpenAI's) when the stage runs.
     vlm: Optional[VLM] = None                # frames -> answers
     embedder: Optional[Embedder] = None      # text -> vectors
@@ -136,22 +137,12 @@ def validate(options: Options) -> list[str]:
         problems.append(f"{into} is a file; `into` is the directory that holds "
                         f"one folder per video")
 
-    # Both halves of every `name:question` pair, against the sampler registry and
-    # the question vocabulary.
+    # Every sampler and question the spec names, against the registry and the
+    # question vocabulary -- including a bare name's own question.
     if options.use_video:
         from ..core.describe import prompts
-        from ..core.sampling import samplers as _samplers
-        from ..core.sampling.specs import parse_spec, split_specs
-        known_samplers, known_questions = _samplers.available(), prompts.questions()
-        for spec in split_specs(options.sampler):
-            name, asked = parse_spec(spec)
-            if name not in known_samplers:
-                problems.append(f"unknown sampler {name!r} in {spec!r}; "
-                                f"known: {', '.join(known_samplers)}")
-            for question in asked:
-                if question not in known_questions:
-                    problems.append(f"unknown question {question!r} in {spec!r}; "
-                                    f"known: {', '.join(known_questions)}")
+        from ..core.sampling import specs
+        problems += specs.problems(options.sampler, prompts.questions())
 
     # Every model the run will call: the right kind, with a key and an API key.
     from vidra.shared.models import base
@@ -304,7 +295,8 @@ def _run(options: Options, whole: Any,
                      timeline=at["timeline"],
                      embedder=options.embedder, **ticking))
 
-    whole(policy=options.policy, sampler=options.sampler,
+    from ..core.sampling.specs import spec_text
+    whole(policy=options.policy, sampler=spec_text(options.sampler),
           steps=len(run.steps), skipped=len(run.skipped))
     return run
 
@@ -318,7 +310,7 @@ def video_rag(source: str | Path,
               policy: str = "uniform",
               use_video: bool = True,
               use_audio: bool = True,
-              sampler: str = "uniform",
+              sampler: str | Sequence[Any] = "uniform",
               vlm: Optional[VLM] = None,
               embedder: Optional[Embedder] = None,
               resume: bool = True,

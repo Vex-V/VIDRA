@@ -221,7 +221,12 @@ class Record:
         import re
 
         from ...video_rag.core import vocabulary
-        problems = check([one], vocabulary())
+        known = vocabulary()
+        # A sampler this record holds answers from is known, whether or not its
+        # class is registered in this process: the files are what is read.
+        known["samplers"] = sorted(set(known["samplers"]) | {
+            answer.split(":")[0] for answer in self.answer_ids()})
+        problems = check([one], known)
         if problems:
             # `yolo:yolo` is how the answer `yolo` is matched; say `yolo`.
             raise RecordError("; ".join(re.sub(r"\b([a-z][a-z0-9_-]*):\1\b", r"\1", p)

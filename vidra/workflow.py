@@ -45,7 +45,7 @@ class Options:
     policy: str = "uniform"                  # decides who runs first
     use_video: bool = True
     use_audio: bool = True
-    sampler: str = "uniform"                 # what to look at
+    sampler: Any = "uniform"                 # a spec string, or strings and Sampler objects
     vlm: Optional[VLM] = None                # frames -> answers
     embedder: Optional[Embedder] = None      # text -> vectors
     llm: Optional[LLM] = None                # the `llm` aggregate tier
