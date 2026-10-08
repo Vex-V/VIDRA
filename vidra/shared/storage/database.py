@@ -194,9 +194,8 @@ def backend(name: str) -> type[Database]:
     if name not in DATABASES:
         raise UnknownOption(f"unknown database {name!r}; pass a Database, or one "
                             f"of: {', '.join(DATABASES)}")
-    import importlib
-    module, _, attribute = DATABASES[name].partition(":")
-    return getattr(importlib.import_module(module), attribute)
+    from ..config.lookup import imported
+    return imported(DATABASES[name])
 
 
 def as_database(value: "Optional[str | Database]") -> Optional[Database]:

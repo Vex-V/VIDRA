@@ -72,16 +72,13 @@ def encode(descriptions: Optional[Descriptions] = None,
 
     progress.report(on_progress, "embed", len(changed), 0,
                     len(wanted) - len(changed))
-    for start in range(0, len(changed), batch):
-        window = changed[start:start + batch]
-        for unit, vector in zip(window,
-                                built.embed([u.content for u in window])):
-            unit.vector = vector
+
+    def reported(done: int, window: list[Unit]) -> None:
         # Reported per batch.
-        progress.report(on_progress, "embed", len(changed),
-                        min(start + batch, len(changed)),
+        progress.report(on_progress, "embed", len(changed), done,
                         len(wanted) - len(changed),
-                        f"{start}-{min(start + batch, len(changed))}", window)
+                        f"{done - len(window)}-{done}", window)
+    units_mod.embed_all(changed, built, batch, reported)
     return wanted
 
 

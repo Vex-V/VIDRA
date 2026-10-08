@@ -23,8 +23,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from ...shared.contracts.documents import Timeline, fingerprint_of
-from ...shared.contracts.units import render
+from vidra.shared.contracts.documents import Timeline, fingerprint_of
+from vidra.shared.contracts.units import render
 from .. import definitions, kind_of
 from ..core.inputs import definition_of
 
@@ -175,7 +175,7 @@ def export(source_id: str, timeline: Timeline, answers: dict[str, str],
     it fails nothing else is tried. The units are embedded only when the
     database implements `write_aggregate_units`: that is a model call.
     """
-    from ...shared.storage import files
+    from vidra.shared.storage import files
 
     problems: list[str] = []
     try:
@@ -201,8 +201,8 @@ def export(source_id: str, timeline: Timeline, answers: dict[str, str],
     written = 0
     if units and database.implements("write_aggregate_units"):
         try:
-            from ...shared.models.base import require
-            from ...shared.models.roles import resolve
+            from vidra.shared.models.base import require
+            from vidra.shared.models.roles import resolve
             built = resolve("embedder", embedder)
             require("embedder", built)
             texts = [u["content"] for u in units]

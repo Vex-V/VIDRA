@@ -47,12 +47,12 @@ from vidra.shared.models.roles import Models, resolve, unpack
 from vidra.shared.reporting import logs
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage import files
-from vidra.shared.storage.database import DATABASES, Database, as_database
+from vidra.shared.storage.database import Database, as_database
 from ..core.describe import prompts
 from ..core.frames import FrameStore
 from ..core.sampling.decimate import Decimator
 from .observe import Ask, Tally, observe
-from .source import Source
+from .source import Source, now
 
 #: The per-frame answers, one JSON object per line, appended as they arrive.
 OBSERVATIONS = paths.OBSERVATIONS
@@ -200,10 +200,6 @@ def validate(options: Options) -> list[str]:
             paths.check_id(options.video_id)
         except Exception as exc:                             # noqa: BLE001
             problems.append(str(exc))
-    into = Path(options.into)
-    if into.exists() and not into.is_dir():
-        problems.append(f"{into} is a file; `into` is the directory that holds "
-                        f"one folder per video")
     if options.chunk_s <= 0:
         problems.append(f"chunk_s must be positive, not {options.chunk_s}")
     if options.per_second <= 0:
@@ -217,19 +213,9 @@ def validate(options: Options) -> list[str]:
         problems.append(f"queue must be at least 1, not {options.queue}")
     if options.stop_after_s is not None and options.stop_after_s <= 0:
         problems.append(f"stop_after_s must be positive, not {options.stop_after_s}")
-    if not (options.database is None or isinstance(options.database, Database)
-            or options.database in DATABASES):
-        problems.append(f"unknown database {options.database!r}; pass a "
-                        f"Database, or one of: {', '.join(DATABASES)}")
-
-    # Every sampler and question the spec names -- including a bare name's own
-    # question, which would otherwise fall back to the general one in silence.
-    from ..core.sampling import specs
-    problems += specs.problems(options.sampler, prompts.questions())
-
-    from vidra.shared.models import base
-    for role, model in (("vlm", options.vlm), ("embedder", options.embedder)):
-        problems += base.problems(role, resolve(role, model))
+    from ..core.checks import run_problems
+    problems += run_problems(options.into, options.database, options.sampler,
+                             {"vlm": options.vlm, "embedder": options.embedder})
     return problems
 
 
@@ -247,7 +233,7 @@ def process(options: Options,
     if isinstance(options.source, os.PathLike):
         options = replace(options, source=os.fspath(options.source))
     database = as_database(options.database)
-    say = on_step or (lambda *arguments: None)
+    say = on_step or (lambda *_: None)
 
     from vidra.shared.models.base import require
     from ..core.describe import base as describe_base
@@ -279,7 +265,7 @@ def process(options: Options,
         run = LiveRun(video_id=video_id, folder=folder, source=options.source,
                       recording=str(recording) if recording else None)
         # The video exists while it streams: no duration yet, the real one at the end.
-        run.problems += _media(run, options, source, None, _now(), database)
+        run.problems += _media(run, options, source, None, now(), database)
         say("live", None)
         tally = Tally()
         state = _State(folder / OBSERVATIONS)
@@ -326,7 +312,6 @@ class _State:
     """What the event loop accumulates: answers, failures, lag."""
 
     def __init__(self, path: Path) -> None:
-        self.path = path
         self.file = path.open("a", encoding="utf-8")
         #: Answers without vectors, for the documents written at the end.
         self.answers: list[dict[str, Any]] = []
@@ -341,6 +326,8 @@ class _State:
         self.written = 0
         self.unwritten = 0
         self.write_errors: list[str] = []
+        #: True once a failure was counted past the reasons kept.
+        self.errors_cut = False
         self.stopped = False
         self.error: Optional[BaseException] = None
 
@@ -412,7 +399,9 @@ async def _serve(options: Options, video_id: str, source: Source, built: list,
                     state.written += len(batch)
                 except Exception as exc:                     # noqa: BLE001
                     state.unwritten += len(batch)
-                    if len(state.write_errors) < 20:
+                    if len(state.write_errors) >= 20:
+                        state.errors_cut = True
+                    else:
                         message = (f"{len(batch)} observations -> {database.name}: "
                                    f"{exc}")
                         state.write_errors.append(message)
@@ -460,7 +449,7 @@ async def _serve(options: Options, video_id: str, source: Source, built: list,
             media_ts=ask.frame.media_ts, frames=[f.index for f in images],
             frame_ts=[f.media_ts for f in images], description=said.summary,
             structured=said.fields, content=content, vector=list(vector),
-            seen_at=ask.arrival.seen_at, answered_at=_now(), lag_s=lag,
+            seen_at=ask.arrival.seen_at, answered_at=now(), lag_s=lag,
             gap_before=ask.arrival.gap_before, embedder=embedder.key)
         state.write(observation)
         if copying:
@@ -508,7 +497,7 @@ def _finish(run: LiveRun, options: Options, source: Source, built: list,
     from ..core.embed import readable, units
     from ..core.export import export
 
-    at = {name: run.folder / filename for name, filename in paths.ARTIFACTS.items()}
+    at = paths.layout(run.folder)
     duration = source.duration_s
     count = (max(tally.chunks) + 1) if tally.chunks else 0
     spans = [(i * options.chunk_s, min((i + 1) * options.chunk_s, duration))
@@ -520,7 +509,7 @@ def _finish(run: LiveRun, options: Options, source: Source, built: list,
     run.failed, run.dropped = len(state.failed), len(state.dropped)
     run.gaps = list(source.gaps)
     run.problems += state.failed + state.write_errors
-    if state.unwritten > sum(int(m.split(" ", 1)[0]) for m in state.write_errors):
+    if state.errors_cut:
         run.problems.append(f"... {state.unwritten} observations in all did not reach "
                             f"{database.name if database else 'the database'}; "
                             "they are in observations.jsonl")
@@ -555,7 +544,8 @@ def _finish(run: LiveRun, options: Options, source: Source, built: list,
     manifest = Manifest(
         video_id=run.video_id, timeline_fingerprint=grid.fingerprint(),
         source={"path": options.source, "container": source.container_format,
-                "duration_s": duration, **source.describe(duration).as_dict()},
+                "duration_s": duration, **source.describe(duration).as_dict(),
+                **({"rotation": int(source.rotation)} if int(source.rotation) else {})},
         config={"decimator": {"per_second": options.per_second},
                 "samplers": [s.config() for s in built],
                 "frame_store": {**store.config(), "scope": "sampled"},
@@ -583,10 +573,7 @@ def _finish(run: LiveRun, options: Options, source: Source, built: list,
 
     if state.answers:
         unit_list = units.from_descriptions(descriptions)
-        for start in range(0, len(unit_list), 64):
-            window = unit_list[start:start + 64]
-            for unit, vector in zip(window, embedder.embed([u.content for u in window])):
-                unit.vector = vector
+        units.embed_all(unit_list, embedder)
         document = readable.build(run.video_id, unit_list, embedder.key,
                                   grid.fingerprint())
         step("embed", "embedded", document, units=len(unit_list),
@@ -675,10 +662,6 @@ def _claim(options: Options) -> str:
         n += 1
         candidate = f"{wanted}-{n}"
     return candidate
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def video_rag_live(source: str | Path,

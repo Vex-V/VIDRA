@@ -28,15 +28,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Mapping, Optional
 
-from ..shared.reporting import logs
-from ..shared.contracts.documents import (Aggregate, Excerpt, Produced, Sightings,
+from vidra.shared.reporting import logs
+from vidra.shared.contracts.documents import (Aggregate, Excerpt, Produced, Sightings,
                                           Timeline, Transcript, fingerprint_of)
-from ..shared.reporting.errors import VidraError
-from ..shared.models.base import Embedder, LLM
-from ..shared.models.roles import Models, unpack
-from ..shared.storage import files
+from vidra.shared.reporting.errors import VidraError
+from vidra.shared.models.base import Embedder, LLM
+from vidra.shared.models.roles import Models, unpack
+from vidra.shared.storage import files
 from . import (available, build, definitions, kind_of, settings_of, takes_inputs,
                tier_of, uses_embedder)
 from .core.base import TIERS, Context, missing
@@ -226,7 +226,7 @@ def load_all(directory: Optional[str | Path]) -> dict[str, Aggregate]:
             for name in answers(directory)}
 
 
-def load_input(path: str | Path) -> Union[Excerpt, Sightings]:
+def load_input(path: str | Path) -> Excerpt | Sightings:
     """An excerpt or sightings file, as whichever it is."""
     where = Path(path)
     if not where.exists():
@@ -245,9 +245,9 @@ def load_input(path: str | Path) -> Union[Excerpt, Sightings]:
 # --------------------------------------------------------------- the pipeline
 
 #: One input as the pipeline takes it: the object, or a file it was written to.
-One = Union[Record, Excerpt, Sightings, str, Path]
+One = Record | Excerpt | Sightings | str | Path
 #: What an aggregator is handed: one input, or several under labels.
-Given = Union[One, Mapping[str, One], None]
+Given = Optional[One | Mapping[str, One]]
 
 #: A label, as `sentiment~spoken` stores it.
 _LABEL = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
@@ -347,8 +347,8 @@ def validate(settings: Optional[Mapping[str, Mapping[str, Any]]] = None,
                         "name one, e.g. ner=record.excerpt(transcript=True)")
     if problems:
         return problems
-    from ..shared.models import base
-    from ..shared.models.roles import resolve
+    from vidra.shared.models import base
+    from vidra.shared.models.roles import resolve
     # Each model once: the default is one model, not one per aggregator.
     checked: list[tuple[str, Any]] = []
     for planned in wanted:
@@ -416,7 +416,7 @@ def _aggregate(out: str | Path, models: Optional[Models], database: Optional[Any
     grid = (first.timeline if isinstance(first, Record)
             else Timeline.from_dict(first.timeline))
 
-    from ..shared.storage.database import as_database
+    from vidra.shared.storage.database import as_database
     target = as_database(database)      # built before any work: a bad name fails here
     directory = Path(out)
     earlier = load_all(previous)

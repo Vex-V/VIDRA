@@ -203,11 +203,6 @@ def instruction_of(name: str) -> str:
     return (fallback or {}).get("instruction", "")
 
 
-def fields_of(name: str) -> list[str]:
-    """The structured keys this question answers, from its shape."""
-    return list(shape_of(name).get("fields") or {})
-
-
 # ------------------------------------------------------------------ validating
 
 def check(name: str, entry: dict[str, Any],

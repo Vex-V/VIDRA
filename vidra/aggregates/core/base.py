@@ -13,11 +13,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol, Sequence
 
-from ...shared.contracts.documents import (Descriptions, Manifest, Timeline,
+from vidra.shared.contracts.documents import (Descriptions, Manifest, Timeline,
                                            Transcript, fingerprint_of)
 #: Re-exported, the one class shared with audio.
-from ...shared.reporting.errors import ModelUnavailable
-from ...shared.models.base import LLM
+from vidra.shared.reporting.errors import ModelUnavailable
+from vidra.shared.models.base import LLM
 
 #: Cheapest first.
 TIERS = ("free", "local", "llm")
@@ -33,13 +33,18 @@ class Context:
     descriptions: Optional[Descriptions] = None
     transcript: Optional[Transcript] = None
 
+    def answer_ids(self) -> list[str]:
+        """Every answer the descriptions hold, in the order first met."""
+        found: dict[str, None] = {}
+        if self.descriptions is not None:
+            for chunk in self.descriptions.chunks:
+                found.update(dict.fromkeys(chunk.get("samplers") or {}))
+        return list(found)
+
     @property
     def sources(self) -> set[str]:
         """What this video actually has -- answer ids, plus `transcript`."""
-        found: set[str] = set()
-        if self.descriptions is not None:
-            for chunk in self.descriptions.chunks:
-                found |= set(chunk.get("samplers", {}))
+        found = set(self.answer_ids())
         if self.transcript is not None and any(
                 c.get("word_count") for c in self.transcript.chunks):
             found.add("transcript")
@@ -142,8 +147,8 @@ class DefinitionRunner:
     takes_inputs = True
 
     def __init__(self, definition_id: str, llm: Optional[LLM] = None) -> None:
-        from ...shared.models.base import calls
-        from ...shared.models.roles import resolve
+        from vidra.shared.models.base import calls
+        from vidra.shared.models.roles import resolve
         from .. import definitions
         self.name = definition_id
         self.section, self.definition = definitions.locate(definition_id)
@@ -158,7 +163,7 @@ class DefinitionRunner:
 
     def properties(self) -> dict[str, Any]:
         """The definition's own fields, compiled by the shared field builder."""
-        from ...shared.contracts.fields import compile_fields
+        from vidra.shared.contracts.fields import compile_fields
         return compile_fields(self.entry["fields"])
 
     def read(self, context: Any, one: Any) -> Any:

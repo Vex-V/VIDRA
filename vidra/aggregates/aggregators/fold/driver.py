@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from ....shared.models.base import Calls
+from vidra.shared.models.base import Calls
 from ... import definitions
 from ...core.rendering import batched, resolve_span
 from ...core.base import BATCH, DefinitionRunner, schema

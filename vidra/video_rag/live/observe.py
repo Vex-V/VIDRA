@@ -22,6 +22,7 @@ from ..core.describe import prompts
 from ..core.describe.frames import LoadedFrame
 from ..core.frames import FrameStore, encode
 from ..core.sampling.decimate import Decimator
+from ..core.sampling.offer import Offer, empty_chunk
 from ..core.sampling.samplers import Sampler
 from .source import Arrival, Source
 
@@ -72,8 +73,7 @@ def observe(source: Source, samplers: Sequence[Sampler], decimator: Decimator,
     before_n, after_n = context
     ring: deque[LoadedFrame] = deque(maxlen=before_n or None)
     waiting: list[Ask] = []
-    current: Optional[int] = None
-    local = 0
+    offer = Offer(samplers)
     asked_by = {s.sampler_id: [(prompts.answer_id(s.name, q), q)
                                for q in prompts.questions_of(s.config(), s.sampler_id)]
                 for s in samplers}
@@ -89,16 +89,8 @@ def observe(source: Source, samplers: Sequence[Sampler], decimator: Decimator,
         if stop_after_s is not None and frame.media_ts >= stop_after_s:
             tally.ended = "stop_after_s"
             break
-        tally.decimated += 1
         chunk_id = int(frame.media_ts // chunk_s)
-        if chunk_id != current:
-            current = chunk_id
-            for sampler in samplers:
-                sampler.reset(chunk_id)
-            local = 0
-        chunk = tally.chunks.setdefault(
-            chunk_id, {"chunk_id": chunk_id, "decimated_frames": 0, "samplers": {}})
-        chunk["decimated_frames"] += 1
+        chunk = tally.chunks.setdefault(chunk_id, empty_chunk(chunk_id))
 
         jpeg: Optional[bytes] = None
 
@@ -114,37 +106,26 @@ def observe(source: Source, samplers: Sequence[Sampler], decimator: Decimator,
             still: list[Ask] = []
             for ask in waiting:
                 ask.after.append(this)
-                (post(ask) if len(ask.after) >= ask.need_after else still.append(ask))
+                if len(ask.after) >= ask.need_after:
+                    post(ask)
+                else:
+                    still.append(ask)
             waiting = still
 
-        for sampler in samplers:
-            if not sampler.accepts(frame, local):
-                continue
-            tally.sampled += 1
-            record: dict[str, Any] = {"index": frame.index,
-                                      "media_ts": round(frame.media_ts, 3),
-                                      "chunk_local_index": local,
-                                      "seen_at": arrival.seen_at}
-            if frame.pts is not None:
-                record["pts"] = frame.pts
-            score = sampler.last_score()
-            if score is not None:
-                record["score"] = round(score, 4)
-            block = chunk["samplers"].setdefault(
-                sampler.sampler_id, {"frame_count": 0, "frames": []})
-            block["frames"].append(record)
-            block["frame_count"] += 1
-
+        for sampler in offer(frame, chunk_id, chunk, seen_at=arrival.seen_at):
             ask = Ask(chunk_id=chunk_id, run_id=sampler.sampler_id,
                       name=sampler.name, config=sampler.config(),
                       asked=asked_by[sampler.sampler_id], frame=kept(loaded()),
                       arrival=arrival, before=[kept(f) for f in ring],
                       need_after=after_n)
-            (waiting.append(ask) if after_n else post(ask))
+            if after_n:
+                waiting.append(ask)
+            else:
+                post(ask)
 
         if before_n:
             ring.append(loaded())
-        local += 1
+        tally.decimated, tally.sampled = offer.decimated, offer.sampled
         frame.release()
 
     # The stream ended before their context did: sent with what there is.

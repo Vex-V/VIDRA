@@ -19,12 +19,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from ...shared.reporting import logs
-from ...shared.config import paths
-from ...shared.contracts.documents import (Descriptions, Manifest, Timeline,
+from vidra.shared.reporting import logs
+from vidra.shared.config import paths
+from vidra.shared.contracts.documents import (Descriptions, Manifest, Timeline,
                                            Transcript, fingerprint_of, same_video)
-from ...shared.reporting.errors import VidraError
-from ...shared.storage import files
+from vidra.shared.reporting.errors import VidraError
+from vidra.shared.storage import files
 #: The documents a combination carries.
 from ..core.record import KINDS, Record
 
@@ -39,7 +39,7 @@ class CombineError(VidraError, ValueError):
 
 @dataclass
 class Part:
-    """One video's documents. Only the grid is required."""
+    """One video's documents, or a combination's. Only the grid is required."""
 
     timeline: Timeline
     descriptions: Optional[Descriptions] = None
@@ -50,19 +50,13 @@ class Part:
     def video_id(self) -> str:
         return self.timeline.video_id
 
-
-@dataclass
-class Combined:
-    """What `merge` returns: the four documents, any of the last three None."""
-
-    timeline: Timeline
-    descriptions: Optional[Descriptions] = None
-    transcript: Optional[Transcript] = None
-    manifest: Optional[Manifest] = None
-
     def documents(self) -> dict[str, Any]:
         return {kind: getattr(self, kind) for kind in KINDS
                 if getattr(self, kind) is not None}
+
+
+#: What `merge` returns: the same four documents, any of the last three None.
+Combined = Part
 
 
 def default_id(video_ids: Sequence[str]) -> str:
@@ -72,7 +66,7 @@ def default_id(video_ids: Sequence[str]) -> str:
     return "combined-" + fingerprint_of({"videos": list(video_ids)})[:8]
 
 
-def merge(parts: Sequence[Part], video_id: Optional[str] = None) -> Combined:
+def merge(parts: Sequence[Part], video_id: Optional[str] = None) -> Part:
     """Lay the parts end to end. Reads and writes nothing. `video_id` names the
     combination; by default `default_id` of the sources.
     """
@@ -87,17 +81,38 @@ def merge(parts: Sequence[Part], video_id: Optional[str] = None) -> Combined:
         same_video(timeline=part.timeline, descriptions=part.descriptions,
                    transcript=part.transcript, manifest=part.manifest)
     name = paths.check_id(video_id or default_id(ids))
+    timeline, placed = _grid(parts, name)
+    return Part(timeline, _descriptions(placed, name, timeline),
+                _transcript(placed, name, timeline), _manifest(placed, name, timeline))
 
-    # 1 · the grid, end to end, with where each source landed.
+
+@dataclass
+class _Placed:
+    """One part, and where it landed on the combined grid and clock."""
+
+    part: Part
+    first_chunk: int
+    offset_s: float
+
+    def renumbered(self, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Copies of `chunks` with their ids moved onto the combined grid."""
+        out = []
+        for chunk in chunks:
+            moved = copy.deepcopy(chunk)
+            moved["chunk_id"] = chunk["chunk_id"] + self.first_chunk
+            out.append(moved)
+        return out
+
+
+def _grid(parts: Sequence[Part], name: str) -> tuple[Timeline, list[_Placed]]:
+    """1 · the grid, end to end, with where each source landed."""
     spans: list[tuple[float, float]] = []
     sources: list[dict[str, Any]] = []
-    first: list[int] = []
-    offsets: list[float] = []
+    placed: list[_Placed] = []
     clock = 0.0
     for part in parts:
         grid = part.timeline
-        first.append(len(spans))
-        offsets.append(clock)
+        placed.append(_Placed(part, len(spans), clock))
         sources.append({"video_id": part.video_id, "first_chunk": len(spans),
                         "chunks": len(grid), "offset_s": round(clock, 3),
                         "duration_s": round(grid.duration_s, 3),
@@ -109,87 +124,91 @@ def merge(parts: Sequence[Part], video_id: Optional[str] = None) -> Combined:
     timeline = Timeline(video_id=name, spans=spans,
                         policy=policies.pop() if len(policies) == 1 else "mixed",
                         params={"combined": sources}, derived_from="combined")
-    grid_fp = timeline.fingerprint()
+    return timeline, placed
 
-    def renumbered(chunks: list[dict[str, Any]], index: int) -> list[dict[str, Any]]:
-        out = []
-        for chunk in chunks:
-            moved = copy.deepcopy(chunk)
-            moved["chunk_id"] = chunk["chunk_id"] + first[index]
-            out.append(moved)
-        return out
 
-    def by_source(kind: str) -> dict[str, Any]:
-        """Each source's own `model` and `stats`, keyed by video."""
-        return {p.video_id: {"model": getattr(getattr(p, kind), "model", None),
-                             "stats": getattr(p, kind).stats}
-                for p in parts if getattr(p, kind) is not None}
+def _by_source(placed: Sequence[_Placed], kind: str) -> dict[str, Any]:
+    """Each source's own `model` and `stats`, keyed by video."""
+    return {p.part.video_id: {"model": getattr(getattr(p.part, kind), "model", None),
+                              "stats": getattr(p.part, kind).stats}
+            for p in placed if getattr(p.part, kind) is not None}
 
-    # 2 · descriptions: renumbered; sampler ids unchanged.
-    described = [(i, p) for i, p in enumerate(parts) if p.descriptions is not None]
-    descriptions = None
-    if described:
-        descriptions = Descriptions(
-            video_id=name, timeline_fingerprint=grid_fp,
-            manifest_fingerprint=fingerprint_of(
-                {p.video_id: p.descriptions.manifest_fingerprint for _, p in described}),
-            model={"combined": by_source("descriptions")},
-            chunks=[c for i, p in described
-                    for c in renumbered(p.descriptions.chunks, i)],
-            stats={"combined": {v: s["stats"] for v, s in by_source("descriptions").items()},
-                   "described": sum(p.descriptions.stats.get("described", 0)
-                                    for _, p in described)})
 
-    # 3 · transcript: every chunk of the grid, on the combined clock, speakers
-    # prefixed with their video.
-    heard = [p for p in parts if p.transcript is not None]
-    transcript = None
-    if heard:
-        chunks: list[dict[str, Any]] = []
-        for index, part in enumerate(parts):
-            if part.transcript is None:
-                chunks += [{"chunk_id": first[index] + c, "text": "", "word_count": 0,
-                            "structured": {"speakers": []}, "turns": []}
-                           for c in range(len(part.timeline))]
-                continue
-            for chunk in renumbered(part.transcript.chunks, index):
-                for turn in chunk.get("turns") or []:
-                    for edge in ("start", "end"):
-                        if isinstance(turn.get(edge), (int, float)):
-                            turn[edge] = round(turn[edge] + offsets[index], 3)
-                    if turn.get("speaker"):
-                        turn["speaker"] = f"{part.video_id}:{turn['speaker']}"
-                structured = chunk.get("structured") or {}
-                if structured.get("speakers"):
-                    structured["speakers"] = [f"{part.video_id}:{s}"
-                                              for s in structured["speakers"]]
-                chunks.append(chunk)
-        transcript = Transcript(
-            video_id=name, timeline_fingerprint=grid_fp,
-            model={"combined": by_source("transcript")}, chunks=chunks,
-            stats={"chunks": len(chunks),
-                   "chunks_with_speech": sum(1 for c in chunks if c.get("word_count")),
-                   "words": sum(c.get("word_count", 0) for c in chunks),
-                   "speakers": sum(p.transcript.stats.get("speakers", 0) for p in heard),
-                   "combined": {v: s["stats"] for v, s in by_source("transcript").items()}})
+def _descriptions(placed: Sequence[_Placed], name: str,
+                  timeline: Timeline) -> Optional[Descriptions]:
+    """2 · descriptions: renumbered; sampler ids unchanged."""
+    described = [p for p in placed if p.part.descriptions is not None]
+    if not described:
+        return None
+    by_source = _by_source(placed, "descriptions")
+    return Descriptions(
+        video_id=name, timeline_fingerprint=timeline.fingerprint(),
+        manifest_fingerprint=fingerprint_of(
+            {p.part.video_id: p.part.descriptions.manifest_fingerprint
+             for p in described}),
+        model={"combined": by_source},
+        chunks=[c for p in described for c in p.renumbered(p.part.descriptions.chunks)],
+        stats={"combined": {v: s["stats"] for v, s in by_source.items()},
+               "described": sum(p.part.descriptions.stats.get("described", 0)
+                                for p in described)})
 
-    # 4 · manifest: chunks renumbered, counts added; each frame keeps its source.
-    ingested = [(i, p) for i, p in enumerate(parts) if p.manifest is not None]
-    manifest = None
-    if ingested:
-        stats: dict[str, Any] = {}
-        for key in _COUNTS:
-            values = [p.manifest.stats[key] for _, p in ingested if key in p.manifest.stats]
-            if values:
-                stats[key] = round(sum(values), 3)
-        manifest = Manifest(
-            video_id=name, timeline_fingerprint=grid_fp,
-            source={"combined": {p.video_id: p.manifest.source for _, p in ingested}},
-            config={"combined": {p.video_id: p.manifest.config for _, p in ingested}},
-            stats=stats,
-            chunks=[c for i, p in ingested for c in renumbered(p.manifest.chunks, i)])
 
-    return Combined(timeline, descriptions, transcript, manifest)
+def _transcript(placed: Sequence[_Placed], name: str,
+                timeline: Timeline) -> Optional[Transcript]:
+    """3 · transcript: every chunk of the grid, on the combined clock, speakers
+    prefixed with their video."""
+    heard = [p.part for p in placed if p.part.transcript is not None]
+    if not heard:
+        return None
+    chunks: list[dict[str, Any]] = []
+    for p in placed:
+        part = p.part
+        if part.transcript is None:
+            chunks += [{"chunk_id": p.first_chunk + c, "text": "", "word_count": 0,
+                        "structured": {"speakers": []}, "turns": []}
+                       for c in range(len(part.timeline))]
+            continue
+        for chunk in p.renumbered(part.transcript.chunks):
+            for turn in chunk.get("turns") or []:
+                for edge in ("start", "end"):
+                    if isinstance(turn.get(edge), (int, float)):
+                        turn[edge] = round(turn[edge] + p.offset_s, 3)
+                if turn.get("speaker"):
+                    turn["speaker"] = f"{part.video_id}:{turn['speaker']}"
+            structured = chunk.get("structured") or {}
+            if structured.get("speakers"):
+                structured["speakers"] = [f"{part.video_id}:{s}"
+                                          for s in structured["speakers"]]
+            chunks.append(chunk)
+    by_source = _by_source(placed, "transcript")
+    return Transcript(
+        video_id=name, timeline_fingerprint=timeline.fingerprint(),
+        model={"combined": by_source}, chunks=chunks,
+        stats={"chunks": len(chunks),
+               "chunks_with_speech": sum(1 for c in chunks if c.get("word_count")),
+               "words": sum(c.get("word_count", 0) for c in chunks),
+               "speakers": sum(t.transcript.stats.get("speakers", 0) for t in heard),
+               "combined": {v: s["stats"] for v, s in by_source.items()}})
+
+
+def _manifest(placed: Sequence[_Placed], name: str,
+              timeline: Timeline) -> Optional[Manifest]:
+    """4 · manifest: chunks renumbered, counts added; each frame keeps its source."""
+    ingested = [p for p in placed if p.part.manifest is not None]
+    if not ingested:
+        return None
+    stats: dict[str, Any] = {}
+    for key in _COUNTS:
+        values = [p.part.manifest.stats[key] for p in ingested
+                  if key in p.part.manifest.stats]
+        if values:
+            stats[key] = round(sum(values), 3)
+    return Manifest(
+        video_id=name, timeline_fingerprint=timeline.fingerprint(),
+        source={"combined": {p.part.video_id: p.part.manifest.source for p in ingested}},
+        config={"combined": {p.part.video_id: p.part.manifest.config for p in ingested}},
+        stats=stats,
+        chunks=[c for p in ingested for c in p.renumbered(p.part.manifest.chunks)])
 
 
 def origin(timeline: Timeline, chunk_id: int) -> Optional[dict[str, Any]]:

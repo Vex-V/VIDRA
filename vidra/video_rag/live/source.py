@@ -22,7 +22,7 @@ from typing import Any, Callable, Iterator, Optional
 
 from vidra.shared.contracts.documents import VideoStream
 from vidra.shared.reporting.errors import Unavailable
-from ..core.sampling.reader import Frame
+from ..core.sampling.reader import Frame, rotation_of, rotator
 
 
 class StreamUnavailable(Unavailable):
@@ -74,6 +74,10 @@ class Source:
         #: PyAV refuses to answer about a stream once it is closed.
         self._described: dict[str, Any] = {}
         self._format = ""
+        #: The container's rotation in degrees, applied as `offline`'s reader
+        #: applies it. Read for a file only: OpenCV would open a stream a
+        #: second time, and MPEG-TS carries no rotation anyway.
+        self.rotation = 0.0
 
     # ------------------------------------------------------------- opening
     def open(self) -> "Source":
@@ -92,14 +96,16 @@ class Source:
         # Required for decode speed.
         self.stream.thread_type = "AUTO"
         codec = self.stream.codec_context
-        rate = self.stream.average_rate or self.stream.guessed_rate
+        rate = _rate(self.stream)
         self._described = {
             "index": self.stream.index, "codec": codec.name,
-            "rate": float(rate) if rate else None,
+            "rate": rate,
             "time_base": (str(self.stream.time_base)
                           if self.stream.time_base is not None else None),
             "width": codec.width, "height": codec.height, "frames": None}
         self._format = self.container.format.name
+        if "://" not in self.url and Path(self.url).exists():
+            self.rotation = rotation_of(self.url)
         if self.record is not None:
             self.record.parent.mkdir(parents=True, exist_ok=True)
             self._recording = av.open(str(self.record), "w")
@@ -120,8 +126,9 @@ class Source:
         `keep` is handed a `media_ts`; a declined frame is never converted.
         """
         time_base = self.stream.time_base
-        rate = self.stream.average_rate or self.stream.guessed_rate
-        step = self.step = 1.0 / float(rate) if rate else 1.0 / 30.0
+        rate = _rate(self.stream)
+        step = self.step = 1.0 / rate if rate else 1.0 / 30.0
+        rotate = rotator(self.rotation)
         origin: Optional[int] = None
         offset = 0.0
         last: Optional[float] = None
@@ -146,7 +153,7 @@ class Source:
                 for av_frame in decoded:
                     seen = time.perf_counter()
                     if self.started_at is None:
-                        self.started_at = _now()
+                        self.started_at = now()
                     if av_frame.pts is not None and time_base is not None:
                         if origin is None:
                             origin = av_frame.pts
@@ -170,9 +177,11 @@ class Source:
                     last = self.last_ts = media_ts
                     if keep(media_ts):
                         image = av_frame.to_ndarray(format="bgr24")
+                        if rotate is not None:
+                            image = rotate(image)
                         yield (Frame(index=index, media_ts=media_ts, pts=pts,
                                      image=image),
-                               Arrival(seen=seen, seen_at=_now(), gap_before=gap))
+                               Arrival(seen=seen, seen_at=now(), gap_before=gap))
                     index += 1
         except Exception as exc:                             # noqa: BLE001
             if self._stopping:
@@ -206,8 +215,16 @@ class Source:
                 self.container = None
 
 
-def _now() -> str:
+def _rate(stream: Any) -> Optional[float]:
+    """Frames per second as `media.split` reads it: `guessed_rate`, derived from
+    the timestamps, before the container's `average_rate`."""
+    rate = stream.guessed_rate or stream.average_rate
+    return float(rate) if rate else None
+
+
+def now() -> str:
+    """Wall time, ISO 8601 UTC to the millisecond: how a live run stamps things."""
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-__all__ = ["Arrival", "Source", "StreamUnavailable"]
+__all__ = ["Arrival", "Source", "StreamUnavailable", "now"]

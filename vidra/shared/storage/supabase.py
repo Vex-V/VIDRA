@@ -24,14 +24,6 @@ from typing import Any, Optional, Sequence
 from . import db
 from .database import Database
 
-#: The moment index: one row per (video, chunk, sampler, embedder).
-EMBEDDINGS = "vr_embeddings"
-#: The aggregate index: summaries, chapters and entities, by level.
-AGGREGATE_EMBEDDINGS = "ag_embeddings"
-#: A live run's answers: one row per (video, sampler, kept frame, embedder).
-OBSERVATIONS = "vr_observations"
-
-
 class Supabase(Database):
     """Postgres through Supabase's REST API.
 
@@ -44,14 +36,14 @@ class Supabase(Database):
 
     def __init__(self, url: Optional[str] = None, key: Optional[str] = None,
                  read_key: Optional[str] = None) -> None:
-        self.url = url or db._first(db.URL_VARS)
+        self.url = url or db.first_set(db.URL_VARS)
         self._key = key
         self._read_key = read_key
         if not self.url:
             raise db.DatabaseUnavailable(
                 "no Supabase URL: pass url= or set SUPABASE_URL in .env")
-        if not (key or read_key or db._first(db.SECRET_VARS)
-                or db._first(db.PUBLISHABLE_VARS)):
+        if not (key or read_key or db.first_set(db.SECRET_VARS)
+                or db.first_set(db.PUBLISHABLE_VARS)):
             raise db.DatabaseUnavailable(
                 "no Supabase key: pass key= or set one of "
                 + ", ".join(db.SECRET_VARS + db.PUBLISHABLE_VARS) + " in .env")
@@ -218,18 +210,20 @@ class Supabase(Database):
             "structured": u.get("structured", {}),
             "embedding": list(u.get("vector") or []),
         } for u in units if u.get("vector")]
-        db.upsert_vectors(EMBEDDINGS, rows, api)
+        db.upsert_vectors("vr_embeddings", rows, api)
 
-        live = {(u["chunk_id"], u["sampler_id"]) for u in units}
-        stored = (api.table(EMBEDDINGS).select("chunk_id,sampler_id")
+        # Rows this document no longer holds, per chunk: the key is two columns.
+        live: dict[int, list[str]] = {}
+        for u in units:
+            live.setdefault(u["chunk_id"], []).append(u["sampler_id"])
+        stored = (api.table("vr_embeddings").select("chunk_id,sampler_id")
                   .eq("video_id", video_id).eq("embedder", embedder)
                   .execute().data or [])
-        for row in stored:
-            if (row["chunk_id"], row["sampler_id"]) not in live:
-                (api.table(EMBEDDINGS).delete()
-                    .eq("video_id", video_id).eq("chunk_id", row["chunk_id"])
-                    .eq("sampler_id", row["sampler_id"])
-                    .eq("embedder", embedder).execute())
+        for chunk_id in sorted({row["chunk_id"] for row in stored
+                                if row["sampler_id"] not in live.get(row["chunk_id"], [])}):
+            db.delete_except("vr_embeddings", {"video_id": video_id, "embedder": embedder,
+                                               "chunk_id": chunk_id},
+                             "sampler_id", live.get(chunk_id, []), api)
 
     def write_prompts(self, rows: list[dict[str, Any]]) -> None:
         """Record the prompt versions a run used, keyed (name, version). Append-only."""
@@ -240,7 +234,7 @@ class Supabase(Database):
         """A live run's answers into `vr_observations`, as they arrive. Keyed
         (video, sampler_id, frame, embedder), so a retried batch overwrites
         rather than duplicates."""
-        db.upsert_vectors(OBSERVATIONS, [{
+        db.upsert_vectors("vr_observations", [{
             "video_id": video_id, "sampler_id": r["sampler_id"],
             "frame_index": r["frame_index"], "embedder": r["embedder"],
             "chunk_id": r["chunk_id"], "sampler": r.get("sampler", ""),
@@ -290,9 +284,9 @@ class Supabase(Database):
                  "text_hash": u["text_hash"], "content": u["content"],
                  "start_ts": u.get("start_ts"), "end_ts": u.get("end_ts"),
                  "embedding": list(u["vector"])} for u in units if u.get("vector")]
-        db.upsert_vectors(AGGREGATE_EMBEDDINGS, rows, api)
+        db.upsert_vectors("ag_embeddings", rows, api)
         for answer_id in sorted({r["aggregate_id"] for r in rows}):
-            db.delete_except(AGGREGATE_EMBEDDINGS,
+            db.delete_except("ag_embeddings",
                              {"source_id": source_id, "aggregate_id": answer_id,
                               "embedder": embedder_key}, "item_id",
                              [r["item_id"] for r in rows
@@ -427,4 +421,4 @@ class Supabase(Database):
         return [r["video_id"] for r in rows]
 
 
-__all__ = ["AGGREGATE_EMBEDDINGS", "EMBEDDINGS", "OBSERVATIONS", "Supabase"]
+__all__ = ["Supabase"]

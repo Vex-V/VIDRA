@@ -10,7 +10,7 @@ a chunk scores as its best unit plus a discounted second, never a sum.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 #: The RRF constant for fusing a chunk's units.
 MOMENT_K = 10
@@ -62,12 +62,11 @@ class Moment:
 
 
 def to_moments(hits: Sequence[dict[str, Any]],
-               video_id: str,
-               spans: Any,
-               limit: int = 5) -> list[Moment]:
+               grid: Callable[[str], Sequence[tuple[float, float]]],
+               limit: int = 5, video_id: str = "") -> list[Moment]:
     """Fuse per-unit hits into per-chunk moments, grouped by (video_id, chunk_id).
-    `spans` is a per-video map for several videos, a plain list for one; a hit
-    carrying its own span uses that.
+    A hit carrying its own span uses that; otherwise `grid(video_id)` is asked.
+    `video_id` is for hits that do not say which video they are from.
     """
     # Deterministic order; ties broken by the dense rank.
     ranked = sorted(hits, key=lambda h: (
@@ -82,25 +81,19 @@ def to_moments(hits: Sequence[dict[str, Any]],
         key = (hit.get("video_id") or video_id, hit["chunk_id"])
         by_chunk.setdefault(key, []).append((rank, hit))
 
-    def spans_for(vid: str) -> Sequence[tuple[float, float]]:
-        if isinstance(spans, dict):
-            return spans.get(vid) or []
-        return spans or []
-
     moments: list[Moment] = []
     for (vid, chunk_id), entries in by_chunk.items():
-        entries.sort(key=lambda p: p[0])
         best = entries[0][0]
         score = 1.0 / (MOMENT_K + best)
         if len(entries) > 1:
             score += SECOND_WEIGHT / (MOMENT_K + entries[1][0])
         # The backend's own span when it has one, else the grid.
         first = entries[0][1]
-        own = spans_for(vid)
         if first.get("start_ts") is not None and first.get("end_ts") is not None:
             start, end = float(first["start_ts"]), float(first["end_ts"])
         else:
-            start, end = (own[chunk_id] if chunk_id < len(own) else (0.0, 0.0))
+            own = grid(vid)
+            start, end = own[chunk_id] if chunk_id < len(own) else (0.0, 0.0)
         moments.append(Moment(vid, chunk_id, start, end, score,
                               [hit for _, hit in entries]))
     # Equal scores in a stable order.

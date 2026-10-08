@@ -15,7 +15,7 @@ per embedder in `aggregate_units.json` in the source's folder.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Iterator, Optional, Sequence
 
 from ..config import paths
 from . import files
@@ -93,8 +93,6 @@ class Folder(Database):
                strategy: Optional[str] = None,
                chunk_ids: Optional[Sequence[int]] = None,
                structured: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
-        import numpy as np
-
         wanted = set(chunk_ids) if chunk_ids else None
         rows, vectors = [], []
         for vid in (video_ids or self.video_ids()):
@@ -121,22 +119,12 @@ class Folder(Database):
                              "structured": u.get("structured") or {},
                              "start_ts": start, "end_ts": end})
                 vectors.append(u["vector"])
-        if not rows:
-            return []
-        similarity = _cosine(np.asarray(vectors, dtype=np.float32),
-                             np.asarray(vector, dtype=np.float32))
-        order = np.argsort(-similarity, kind="stable")[:limit]
-        # The shape a hybrid backend returns, with no lexical half.
-        return [{**rows[i], "score": 1.0 / (60 + rank), "dense_rank": rank,
-                 "text_rank": None, "similarity": float(similarity[i])}
-                for rank, i in enumerate(order, start=1)]
+        return _rank(rows, vectors, vector, limit)
 
     def search_aggregates(self, vector: Sequence[float], query: str, embedder_key: str,
                           level: str, limit: int = 5,
                           source_ids: Optional[Sequence[str]] = None) -> list[dict[str, Any]]:
         """Dense only, as `search` is here: cosine within one level."""
-        import numpy as np
-
         found = []
         for where in sorted(self.root.glob(f"*/{AGGREGATE_UNITS}")):
             held = files.read_json(where)
@@ -146,18 +134,12 @@ class Folder(Database):
             for u in held.get("units", {}).get(embedder_key, []):
                 if u.get("level") == level and u.get("vector"):
                     found.append((source, u))
-        if not found:
-            return []
-        similarity = _cosine(np.asarray([u["vector"] for _, u in found], dtype=np.float32),
-                             np.asarray(vector, dtype=np.float32))
-        order = np.argsort(-similarity, kind="stable")[:limit]
-        return [{"source_id": found[i][0].get("source_id"),
-                 "video_ids": found[i][0].get("video_ids") or [],
-                 **{k: found[i][1].get(k) for k in ("aggregate_id", "item_id", "level",
-                                                    "content", "start_ts", "end_ts")},
-                 "score": 1.0 / (60 + rank), "dense_rank": rank, "text_rank": None,
-                 "similarity": float(similarity[i])}
-                for rank, i in enumerate(order, start=1)]
+        rows = [{"source_id": source.get("source_id"),
+                 "video_ids": source.get("video_ids") or [],
+                 **{k: u.get(k) for k in ("aggregate_id", "item_id", "level",
+                                          "content", "start_ts", "end_ts")}}
+                for source, u in found]
+        return _rank(rows, [u["vector"] for _, u in found], vector, limit)
 
     def search_observations(self, vector: Sequence[float], query: str,
                             embedder_key: str, limit: int = 20,
@@ -174,47 +156,47 @@ class Folder(Database):
         """Dense only: each run's own `observations.jsonl`, read where the live
         run appends it -- so a run still going is searched up to its last
         answer."""
-        import json
         from datetime import datetime
-
-        import numpy as np
 
         def when(stamp: Optional[str]) -> Optional[datetime]:
             return datetime.fromisoformat(stamp) if stamp else None
+
         lo, hi = when(since), when(until)
+
+        def wanted(o: dict[str, Any]) -> bool:
+            seen = when(o.get("seen_at"))
+            return bool(
+                o.get("vector")
+                and o.get("embedder", embedder_key) == embedder_key
+                and (not sampler or o["sampler_id"] == sampler)
+                and (not question or o.get("question") == question)
+                and (not strategy or o.get("sampler") == strategy)
+                and (after is None or o["media_ts"] >= after)
+                and (before is None or o["media_ts"] < before)
+                and (lo is None or (seen is not None and seen >= lo))
+                and (hi is None or (seen is not None and seen < hi))
+                and (not structured or _matches(o.get("structured") or {}, structured)))
+
         rows, vectors = [], []
-        scope = video_ids or sorted(
-            d.name for d in self.root.iterdir()
-            if d.is_dir() and (d / paths.OBSERVATIONS).exists())             if self.root.exists() else []
-        for vid in scope:
+        for vid in video_ids or self._live_ids():
             where = self.root / paths.check_id(vid) / paths.OBSERVATIONS
             if not where.exists():
                 continue
-            with where.open(encoding="utf-8") as lines:
-                for line in lines:
-                    if not line.strip():
-                        continue
-                    try:
-                        o = json.loads(line)
-                    except ValueError:
-                        continue           # a line still being written
-                    seen = when(o.get("seen_at"))
-                    if not o.get("vector")                             or o.get("embedder", embedder_key) != embedder_key                             or (sampler and o["sampler_id"] != sampler)                             or (question and o.get("question") != question)                             or (strategy and o.get("sampler") != strategy)                             or (after is not None and o["media_ts"] < after)                             or (before is not None and o["media_ts"] >= before)                             or (lo is not None and (seen is None or seen < lo))                             or (hi is not None and (seen is None or seen >= hi))                             or (structured and not _matches(o.get("structured") or {},
-                                                            structured)):
-                        continue
+            for o in _lines(where):
+                if wanted(o):
                     rows.append({"video_id": vid, **{k: o.get(k) for k in (
                         "chunk_id", "sampler_id", "sampler", "question",
                         "frame_index", "media_ts", "frames", "description",
                         "structured", "seen_at")}})
                     vectors.append(o["vector"])
-        if not rows:
+        return _rank(rows, vectors, vector, limit)
+
+    def _live_ids(self) -> list[str]:
+        """Every folder holding a live run's answers."""
+        if not self.root.exists():
             return []
-        similarity = _cosine(np.asarray(vectors, dtype=np.float32),
-                             np.asarray(vector, dtype=np.float32))
-        order = np.argsort(-similarity, kind="stable")[:limit]
-        return [{**rows[i], "score": 1.0 / (60 + rank), "dense_rank": rank,
-                 "text_rank": None, "similarity": float(similarity[i])}
-                for rank, i in enumerate(order, start=1)]
+        return sorted(d.name for d in self.root.iterdir()
+                      if d.is_dir() and (d / paths.OBSERVATIONS).exists())
 
     def spans(self, video_id: str) -> list[tuple[float, float]]:
         timeline = self._read(video_id, "timeline")
@@ -229,10 +211,36 @@ class Folder(Database):
                       and (d / paths.ARTIFACTS["embedded"]).exists())
 
 
-def _cosine(matrix: Any, vector: Any) -> Any:
+def _rank(rows: list[dict[str, Any]], vectors: list[Any], vector: Sequence[float],
+          limit: int) -> list[dict[str, Any]]:
+    """`rows` by cosine to `vector`, best first, in the shape a hybrid backend
+    returns: an RRF score at k=60 over the dense ranking, no lexical half."""
     import numpy as np
-    norms = np.linalg.norm(matrix, axis=1) * (np.linalg.norm(vector) or 1.0)
-    return (matrix @ vector) / np.where(norms == 0, 1.0, norms)
+
+    if not rows:
+        return []
+    matrix = np.asarray(vectors, dtype=np.float32)
+    query = np.asarray(vector, dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=1) * (np.linalg.norm(query) or 1.0)
+    similarity = (matrix @ query) / np.where(norms == 0, 1.0, norms)
+    order = np.argsort(-similarity, kind="stable")[:limit]
+    return [{**rows[i], "score": 1.0 / (60 + rank), "dense_rank": rank,
+             "text_rank": None, "similarity": float(similarity[i])}
+            for rank, i in enumerate(order, start=1)]
+
+
+def _lines(where: Path) -> Iterator[dict[str, Any]]:
+    """Each JSON line of a file another process may still be appending to; a
+    line not yet whole is skipped."""
+    import json
+
+    with where.open(encoding="utf-8") as lines:
+        for line in lines:
+            if line.strip():
+                try:
+                    yield json.loads(line)
+                except ValueError:
+                    continue
 
 
 def _matches(have: dict[str, Any], want: dict[str, Any]) -> bool:

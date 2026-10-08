@@ -9,7 +9,7 @@ Rotation is read with OpenCV.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import av
 import numpy as np
@@ -59,6 +59,18 @@ def rotation_of(path: str) -> float:
         cap.release()
 
 
+def rotator(degrees: float) -> Optional[Callable[[Any], Any]]:
+    """What turns a decoded image upright for a container rotation of `degrees`,
+    or None when it is already upright (or the angle is not a quarter turn)."""
+    turn = _ROTATIONS.get(int(degrees or 0))
+    if turn is None:
+        return None
+    import cv2
+    code = (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180,
+            cv2.ROTATE_90_COUNTERCLOCKWISE)[turn]
+    return lambda image: cv2.rotate(image, code)
+
+
 def read_frames(media: Media,
                 keep: Callable[[float], bool],
                 rotation: Optional[float] = None) -> Iterator[Frame]:
@@ -74,12 +86,7 @@ def read_frames(media: Media,
         raise UnreadableSource(
             f"cannot open {media.path} ({type(exc).__name__})") from None
 
-    degrees = int(rotation if rotation is not None else rotation_of(media.path))
-    rotate = None
-    if degrees in _ROTATIONS:
-        import cv2
-        rotate = (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180,
-                  cv2.ROTATE_90_COUNTERCLOCKWISE)[_ROTATIONS[degrees]]
+    rotate = rotator(rotation if rotation is not None else rotation_of(media.path))
 
     index = 0
     try:
@@ -101,12 +108,11 @@ def read_frames(media: Media,
             if keep(media_ts):
                 image = av_frame.to_ndarray(format="bgr24")   # the 6.2 ms
                 if rotate is not None:
-                    import cv2
-                    image = cv2.rotate(image, rotate)
+                    image = rotate(image)
                 yield Frame(index=index, media_ts=media_ts, pts=pts, image=image)
             index += 1
     finally:
         container.close()
 
 
-__all__ = ["Frame", "UnreadableSource", "read_frames", "rotation_of"]
+__all__ = ["Frame", "UnreadableSource", "read_frames", "rotation_of", "rotator"]

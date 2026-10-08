@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import logging
 
-from .shared.reporting.errors import VidraError, ModelUnavailable, Unavailable
-from .shared.config.settings import configure
+from vidra.shared.reporting.errors import VidraError, ModelUnavailable, Unavailable
+from vidra.shared.config.settings import configure
 
 #: A library configures no logging; see `shared/reporting/logs.py`.
 logging.getLogger("vidra").addHandler(logging.NullHandler())

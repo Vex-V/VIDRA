@@ -37,6 +37,7 @@ from .core.record import Record, RecordError, record
 from .aggregators.coverage import CoverageAggregator
 from .aggregators.speakers import SpeakersAggregator
 from .aggregators.stats import StatsAggregator
+from vidra.shared.config.lookup import imported, keyword_parameters
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.models.base import Embedder, LLM
 
@@ -63,8 +64,7 @@ RUNNERS: dict[str, str] = {
 
 
 def _import(target: str) -> Any:
-    module_name, class_name = target.split(":")
-    return getattr(importlib.import_module(f".{module_name}", __package__), class_name)
+    return imported(target, __package__)
 
 
 def available() -> list[str]:
@@ -108,24 +108,21 @@ def takes_inputs(name: str) -> bool:
 
 
 #: A runner's parameters that name who answers, not settings.
-_WHO = ("self", "definition_id", "llm", "embedder")
+_WHO = ("definition_id", "llm", "embedder")
 
 
 def _runner_params(name: str) -> list[str]:
-    import inspect
-    return list(inspect.signature(_import(RUNNERS[kind_of(name)]).__init__).parameters)
+    return keyword_parameters(_import(RUNNERS[kind_of(name)]))
 
 
 def settings_of(name: str) -> list[str]:
     """An aggregator's own settings: its constructor's parameters (`labels` for
     `ner`, `max_spans` / `min_span_s` for a `spans` definition).
     """
-    import inspect
     if name in REGISTRY:
         return []
     if name in _LAZY:
-        cls = _import(_LAZY[name][0])
-        return [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+        return keyword_parameters(_import(_LAZY[name][0]))
     return [p for p in _runner_params(name) if p not in _WHO]
 
 

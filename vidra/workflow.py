@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from . import aggregates
-from .shared.config import paths
-from .shared.contracts.documents import Produced
+from vidra.shared.config import paths
+from vidra.shared.contracts.documents import Produced
 from .video_rag.offline import driver as video_rag
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.models.base import Embedder, LLM, VLM
@@ -118,8 +118,8 @@ def validate(options: Options) -> list[str]:
         used = roles(options)
     except Refused as exc:
         return [str(exc)]
-    from .shared.models import base
-    from .shared.models.roles import resolve
+    from vidra.shared.models import base
+    from vidra.shared.models.roles import resolve
     names = chosen(options)
     problems = video_rag.validate(extraction(options))
     # The embedder is the extraction's, which `video_rag.validate` checked.

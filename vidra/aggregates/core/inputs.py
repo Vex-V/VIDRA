@@ -32,8 +32,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
-from ...shared.contracts.documents import fingerprint_of
-from ...shared.reporting.errors import VidraError
+from vidra.shared.contracts.documents import fingerprint_of
+from vidra.shared.reporting.errors import VidraError
 
 if TYPE_CHECKING:
     from .base import Context
@@ -268,7 +268,7 @@ def render(block: dict[str, Any], fields: Sequence[str],
 
 def read(context: "Context", one: Input) -> Read:
     """Every chunk's text for one input; chunks with nothing are left out."""
-    from ...shared.contracts.units import render as render_unit
+    from vidra.shared.contracts.units import render as render_unit
 
     chunks = {c["chunk_id"]: c for c in
               (context.descriptions.chunks if context.descriptions else [])}

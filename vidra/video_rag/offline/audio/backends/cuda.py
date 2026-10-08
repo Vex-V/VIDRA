@@ -12,11 +12,12 @@ import ctypes
 import site
 import sys
 from pathlib import Path
+from typing import Optional
 
 #: Loaded in dependency order.
 NEEDED = ("cublasLt64_12.dll", "cublas64_12.dll", "cudnn64_9.dll")
 
-_done: list[str] | None = None
+_done: Optional[list[str]] = None
 
 
 def enable() -> list[str]:

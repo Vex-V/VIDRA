@@ -1,15 +1,14 @@
 """`embedded.json` -- what `embed` produced, text and vectors together.
 
 Rewritten whole each time, under one embedder, so it holds no stale unit.
+`embed.load` reads it back.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Sequence
 
 from vidra.shared.contracts.documents import Embedded
-from vidra.shared.storage.files import read, write as _write
 from .units import Unit
 
 
@@ -33,14 +32,4 @@ def build(video_id: str, units: Sequence[Unit], embedder_key: str = "",
     )
 
 
-def write(path: str | Path, video_id: str, units: Sequence[Unit],
-          embedder_key: str = "", timeline_fingerprint: str = "") -> str:
-    document = build(video_id, units, embedder_key, timeline_fingerprint)
-    return _write(path, document)
-
-
-def load(path: str | Path) -> Embedded:
-    return read(path, Embedded)
-
-
-__all__ = ["build", "load", "write"]
+__all__ = ["build"]

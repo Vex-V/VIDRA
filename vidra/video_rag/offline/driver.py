@@ -18,36 +18,26 @@ components; call them directly to set it. What `aggregates` asks of this tier,
 from __future__ import annotations
 
 import inspect
-
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from vidra.shared.reporting import logs
-from vidra.shared.config import paths
+from vidra.shared.config.paths import layout
 from vidra.shared.contracts.documents import Produced
-from . import audio, boundaries, cut, describe, embed, media, video
-#: The conflict rules `media` accepts.
-from .media.driver import ON_CONFLICT
-from vidra.shared.reporting.errors import Refused
 from vidra.shared.models.base import Embedder, VLM
 from vidra.shared.models.roles import Models, unpack
+from vidra.shared.reporting import logs
+from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage.database import DATABASES as _DATABASES
 from vidra.shared.storage.database import Database, as_database
 from ..core.export import export
+from . import audio, boundaries, cut, describe, embed, media, video
+#: The conflict rules `media` accepts.
+from .media.driver import ON_CONFLICT
 
 #: The databases a run may name by string.
 DATABASES = tuple(_DATABASES)
-
-
-def layout(folder: str | Path) -> dict[str, Path]:
-    """Every artifact's path inside one video's folder, from the library's own
-    filename table. Includes `store`, the frame directory.
-    """
-    root = Path(folder)
-    return {**{name: root / filename for name, filename in paths.ARTIFACTS.items()},
-            **{name: root / dirname for name, dirname in paths.DIRECTORIES.items()}}
 
 
 @dataclass
@@ -126,32 +116,12 @@ def validate(options: Options) -> list[str]:
     if options.on_conflict not in ON_CONFLICT:
         problems.append(f"on_conflict must be one of "
                         f"{', '.join(ON_CONFLICT)}")
-    if not (options.database is None or isinstance(options.database, Database)
-            or options.database in DATABASES):
-        problems.append(f"unknown database {options.database!r}; pass a "
-                        f"Database, or one of: {', '.join(DATABASES)}")
-
-    # A file where `into` should be makes every write fail.
-    into = Path(options.into)
-    if into.exists() and not into.is_dir():
-        problems.append(f"{into} is a file; `into` is the directory that holds "
-                        f"one folder per video")
-
-    # Every sampler and question the spec names, against the registry and the
-    # question vocabulary -- including a bare name's own question.
+    from ..core.checks import run_problems
+    roles = {"embedder": options.embedder}
     if options.use_video:
-        from ..core.describe import prompts
-        from ..core.sampling import specs
-        problems += specs.problems(options.sampler, prompts.questions())
-
-    # Every model the run will call: the right kind, with a key and an API key.
-    from vidra.shared.models import base
-    from vidra.shared.models.roles import resolve
-    wanted = [("embedder", options.embedder)]
-    if options.use_video:
-        wanted.append(("vlm", options.vlm))
-    for role, model in wanted:
-        problems += base.problems(role, resolve(role, model))
+        roles["vlm"] = options.vlm
+    problems += run_problems(options.into, options.database,
+                             options.sampler if options.use_video else None, roles)
     return problems
 
 
@@ -175,35 +145,14 @@ def _run(options: Options, whole: Any,
     # Built once, so a missing setting fails before the first step.
     database = as_database(options.database)
 
-    say = on_step or (lambda *arguments: None)
+    say = on_step or (lambda *_: None)
 
-    # Does the callback take a third argument (progress)?
-    wants_progress = False
-    if on_step is not None:
-        try:
-            parameters = inspect.signature(on_step).parameters
-            wants_progress = (
-                len(parameters) >= 3
-                or any(p.kind is inspect.Parameter.VAR_POSITIONAL
-                       for p in parameters.values()))
-        except (TypeError, ValueError):          # a builtin, or a C callable
-            wants_progress = False
-
-    def forward(event: Any) -> None:
-        say(event.component, None, event)
-
-    def announce(component: str, produced: Optional[Produced]) -> None:
-        """Two arguments always; the third is only ever a progress event."""
-        say(component, produced)
-
-    ticking = {"on_progress": forward} if wants_progress else {}
-
-    def starting(name: str) -> None:
-        """Announce a component by name before it runs."""
-        announce(name, None)
+    # A callback taking a third argument also gets every unit's progress.
+    ticking = ({"on_progress": lambda event: say(event.component, None, event)}
+               if _takes_progress(on_step) else {})
 
     # 1 · the file, and the folder everything else lands in
-    starting("media")
+    say("media", None)
     first = media.media(options.source, options.into, options.video_id,
                         options.on_conflict, options.name, options.recorded_at)
     folder = Path(first.stats["folder"])
@@ -215,7 +164,7 @@ def _run(options: Options, whole: Any,
         run.steps.append(produced)
         if database is not None:
             run.problems += export(produced, database)
-        announce(produced.component, produced)
+        say(produced.component, produced)
         return produced
 
     step(first)
@@ -237,17 +186,17 @@ def _run(options: Options, whole: Any,
             run.skipped[name] = f"the file carries no {name} stream"
             if boundaries.POLICIES[options.policy] == name:
                 raise Refused(f"policy {options.policy!r} needs the {name} "
-                                 f"stream, and {options.source} has none")
+                              f"stream, and {options.source} has none")
 
     # 2 · the soundtrack
     if use_audio:
-        starting("audio")
+        say("audio", None)
         step(audio.audio(at["media"], at["raw_transcript"]))
     else:
         run.skipped.setdefault("audio", "this run is not reading the soundtrack")
 
     # 3 · boundary evidence, if this policy needs any
-    starting("boundaries.evidence")
+    say("boundaries.evidence", None)
     found = boundaries.evidence(at["cuts"], options.policy,
                                 media=at["media"],
                                 raw_transcript=(at["raw_transcript"]
@@ -260,14 +209,13 @@ def _run(options: Options, whole: Any,
         step(found)
 
     # 4 · the grid. `cuts=` only when evidence was written.
-    starting("boundaries")
+    say("boundaries", None)
     step(boundaries.boundaries(at["media"], at["timeline"], options.policy,
-                               cuts=at["cuts"] if at["cuts"].exists() else None,
-                               ))
+                               cuts=at["cuts"] if at["cuts"].exists() else None))
 
     # 5 · the picture, onto the grid. `store` is where frames go; describe reads it.
     if use_video:
-        starting("video")
+        say("video", None)
         step(video.video(at["media"], at["timeline"], at["manifest"],
                          store=at["store"], sampler=options.sampler, **ticking))
     else:
@@ -275,19 +223,19 @@ def _run(options: Options, whole: Any,
 
     # 6 · the transcript, onto the grid
     if use_audio:
-        starting("cut")
+        say("cut", None)
         step(cut.cut(at["timeline"], at["raw_transcript"], at["transcript"]))
 
     # 7 · one answer per (chunk, sampler)
     if use_video:
-        starting("describe")
+        say("describe", None)
         step(describe.describe(at["manifest"], at["timeline"], at["store"],
                                at["descriptions"],
                                previous=earlier("descriptions"),
                                vlm=options.vlm, **ticking))
 
     # 8 · vectors, from whichever documents this run wrote
-    starting("embed")
+    say("embed", None)
     step(embed.embed(at["embedded"],
                      descriptions=at["descriptions"] if use_video else None,
                      transcript=at["transcript"] if use_audio else None,
@@ -299,6 +247,20 @@ def _run(options: Options, whole: Any,
     whole(policy=options.policy, sampler=spec_text(options.sampler),
           steps=len(run.steps), skipped=len(run.skipped))
     return run
+
+
+def _takes_progress(on_step: Optional[Callable[..., None]]) -> bool:
+    """Whether a step callback takes a third argument, a `Progress`. Read off
+    its signature, so a two-argument callback written earlier keeps working."""
+    if on_step is None:
+        return False
+    try:
+        parameters = inspect.signature(on_step).parameters
+    except (TypeError, ValueError):              # a builtin, or a C callable
+        return False
+    return (len(parameters) >= 3
+            or any(p.kind is inspect.Parameter.VAR_POSITIONAL
+                   for p in parameters.values()))
 
 
 def video_rag(source: str | Path,

@@ -25,13 +25,13 @@ anything is paid for.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Mapping, Optional, Sequence, Union
+from typing import Mapping, Optional, Sequence
 
-from ...shared.contracts.documents import (Descriptions, Excerpt, Manifest,
+from vidra.shared.contracts.documents import (Descriptions, Excerpt, Manifest,
                                            Sightings, Timeline, Transcript,
                                            same_video)
-from ...shared.reporting.errors import VidraError
-from ...shared.storage import files
+from vidra.shared.reporting.errors import VidraError
+from vidra.shared.storage import files
 from .base import Context
 from .inputs import Input, Source, check, read
 
@@ -40,7 +40,7 @@ KINDS: dict[str, type] = {"timeline": Timeline, "descriptions": Descriptions,
                           "transcript": Transcript, "manifest": Manifest}
 
 #: A path as a caller hands one over.
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 
 class RecordError(VidraError, ValueError):
@@ -91,11 +91,7 @@ class Record:
 
     def answer_ids(self) -> list[str]:
         """Every answer this record's descriptions hold, as `answers=` keys."""
-        found: dict[str, None] = {}
-        if self.context.descriptions is not None:
-            for chunk in self.context.descriptions.chunks:
-                found.update(dict.fromkeys(chunk.get("samplers") or {}))
-        return list(found)
+        return self.context.answer_ids()
 
     def __repr__(self) -> str:
         held = ", ".join(f"{k}={str(v)!r}" for k, v in self.paths.items())

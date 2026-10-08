@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ....shared.contracts.documents import fingerprint_of
+from vidra.shared.contracts.documents import fingerprint_of
 from ...core.base import Context, ModelUnavailable
 from ...core.inputs import Input, Read, read
 from ...core.rendering import pieces, plain

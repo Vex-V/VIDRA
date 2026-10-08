@@ -850,7 +850,7 @@ window.VIDRA_DOCS_INDEX = [
 "page": "Databases",
 "title": "When each hook is called",
 "url": "pages/databases.html#when",
-"text": "video_rag , workflow : after each stage, write_<artifact>(video_id, document) per file written, with its JSON as a dict. After describe , also write_prompts(rows) . aggregates.aggregate(database=...) , workflow : write_source once (if it fails, nothing else runs), write_answer per answer, write_definitions once, then write_aggregate_units once, only if implemented, since it costs an embedding call. search : video_ids() when no video is named, spans(video_id) per video (unless grids= ), then search(...) . aggregates.search : search_aggregates(...) . video_rag_live : write_media when the stream opens (no duration yet); write_observations(video_id, rows) as answers arrive, through one writer (immediately when it keeps up, the backlog in one call when it does not); then the batch documents when the stream ends. search_observations : search_observations(...) ."
+"text": "video_rag , workflow : after each stage, write_<artifact>(video_id, document) per file written, with its JSON as a dict. After describe , also write_prompts(rows) . aggregates.aggregate(database=...) , workflow : write_source once (if it fails, nothing else runs), write_answer per answer, write_definitions once, then write_aggregate_units once, only if implemented, since it costs an embedding call. search : search(...) ; spans(video_id) only for a time window or a window of neighbours (unless grids= ), or for a hit that carries no start_ts / end_ts ; video_ids() only for a window when no video is named. aggregates.search : search_aggregates(...) . video_rag_live : write_media when the stream opens (no duration yet); write_observations(video_id, rows) as answers arrive, through one writer (immediately when it keeps up, the backlog in one call when it does not); then the batch documents when the stream ends. search_observations : search_observations(...) ."
 },
 {
 "page": "Databases",
@@ -880,7 +880,7 @@ window.VIDRA_DOCS_INDEX = [
 "page": "Databases",
 "title": "spans(video_id)",
 "url": "pages/databases.html#hook-spans",
-"text": "The grid: [(start_ts, end_ts), ...] in chunk order (index = chunk id). Gives moments their times and resolves after / before ."
+"text": "The grid: [(start_ts, end_ts), ...] in chunk order (index = chunk id). Resolves after / before and window , and times a moment whose hit carries no span of its own."
 },
 {
 "page": "Databases",

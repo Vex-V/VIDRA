@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
-from ....shared.contracts.documents import fingerprint_of
+from vidra.shared.contracts.documents import fingerprint_of
 
 if TYPE_CHECKING:
     from ...core.base import Context
@@ -95,7 +95,7 @@ def mentions_of(context: "Context", selection: Any) -> list[Mention]:
     """Every mention a profile's selection finds, in chunk order: each object in a
     matching answer's list field, or one per answer for a whole value.
     """
-    from ....shared.contracts.units import render
+    from vidra.shared.contracts.units import render
     from ...core.inputs import PROSE
 
     field, keys = selection.field, tuple(selection.keys)
@@ -256,7 +256,7 @@ def link_similar(mentions: Sequence[Mention], sim: Any, rule: str = "max",
     import numpy as np
 
     if rule not in RULES:
-        from ....shared.reporting.errors import UnknownOption
+        from vidra.shared.reporting.errors import UnknownOption
         raise UnknownOption(f"rule must be one of {', '.join(RULES)}")
     count = len(mentions)
     if count == 0:

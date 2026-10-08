@@ -107,7 +107,7 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
 <ol>
   <li><code>video_rag</code>, <code>workflow</code>: after each stage, <code>write_&lt;artifact&gt;(video_id, document)</code> per file written, with its JSON as a dict. After <code>describe</code>, also <code>write_prompts(rows)</code>.</li>
   <li><code>aggregates.aggregate(database=...)</code>, <code>workflow</code>: <code>write_source</code> once (if it fails, nothing else runs), <code>write_answer</code> per answer, <code>write_definitions</code> once, then <code>write_aggregate_units</code> once, only if implemented, since it costs an embedding call.</li>
-  <li><code>search</code>: <code>video_ids()</code> when no video is named, <code>spans(video_id)</code> per video (unless <code>grids=</code>), then <code>search(...)</code>.</li>
+  <li><code>search</code>: <code>search(...)</code>; <code>spans(video_id)</code> only for a time window or a <code>window</code> of neighbours (unless <code>grids=</code>), or for a hit that carries no <code>start_ts</code>/<code>end_ts</code>; <code>video_ids()</code> only for a window when no video is named.</li>
   <li><code>aggregates.search</code>: <code>search_aggregates(...)</code>.</li>
   <li><code>video_rag_live</code>: <code>write_media</code> when the stream opens (no duration yet); <code>write_observations(video_id, rows)</code> as answers arrive, through one writer (immediately when it keeps up, the backlog in one call when it does not); then the batch documents when the stream ends.</li>
   <li><code>search_observations</code>: <code>search_observations(...)</code>.</li>
@@ -148,7 +148,7 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
 <p>Every video id held, as a list. Used when a search names no video.</p>
 
 <h3 id="hook-spans">spans(video_id)</h3>
-<p>The grid: <code>[(start_ts, end_ts), ...]</code> in chunk order (index = chunk id). Gives moments their times and resolves <code>after</code>/<code>before</code>.</p>
+<p>The grid: <code>[(start_ts, end_ts), ...]</code> in chunk order (index = chunk id). Resolves <code>after</code>/<code>before</code> and <code>window</code>, and times a moment whose hit carries no span of its own.</p>
 
 <h3 id="hook-search">search(...)</h3>
 <div class="sig">search(vector, query, embedder_key, limit=20, video_ids=None, sampler=None,

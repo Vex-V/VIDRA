@@ -26,9 +26,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from ...shared.config import paths
+from vidra.shared.config import paths
 from ..core import inputs as inputs_mod
-from ...shared.reporting.errors import VidraError
+from vidra.shared.reporting.errors import VidraError
 
 BUILTIN_PATH = Path(__file__).with_name("definitions.json")
 SECTIONS = ("prompts", "profiles")
@@ -168,6 +168,11 @@ def ids() -> list[str]:
     return [*sorted(prompts()), *(PROFILE_PREFIX + p for p in sorted(profiles()))]
 
 
+def profile_id(profile: str) -> str:
+    """`people` or `entities:people`, as the aggregator id."""
+    return profile if profile.startswith(PROFILE_PREFIX) else PROFILE_PREFIX + profile
+
+
 def locate(definition_id: str) -> tuple[str, str]:
     """`entities:people` -> ("profiles", "people"); `summary` -> ("prompts", "summary")."""
     if definition_id.startswith(PROFILE_PREFIX):
@@ -240,7 +245,7 @@ def _check_text(value: Any, what: str) -> list[str]:
 
 
 def _check_fields(fields: Any, owned: frozenset[str]) -> list[str]:
-    from ...shared.contracts.fields import problems as field_problems
+    from vidra.shared.contracts.fields import problems as field_problems
     problems = field_problems(fields)
     if isinstance(fields, dict):
         taken = sorted(set(fields) & owned)
@@ -526,5 +531,5 @@ def _write(doc: dict[str, Any]) -> None:
 __all__ = ["CHECKS", "DefinitionError", "KINDS", "PROFILE_PREFIX", "ProtectedDefinition",
            "Selection", "add", "add_profile", "add_prompt", "check_profile",
            "check_prompt", "definition", "get", "ids",
-           "kind_text", "load", "locate", "profiles", "prompts", "remove",
+           "kind_text", "load", "locate", "profile_id", "profiles", "prompts", "remove",
            "remove_profile", "remove_prompt", "selection", "system", "version_of"]

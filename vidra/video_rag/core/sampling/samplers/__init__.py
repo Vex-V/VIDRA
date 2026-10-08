@@ -15,13 +15,13 @@ or register the class to name it in a spec string.
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import re
 from typing import Type
 
 from .base import Sampler
 from .uniform import UniformSampler
+from vidra.shared.config.lookup import imported
 from vidra.shared.reporting.errors import Refused, UnknownOption
 
 #: name -> "module:ClassName", imported on first use.
@@ -69,9 +69,7 @@ def class_of(name: str) -> Type[Sampler]:
         return _REGISTRY[name]
     if name not in _LAZY:
         raise UnknownOption(f"unknown sampler {name!r}; known: {', '.join(available())}")
-    module_name, class_name = _LAZY[name].split(":")
-    module = importlib.import_module(f".{module_name}", __package__)
-    _REGISTRY[name] = getattr(module, class_name)
+    _REGISTRY[name] = imported(_LAZY[name], __package__)
     return _REGISTRY[name]
 
 

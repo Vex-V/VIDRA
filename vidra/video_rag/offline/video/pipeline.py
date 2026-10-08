@@ -13,7 +13,8 @@ from typing import Any, Callable, Optional, Sequence
 from vidra.shared.contracts.documents import Manifest, Media, Timeline
 from ...core.frames import FrameStore
 from ...core.sampling.decimate import Decimator
-from ...core.sampling.reader import read_frames
+from ...core.sampling.offer import Offer, empty_chunk
+from ...core.sampling.reader import read_frames, rotation_of
 from ...core.sampling.samplers import Sampler
 from vidra.shared.reporting.errors import Refused, UnknownOption
 
@@ -44,67 +45,34 @@ def ingest(media: Media, timeline: Timeline,
                         if store is not None else None),
     }
 
-    chunks: list[dict[str, Any]] = [
-        {"chunk_id": i, "decimated_frames": 0, "samplers": {}}
-        for i in range(len(timeline))
-    ]
-    current: Optional[int] = None
-    chunk_local_index = 0
-    decimated = sampled = 0
+    chunks = [empty_chunk(i) for i in range(len(timeline))]
+    offer = Offer(samplers)
     started = time.perf_counter()
 
-    for frame in read_frames(media, decimator.accepts):
-        decimated += 1
+    # Read once: the reader applies it, and `recreate` reads it off the manifest.
+    rotation = rotation_of(media.path) if media.has_video else 0.0
+
+    for frame in read_frames(media, decimator.accepts, rotation):
         # `nearest`: a frame past the end of the grid belongs to the last chunk.
         chunk_id = timeline.nearest(frame.media_ts)
+        if (offer.chunk_id is not None and chunk_id != offer.chunk_id
+                and on_chunk is not None):
+            on_chunk(offer.chunk_id, chunks[offer.chunk_id])
 
-        if chunk_id != current:
-            if current is not None and on_chunk is not None:
-                on_chunk(current, chunks[current])
-            current = chunk_id
-            for sampler in samplers:
-                sampler.reset(chunk_id)
-            chunk_local_index = 0
-
-        chunk = chunks[chunk_id]
-        chunk["decimated_frames"] += 1
         # "decimated" keeps every frame the samplers were offered.
-        if store is not None and store_scope == "decimated":
+        kept = offer(frame, chunk_id, chunks[chunk_id])
+        if store is not None and (store_scope == "decimated" or kept):
             store.write(frame.index, frame.image)
-
-        for sampler in samplers:
-            if not sampler.accepts(frame, chunk_local_index):
-                continue
-            sampled += 1
-            record: dict[str, Any] = {
-                "index": frame.index,
-                "media_ts": round(frame.media_ts, 3),
-                "chunk_local_index": chunk_local_index,
-            }
-            # The exact address of the frame.
-            if frame.pts is not None:
-                record["pts"] = frame.pts
-            if store is not None and store_scope == "sampled":
-                store.write(frame.index, frame.image)
-            score = sampler.last_score()
-            if score is not None:
-                record["score"] = round(score, 4)
-            block = chunk["samplers"].setdefault(
-                sampler.sampler_id, {"frame_count": 0, "frames": []})
-            block["frames"].append(record)
-            block["frame_count"] += 1
-
-        chunk_local_index += 1
         # Pixels are released at once; one frame in memory.
         frame.release()
 
-    if current is not None and on_chunk is not None:
-        on_chunk(current, chunks[current])
+    if offer.chunk_id is not None and on_chunk is not None:
+        on_chunk(offer.chunk_id, chunks[offer.chunk_id])
 
     elapsed = time.perf_counter() - started
     stats = {
-        "frames_decimated": decimated,
-        "frames_sampled": sampled,
+        "frames_decimated": offer.decimated,
+        "frames_sampled": offer.sampled,
         "chunks": len(chunks),
         "chunks_with_frames": sum(1 for c in chunks if c["decimated_frames"]),
         "elapsed_s": round(elapsed, 3),
@@ -118,7 +86,9 @@ def ingest(media: Media, timeline: Timeline,
         timeline_fingerprint=timeline.fingerprint(),
         source={"path": media.path, "container": media.container_format,
                 "duration_s": media.duration_s,
-                **(media.video.as_dict() if media.video else {})},
+                **(media.video.as_dict() if media.video else {}),
+                # Only when there is one, so an upright video's manifest is unchanged.
+                **({"rotation": int(rotation)} if int(rotation) else {})},
         config=config,
         stats=stats,
         chunks=chunks,

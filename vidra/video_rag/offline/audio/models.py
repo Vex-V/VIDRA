@@ -8,12 +8,12 @@ Real backends are imported only when asked for by name.
 
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
 
 from .source import Track
 #: Shared with the local aggregates.
+from vidra.shared.config.lookup import imported, keyword_parameters
 from vidra.shared.reporting.errors import ModelUnavailable
 from vidra.shared.reporting.errors import UnknownOption
 
@@ -158,10 +158,7 @@ def _resolve(registry: dict[str, Any], name: str, kind: str):
         raise UnknownOption(f"unknown {kind} {name!r}; known: {', '.join(registry)}")
     entry = registry[name]
     if isinstance(entry, str):
-        module_name, class_name = entry.split(":")
-        module = importlib.import_module(f".{module_name}", __package__)
-        entry = getattr(module, class_name)
-        registry[name] = entry
+        entry = registry[name] = imported(entry, __package__)
     return entry
 
 
@@ -180,15 +177,7 @@ def settings(kind: str, name: str) -> set[str]:
     registry = {"transcriber": TRANSCRIBERS, "diarizer": DIARIZERS}.get(kind)
     if registry is None:
         raise UnknownOption(f"unknown kind {kind!r}; known: transcriber, diarizer")
-    import inspect
-    cls = _resolve(registry, name, kind)
-    if cls.__init__ is object.__init__:
-        # A backend with no constructor of its own takes nothing.
-        return set()
-    named = (inspect.Parameter.POSITIONAL_OR_KEYWORD,
-             inspect.Parameter.KEYWORD_ONLY)
-    return {p.name for p in inspect.signature(cls.__init__).parameters.values()
-            if p.name != "self" and p.kind in named}
+    return set(keyword_parameters(_resolve(registry, name, kind)))
 
 
 __all__ = ["ModelUnavailable", "Word", "Segment", "Transcript", "Transcriber",

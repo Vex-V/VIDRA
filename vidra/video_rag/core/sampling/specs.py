@@ -18,17 +18,17 @@ reads the question library.
 from __future__ import annotations
 
 import copy
-import inspect
 import json
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Optional, Sequence
 
+from vidra.shared.config.lookup import keyword_parameters
+from vidra.shared.reporting.errors import Refused, UnknownOption
 from . import samplers as samplers_mod
 from .samplers import Sampler
-from vidra.shared.reporting.errors import Refused, UnknownOption
 
 #: One element of a spec: a string naming a sampler, or a sampler object.
-Spec = Union[str, Sampler]
+Spec = str | Sampler
 
 
 def split_specs(sampler: Spec | Sequence[Spec]) -> list[Spec]:
@@ -100,10 +100,7 @@ RATE_SETTINGS = ("min_interval_s", "max_per_chunk")
 def settings_of(cls: type) -> set[str]:
     """The settings a sampler class takes: its constructor's keyword parameters,
     less the bookkeeping every sampler has."""
-    parameters = inspect.signature(cls.__init__).parameters
-    return {n for n, p in parameters.items()
-            if n not in ("self", "sampler_id", "prompts")
-            and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+    return {n for n in keyword_parameters(cls) if n not in ("sampler_id", "prompts")}
 
 
 @dataclass

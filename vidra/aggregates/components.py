@@ -27,20 +27,19 @@ reads the answer back.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Optional, Sequence
 
-from ..shared.contracts.documents import Aggregate, Excerpt, Produced, Sightings
-from ..shared.models.base import Embedder, LLM
-from ..shared.models.roles import Models
-from ..shared.reporting import logs
-from ..shared.storage import files
+from vidra.shared.contracts.documents import Aggregate, Excerpt, Produced, Sightings
+from vidra.shared.models.base import Embedder, LLM
+from vidra.shared.models.roles import Models
+from vidra.shared.reporting import logs
+from vidra.shared.storage import files
 from . import available, definitions, kind_of, uses_embedder
-from .core.record import Record
+from .core.record import PathLike, Record
 from .driver import AggregateError, answer, load_input, made_by
 
 #: What `input=` may be: the object, or a file one was written to.
-InputLike = Union[Excerpt, Sightings, str, Path]
-PathLike = Union[str, Path]
+InputLike = Excerpt | Sightings | str | Path
 
 
 def _given(name: str, data: Any) -> Any:
@@ -167,8 +166,7 @@ def entities(*, profile: str, input: InputLike, out: PathLike,
              llm: Optional[LLM] = None, embedder: Optional[Embedder] = None) -> Produced:
     """The same person, object or text linked across chunks, with an account of
     each. The embedder decides who is who; the llm writes the accounts."""
-    name = (profile if profile.startswith(definitions.PROFILE_PREFIX)
-            else definitions.PROFILE_PREFIX + profile)
+    name = definitions.profile_id(profile)
     if name not in available():
         raise AggregateError(f"no link profile {profile!r}; known: "
                              f"{', '.join(sorted(definitions.load()['profiles']))}")

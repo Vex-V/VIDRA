@@ -10,15 +10,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
+from vidra.shared.config.paths import MissingArtifact
 from vidra.shared.contracts.documents import Timeline
-from vidra.shared.storage.files import read
 from vidra.shared.models import embedders as embedders_mod
-from .search import Moment, to_moments
-from vidra.shared.reporting.errors import Refused
 from vidra.shared.models.base import Embedder, require
 from vidra.shared.models.roles import Models, resolve, unpack
+from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage.database import Database, as_database
-from vidra.shared.config.paths import MissingArtifact
+from vidra.shared.storage.files import read
+from .moments import Moment, to_moments
 
 
 def scope_of(video_id: Optional[str | Sequence[str]] = None,
@@ -99,85 +99,90 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
     if not (query or "").strip():
         # An empty query is refused here rather than at the provider.
         raise Refused("a search needs a query; this one is empty")
+    for name, value, least in (("moments", moments, 1), ("candidates", candidates, 1),
+                               ("window", window, 0)):
+        if value < least:
+            raise Refused(f"{name} must be at least {least}, not {value}")
+    if after is not None and before is not None and before <= after:
+        raise Refused(f"before ({before}) must be later than after ({after})")
 
     scope = scope_of(video_id, video_ids)
     built = resolve("embedder", unpack(models, embedder=embedder)["embedder"])
     require("embedder", built)
-    return _search(built, query, scope, moments, sampler, question,
-                   candidates, strategy, chunk_ids, window, after, before,
-                   structured, grids, as_database(database or "supabase"))
-
-
-def _search(built, query: str,
-            scope: Optional[Sequence[str]],
-            moments: int, sampler: Optional[str], question: Optional[str],
-            candidates: int, strategy: Optional[str],
-            chunk_ids: Optional[Sequence[int]], window: int,
-            after: Optional[float], before: Optional[float],
-            structured: Optional[dict[str, Any]],
-            grids: Optional[Mapping[str, str | Path]],
-            database: Database
-            ) -> tuple[list[Moment], list[str]]:
+    target = as_database(database or "supabase")
+    grid = _Grids(target, grids or {})
     notes: list[str] = []
-    # A grid per video in scope: a chunk id means nothing without its video.
-    known = list(scope) if scope else _all_videos(database)
-    spans = {vid: spans_of(vid, (grids or {}).get(vid), database)
-             for vid in known}
-    one = spans.get(known[0], []) if len(known) == 1 else spans
 
-    # A time window and a chunk set are the same filter.
-    wanted: Optional[set[int]] = None
-    if chunk_ids:
-        # An empty list is no constraint, as with `video_ids`.
-        wanted = set(int(c) for c in chunk_ids)
-    if after is not None or before is not None:
-        # A window over several videos is the union of each one's chunks.
-        in_window: set[int] = set()
-        for vid in known:
-            in_window |= set(chunks_in(spans.get(vid, []), after, before))
-        wanted = in_window if wanted is None else (wanted & in_window)
-    if wanted is not None and window:
-        # The neighbours of each matched chunk, `window` either side.
-        longest = max((len(v) for v in spans.values()), default=0)
-        widened = {c + step for c in wanted
-                   for step in range(-window, window + 1)}
-        wanted = {c for c in widened if 0 <= c < longest} or wanted
-    narrowed = sorted(wanted) if wanted is not None else None
+    narrowed = _chunks_wanted(scope, chunk_ids, window, after, before, grid, target)
     if narrowed is not None and not narrowed:
-        return [], notes + ["no chunk matches that window"]
+        return [], ["no chunk matches that window"]
 
     # Some models embed a query differently from a passage.
     vector = embedders_mod.query_vector(built, query)
-    hits = database.search(vector, query, built.key, candidates, scope,
-                           sampler, question, strategy, narrowed, structured)
+    hits = target.search(vector, query, built.key, candidates, scope,
+                         sampler, question, strategy, narrowed, structured)
     if not hits:
         if any(f is not None for f in (sampler, question, strategy,
                                        narrowed, structured, scope)):
             # Nothing matched the filters, as opposed to nothing indexed in this space.
-            return [], notes + [f"nothing matched those filters in {built.key} -- "
-                                "if that embedder never indexed these videos, "
-                                "embed them with it first"]
-        where = ", ".join(scope) if scope else "any video"
+            return [], [f"nothing matched those filters in {built.key} -- "
+                        "if that embedder never indexed these videos, "
+                        "embed them with it first"]
         raise MissingArtifact(
-            f"{where}: nothing indexed for {built.key}. Run embed with this "
+            f"any video: nothing indexed for {built.key}. Run embed with this "
             f"embedder, and a pipeline naming a database, first -- a "
             f"different embedder writes different rows.")
     if any(f is not None for f in (sampler, question, strategy, structured)):
         notes.append("filtering gives up the agreement signal: a chunk "
                      "contributes fewer terms, so scores fall -- to a single "
                      "1/(k+rank) when only one unit per chunk survives")
-    if scope is None or len(known) > 1:
+    if scope is None or len(scope) > 1:
         # Moments from several videos share one ranking.
-        notes.append(f"scope is {len(known)} videos: moments are keyed by "
+        notes.append("scope is several videos: moments are keyed by "
                      "(video_id, chunk_id), since a chunk id only means "
                      "something inside one grid")
-    return to_moments(hits, known[0] if len(known) == 1 else "",
-                      one, moments), notes
+    return to_moments(hits, grid, moments, scope[0] if scope and len(scope) == 1 else ""), notes
 
 
-def _all_videos(database: Database) -> list[str]:
-    """Every video the database has a grid for."""
-    try:
-        return database.video_ids()
-    except Exception:                                    # noqa: BLE001
-        return []
+class _Grids:
+    """Each video's grid, read once and only when something needs it: a time
+    window, or a hit that does not carry its own span."""
+
+    def __init__(self, database: Database, files: Mapping[str, str | Path]) -> None:
+        self.database = database
+        self.files = files
+        self.read: dict[str, list[tuple[float, float]]] = {}
+
+    def __call__(self, video_id: str) -> list[tuple[float, float]]:
+        if video_id not in self.read:
+            self.read[video_id] = spans_of(video_id, self.files.get(video_id),
+                                           self.database)
+        return self.read[video_id]
+
+
+def _chunks_wanted(scope: Optional[Sequence[str]], chunk_ids: Optional[Sequence[int]],
+                   window: int, after: Optional[float], before: Optional[float],
+                   grid: _Grids, database: Database) -> Optional[list[int]]:
+    """The chunk ids a search is narrowed to, or None for no narrowing. A time
+    window and a chunk set are the same filter; over several videos a window is
+    the union of each one's chunks."""
+    timed = after is not None or before is not None
+    if not chunk_ids and not timed:
+        return None
+    # Every grid in scope: a chunk id means nothing without its video. With no
+    # scope that is every video, which a database that cannot list them refuses.
+    known = list(scope) if scope else database.video_ids()
+    # An empty list is no constraint, as with `video_ids`.
+    wanted = {int(c) for c in chunk_ids} if chunk_ids else None
+    if timed:
+        in_window = {c for vid in known for c in chunks_in(grid(vid), after, before)}
+        wanted = in_window if wanted is None else wanted & in_window
+    if window:
+        # The neighbours of each matched chunk, `window` either side.
+        longest = max((len(grid(vid)) for vid in known), default=0)
+        widened = {c + step for c in wanted for step in range(-window, window + 1)}
+        wanted = {c for c in widened if 0 <= c < longest} or wanted
+    return sorted(wanted)
+
+
+__all__ = ["chunks_in", "scope_of", "search", "spans_of"]

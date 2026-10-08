@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ...shared.reporting.errors import Refused
-from ...shared.models.base import require
-from ...shared.models.roles import Models, resolve, unpack
+from vidra.shared.reporting.errors import Refused
+from vidra.shared.models.base import require
+from vidra.shared.models.roles import Models, resolve, unpack
 from .export import LEVELS
 
 
@@ -29,8 +29,8 @@ def search(query: str, level: str = "source", embedder: Optional[Any] = None,
     `video_ids`, `aggregate_id`, `item_id`, `content`, `start_ts`/`end_ts` where
     it has a span, and its ranks.
     """
-    from ...shared.models import embedders
-    from ...shared.storage.database import as_database
+    from vidra.shared.models import embedders
+    from vidra.shared.storage.database import as_database
 
     if level not in LEVELS:
         raise Refused(f"unknown level {level!r}; known: {', '.join(LEVELS)}")

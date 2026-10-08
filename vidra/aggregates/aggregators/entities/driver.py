@@ -14,7 +14,7 @@ import asyncio
 from itertools import combinations
 from typing import Any, Optional
 
-from ....shared.models.base import LLM, Embedder
+from vidra.shared.models.base import LLM, Embedder
 
 from ... import definitions
 from ...core import inputs
@@ -28,8 +28,8 @@ class EntitiesAggregator(DefinitionRunner):
                  embedder: Optional[Embedder] = None) -> None:
         super().__init__(definition_id, llm)
         # The same embedder resolution `embed` uses.
-        from ....shared.models.base import require
-        from ....shared.models.roles import resolve
+        from vidra.shared.models.base import require
+        from vidra.shared.models.roles import resolve
         self.embedder = resolve("embedder", embedder)
         require("embedder", self.embedder)
 
@@ -157,11 +157,4 @@ class EntitiesAggregator(DefinitionRunner):
         return {"account": account, "doubts": doubts}
 
 
-def profile_id(profile: str) -> str:
-    """`people` or `entities:people`, as the aggregator id."""
-    return (profile if profile.startswith(definitions.PROFILE_PREFIX)
-            else definitions.PROFILE_PREFIX + profile)
-
-
-
-__all__ = ["EntitiesAggregator", "profile_id"]
+__all__ = ["EntitiesAggregator"]

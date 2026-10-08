@@ -189,7 +189,16 @@ def check_id(video_id: str) -> str:
     return video_id
 
 
+def layout(folder: str | Path) -> dict[str, Path]:
+    """Every artifact's path inside one video's folder, from the library's own
+    filename table. Includes `store`, the frame directory.
+    """
+    root = Path(folder)
+    return {**{name: root / filename for name, filename in ARTIFACTS.items()},
+            **{name: root / dirname for name, dirname in DIRECTORIES.items()}}
+
+
 __all__ = ["ARTIFACTS", "CHECKOUT", "DIRECTORIES", "FALLBACK_HOME", "OBSERVATIONS",
            "PRODUCED_BY", "RESERVED_PREFIX", "MissingArtifact", "NotACheckout",
            "UnusableVideoId", "check_id", "checkout_root", "configure",
-           "data_root", "out_root", "weights_root"]
+           "data_root", "layout", "out_root", "weights_root"]
