@@ -8,7 +8,9 @@ video_rag's tables are `vr_` (`db/supabase/video_rag.sql`): each
 `write_<artifact>` turns that artifact into rows, and `write_prompts` records
 each question's wording. The aggregates' are `ag_` (`db/supabase/aggregates.sql`):
 `write_source`, `write_answer`, `write_aggregate_units` and `write_definitions`.
-Searches go through the `vr_search` and `ag_search` RPCs. The only module that
+A live run's answers go to `vr_observations` as they arrive
+(`write_observations`). Searches go through the `vr_search`,
+`vr_search_observations` and `ag_search` RPCs. The only module that
 knows a table name; `db.py` is the client and the batched upsert.
 
 `cuts` has no table: boundary evidence is a local cache, so `write_cuts` is
@@ -26,6 +28,8 @@ from .database import Database
 EMBEDDINGS = "vr_embeddings"
 #: The aggregate index: summaries, chapters and entities, by level.
 AGGREGATE_EMBEDDINGS = "ag_embeddings"
+#: A live run's answers: one row per (video, sampler, kept frame, embedder).
+OBSERVATIONS = "vr_observations"
 
 
 class Supabase(Database):
@@ -232,6 +236,24 @@ class Supabase(Database):
         if rows:
             db.upsert("vr_prompts", rows, self.writer())
 
+    def write_observations(self, video_id: str, rows: list[dict[str, Any]]) -> None:
+        """A live run's answers into `vr_observations`, as they arrive. Keyed
+        (video, sampler_id, frame, embedder), so a retried batch overwrites
+        rather than duplicates."""
+        db.upsert_vectors(OBSERVATIONS, [{
+            "video_id": video_id, "sampler_id": r["sampler_id"],
+            "frame_index": r["frame_index"], "embedder": r["embedder"],
+            "chunk_id": r["chunk_id"], "sampler": r.get("sampler", ""),
+            "question": r.get("question", ""), "media_ts": r["media_ts"],
+            "frames": list(r.get("frames") or []),
+            "description": r.get("description", ""),
+            "structured": r.get("structured") or {},
+            "content": r.get("content", ""), "text_hash": r.get("text_hash", ""),
+            "seen_at": r["seen_at"], "answered_at": r["answered_at"],
+            "lag_s": r.get("lag_s"), "gap_before": bool(r.get("gap_before")),
+            "embedding": list(r["vector"]),
+        } for r in rows if r.get("vector")], self.writer())
+
     # ------------------------------------------------------ aggregates writes
     #
     # Rows built by `aggregates.database.export`; these only store them.
@@ -351,6 +373,46 @@ class Supabase(Database):
                  "dense_rank": r.get("vector_rank"), "text_rank": r.get("text_rank")}
                 for r in (response.data or [])]
 
+    def search_observations(self, vector: Sequence[float], query: str,
+                            embedder_key: str, limit: int = 20,
+                            video_ids: Optional[Sequence[str]] = None,
+                            sampler: Optional[str] = None,
+                            question: Optional[str] = None,
+                            strategy: Optional[str] = None,
+                            after: Optional[float] = None,
+                            before: Optional[float] = None,
+                            since: Optional[str] = None,
+                            until: Optional[str] = None,
+                            structured: Optional[dict[str, Any]] = None
+                            ) -> list[dict[str, Any]]:
+        """Ranked live answers from the `vr_search_observations` RPC: the same
+        vector and text rankings as `vr_search`, fused by RRF, one row per
+        kept frame and question."""
+        try:
+            response = self.reader().rpc("vr_search_observations", {
+                "p_embedder": embedder_key,
+                "p_query_vector": list(vector), "p_query_text": query,
+                "p_video_ids": list(video_ids) if video_ids else None,
+                "p_sampler": sampler, "p_question": question,
+                "p_strategy": strategy, "p_after": after, "p_before": before,
+                "p_since": since, "p_until": until,
+                "p_structured": structured or None, "p_limit": limit,
+            }).execute()
+        except Exception as exc:                             # noqa: BLE001
+            raise db.DatabaseUnavailable(
+                f"vr_search_observations failed ({exc}); if it is missing, run "
+                "db/supabase/video_rag.sql") from None
+        return [{
+            "video_id": r["video_id"], "chunk_id": r["chunk_id"],
+            "sampler_id": r["sampler_id"], "sampler": r.get("sampler", ""),
+            "question": r.get("question", ""), "frame_index": r["frame_index"],
+            "media_ts": float(r["media_ts"]), "frames": r.get("frames") or [],
+            "description": r.get("description", ""),
+            "structured": r.get("structured") or {},
+            "seen_at": r.get("seen_at"), "score": float(r.get("score", 0.0)),
+            "dense_rank": r.get("vector_rank"), "text_rank": r.get("text_rank"),
+        } for r in (response.data or [])]
+
     def spans(self, video_id: str) -> list[tuple[float, float]]:
         """One video's grid, from `vr_chunks`."""
         rows = (self.reader().table("vr_chunks")
@@ -365,4 +427,4 @@ class Supabase(Database):
         return [r["video_id"] for r in rows]
 
 
-__all__ = ["AGGREGATE_EMBEDDINGS", "EMBEDDINGS", "Supabase"]
+__all__ = ["AGGREGATE_EMBEDDINGS", "EMBEDDINGS", "OBSERVATIONS", "Supabase"]

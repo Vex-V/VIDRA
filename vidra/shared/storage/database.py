@@ -82,6 +82,14 @@ class Database:
     def write_prompts(self, rows: list[dict[str, Any]]) -> None:
         """The questions a describe run asked, at the version it asked them."""
 
+    def write_observations(self, video_id: str, rows: list[dict[str, Any]]) -> None:
+        """A live run's answers, as they arrive: one row per (kept frame,
+        question), each with `chunk_id`, `sampler_id`, `sampler`, `question`,
+        `frame_index`, `media_ts`, `frames`, `description`, `structured`,
+        `content`, `text_hash`, `seen_at`, `answered_at`, `lag_s`,
+        `gap_before`, `embedder` and `vector`. Called many times per run, with
+        whatever arrived since the last call."""
+
     # ------------------------------------------------------ aggregates writes
     #
     # Rows built by `aggregates.database.export`.
@@ -123,6 +131,23 @@ class Database:
         """Summaries (`source`), chapters (`span`) or entities (`entity`),
         ranked within that one level."""
         raise self._unsupported("search_aggregates")
+
+    def search_observations(self, vector: Sequence[float], query: str,
+                            embedder_key: str, limit: int = 20,
+                            video_ids: Optional[Sequence[str]] = None,
+                            sampler: Optional[str] = None,
+                            question: Optional[str] = None,
+                            strategy: Optional[str] = None,
+                            after: Optional[float] = None,
+                            before: Optional[float] = None,
+                            since: Optional[str] = None,
+                            until: Optional[str] = None,
+                            structured: Optional[dict[str, Any]] = None
+                            ) -> list[dict[str, Any]]:
+        """Ranked live answers, one per kept frame and question. `after` and
+        `before` are media seconds; `since` and `until` are ISO 8601 times the
+        frames arrived."""
+        raise self._unsupported("search_observations")
 
     def spans(self, video_id: str) -> list[tuple[float, float]]:
         """One video's grid, as the database holds it."""

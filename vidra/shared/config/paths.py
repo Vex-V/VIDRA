@@ -119,6 +119,10 @@ ARTIFACTS: dict[str, str] = {
     "embedded": "embedded.json",
 }
 
+#: A live run's answers, one JSON object per line, appended as they arrive.
+#: Not an artifact: it is a log, never read back as one document.
+OBSERVATIONS = "observations.jsonl"
+
 #: Artifacts that are directories rather than documents.
 DIRECTORIES: dict[str, str] = {
     "store": "store",
@@ -185,7 +189,7 @@ def check_id(video_id: str) -> str:
     return video_id
 
 
-__all__ = ["ARTIFACTS", "CHECKOUT", "DIRECTORIES", "FALLBACK_HOME",
+__all__ = ["ARTIFACTS", "CHECKOUT", "DIRECTORIES", "FALLBACK_HOME", "OBSERVATIONS",
            "PRODUCED_BY", "RESERVED_PREFIX", "MissingArtifact", "NotACheckout",
            "UnusableVideoId", "check_id", "checkout_root", "configure",
            "data_root", "out_root", "weights_root"]

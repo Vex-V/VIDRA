@@ -52,6 +52,7 @@ _LAZY: dict[str, tuple[str, Optional[str]]] = {
     "validate": ("offline.driver", "validate"),
     "layout": ("offline.driver", "layout"),
     "search": ("core.retrieve", "search"),
+    "search_observations": ("core.retrieve", "search_observations"),
     "video_rag_live": ("live.driver", "video_rag_live"),
     "live": ("live", None),
     **{name: (f"offline.{name}", None) for name in (
@@ -73,5 +74,5 @@ def __dir__() -> list[str]:
     return sorted([*globals(), *_LAZY])
 
 
-__all__ = ["Options", "Run", "layout", "process", "search", "validate",
-           "video_rag", "video_rag_live"]
+__all__ = ["Options", "Run", "layout", "process", "search",
+           "search_observations", "validate", "video_rag", "video_rag_live"]

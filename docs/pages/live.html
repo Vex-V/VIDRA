@@ -132,12 +132,47 @@ if __name__ == "__main__":
 <tr><th><code>LiveRun</code></th><th>Is</th></tr>
 <tr><td><code>ended</code></td><td><code>ended</code>, <code>stopped</code>, <code>stop_after_s</code> or <code>error</code>.</td></tr>
 <tr><td><code>observations</code>, <code>failed</code>, <code>dropped</code></td><td>Answers written, model calls that failed (the run goes on), frames dropped from the queue.</td></tr>
+<tr><td><code>written</code>, <code>unwritten</code></td><td>Answers that reached <code>database</code> as they arrived, and those that did not.</td></tr>
 <tr><td><code>lag_s</code></td><td>Seconds from arrival to answer: <code>p50</code>, <code>p95</code>, <code>max</code>.</td></tr>
 <tr><td><code>gaps</code></td><td>Where the stream's clock jumped.</td></tr>
 <tr><td><code>duration_s</code>, <code>chunks</code>, <code>frames_decimated</code>, <code>frames_sampled</code></td><td>How much was read.</td></tr>
 <tr><td><code>recording</code>, <code>steps</code>, <code>problems</code></td><td>The recording's path, the documents written, and what failed.</td></tr>
 </table>
 <p>An exception from <code>on_unit</code> (other than <code>StopStream</code>) stops the run, and is raised after the documents are written.</p>
+
+<h2 id="database">Writing to a database as it runs</h2>
+<pre><code class="python">from datetime import datetime, timedelta, timezone
+from vidra import LocalEmbedder, Supabase
+from vidra.video_rag import search_observations, video_rag_live
+
+db = Supabase()
+run = video_rag_live("rtsp://dock-3.local/stream", "data/out", video_id="dock-3",
+                     sampler="clip:safety", embedder=LocalEmbedder(), database=db)
+
+# from anywhere, while it runs: the last ten minutes on dock-3
+hits = search_observations("liquid spilled on the floor", "dock-3",
+                           since=datetime.now(timezone.utc) - timedelta(minutes=10),
+                           embedder=LocalEmbedder(), database=db)
+for h in hits:
+    print(h.seen_at, h.media_ts, h.frame_index, h.description)</code></pre>
+<p>With <code>database=</code>, every answer is sent as it arrives (<code>write_observations</code>): at once when the database keeps up, the backlog in one call when it does not. The video's row is written when the stream opens. A write that fails is counted in <code>run.unwritten</code> and the run goes on; every answer is still in <code>observations.jsonl</code>. When the stream ends, the batch documents follow, so <a href="search.html"><code>search</code></a> finds the run by chunk too.</p>
+<div class="sig">search_observations(query, video_id=None, embedder=None, limit=10, sampler=None,
+                    question=None, strategy=None, after=None, before=None, since=None,
+                    until=None, structured=None, video_ids=None, database=None,
+                    models=None) -&gt; list[FrameHit]</div>
+<p>Ranks individual answers rather than chunks. A <code>Folder</code> reads each run's <code>observations.jsonl</code> in place, so it finds answers from a run still going.</p>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>query</code></td><td>required</td><td>The text to find; empty is refused.</td></tr>
+<tr><td><code>video_id</code>, <code>video_ids</code></td><td>every run</td><td>One id or a list.</td></tr>
+<tr><td><code>embedder</code>, <code>models</code></td><td>OpenAI's</td><td>The embedder the live run used.</td></tr>
+<tr><td><code>database</code></td><td><code>"supabase"</code></td><td>Where to search.</td></tr>
+<tr><td><code>limit</code></td><td><code>10</code></td><td>Answers to return.</td></tr>
+<tr><td><code>after</code>, <code>before</code></td><td>none</td><td>Stream seconds.</td></tr>
+<tr><td><code>since</code>, <code>until</code></td><td>none</td><td>When the frames arrived: a <code>datetime</code> or ISO 8601 (a naive one is UTC).</td></tr>
+<tr><td><code>sampler</code>, <code>question</code>, <code>strategy</code>, <code>structured</code></td><td>none</td><td>As in <a href="search.html#arguments"><code>search</code></a>.</td></tr>
+</table>
+<p>Each <code>FrameHit</code> has <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>seen_at</code>, <code>score</code>, <code>dense_rank</code>, <code>text_rank</code>.</p>
 
 <h2 id="differences">How it differs from <code>video_rag</code></h2>
 <ul>

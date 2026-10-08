@@ -163,6 +163,46 @@ create index if not exists vr_embeddings_structured
   on vidra.vr_embeddings using gin (structured jsonb_path_ops);
 
 -- ===========================================================================
+-- 6b · observations: a live run's answers, one per (kept frame, question),
+--     written as they arrive. No foreign key: the grid is written only when the
+--     stream ends, and like the moment index these cost a paid call each.
+-- ===========================================================================
+create table if not exists vidra.vr_observations (
+  video_id     text not null,
+  sampler_id   text not null,              -- the pairing: "clip:safety"
+  frame_index  bigint not null,            -- the kept frame
+  embedder     text not null,              -- provider:model:dims
+  chunk_id     int  not null,              -- int(media_ts // chunk_s)
+  sampler      text not null,
+  question     text not null,
+  media_ts     double precision not null,  -- seconds from the stream's first frame
+  frames       bigint[] not null default '{}',  -- every frame the model was shown
+  description  text not null,
+  structured   jsonb not null default '{}'::jsonb,
+  content      text not null,              -- what was embedded
+  text_hash    text not null,
+  seen_at      timestamptz not null,       -- when the kept frame arrived
+  answered_at  timestamptz not null,
+  lag_s        real,
+  gap_before   boolean not null default false,
+  embedding    vector not null,            -- any width
+  fts          tsvector generated always as (
+                 to_tsvector('english', content || ' ' || jsonb_path_query_array(
+                   structured, 'strict $.**?(@.type() == "string")')::text)
+               ) stored,
+  primary key (video_id, sampler_id, frame_index, embedder)
+);
+
+create index if not exists vr_observations_seen
+  on vidra.vr_observations (embedder, seen_at);
+create index if not exists vr_observations_video
+  on vidra.vr_observations (video_id, embedder, media_ts);
+create index if not exists vr_observations_fts
+  on vidra.vr_observations using gin (fts);
+create index if not exists vr_observations_structured
+  on vidra.vr_observations using gin (structured jsonb_path_ops);
+
+-- ===========================================================================
 -- 7 · prompts: what each question said, at each version a run asked it under.
 --     Written, never read back; rows are never deleted.
 -- ===========================================================================
@@ -275,6 +315,103 @@ language sql stable as $$
 $$;
 
 -- ===========================================================================
+-- 8b · the same hybrid over a live run's answers: one row per kept frame and
+--     question, no grid join (a running stream has none yet). `p_after` and
+--     `p_before` are media seconds; `p_since` and `p_until` arrival times.
+-- ===========================================================================
+create or replace function vidra.vr_search_observations(
+  p_embedder     text,
+  p_query_vector vector,
+  p_query_text   text default null,
+  p_video_ids    text[] default null,
+  p_sampler      text default null,
+  p_question     text default null,
+  p_strategy     text default null,
+  p_after        double precision default null,
+  p_before       double precision default null,
+  p_since        timestamptz default null,
+  p_until        timestamptz default null,
+  p_structured   jsonb default null,
+  p_limit        int  default 20,
+  p_rrf_k        int  default 60
+)
+returns table (
+  video_id text, chunk_id int, sampler_id text, sampler text, question text,
+  frame_index bigint, media_ts double precision, frames bigint[],
+  description text, structured jsonb, seen_at timestamptz,
+  vector_rank int, text_rank int, score double precision
+)
+language sql stable as $$
+  with candidates as (
+    select o.* from vidra.vr_observations o
+    where o.embedder = p_embedder
+      and (p_video_ids  is null or o.video_id = any(p_video_ids))
+      and (p_sampler    is null or o.sampler_id = p_sampler)
+      and (p_question   is null or o.question = p_question)
+      and (p_strategy   is null or o.sampler = p_strategy)
+      and (p_after      is null or o.media_ts >= p_after)
+      and (p_before     is null or o.media_ts <  p_before)
+      and (p_since      is null or o.seen_at >= p_since)
+      and (p_until      is null or o.seen_at <  p_until)
+      and (p_structured is null or o.structured @> p_structured)
+  ),
+  by_vector as (
+    select c.video_id, c.sampler_id, c.frame_index,
+           row_number() over (order by c.embedding <=> p_query_vector) as rank
+    from candidates c
+    order by c.embedding <=> p_query_vector
+    limit greatest(p_limit * 4, 40)
+  ),
+  query_or as (
+    select nullif(replace(
+             websearch_to_tsquery('english', coalesce(p_query_text, ''))::text,
+             '&', '|'), '')::tsquery as q
+  ),
+  query_terms as (
+    select array_agg(lexeme) as lexemes
+    from unnest(to_tsvector('english', coalesce(p_query_text, '')))
+  ),
+  by_text as (
+    select c.video_id, c.sampler_id, c.frame_index,
+           row_number() over (order by ts_rank_cd(c.fts, o.q) desc) as rank
+    from candidates c
+    cross join query_or o
+    cross join query_terms t
+    where o.q is not null
+      and c.fts @@ o.q
+      and (select count(*) from unnest(c.fts) d
+            where d.lexeme = any(t.lexemes))
+          >= least(2, coalesce(cardinality(t.lexemes), 1))
+    limit greatest(p_limit * 4, 40)
+  ),
+  fused as (
+    select coalesce(v.video_id,    t.video_id)    as video_id,
+           coalesce(v.sampler_id,  t.sampler_id)  as sampler_id,
+           coalesce(v.frame_index, t.frame_index) as frame_index,
+           v.rank as vector_rank, t.rank as text_rank,
+           coalesce(1.0 / (p_rrf_k + v.rank), 0)
+         + coalesce(1.0 / (p_rrf_k + t.rank), 0) as score
+    from by_vector v
+    full outer join by_text t
+      on  v.video_id    = t.video_id
+      and v.sampler_id  = t.sampler_id
+      and v.frame_index = t.frame_index
+  )
+  select f.video_id, c.chunk_id, f.sampler_id, c.sampler, c.question,
+         f.frame_index, c.media_ts, c.frames, c.description, c.structured,
+         c.seen_at, f.vector_rank::int, f.text_rank::int, f.score
+  from fused f
+  join candidates c
+    on  c.video_id    = f.video_id
+    and c.sampler_id  = f.sampler_id
+    and c.frame_index = f.frame_index
+  order by f.score desc,
+           f.vector_rank asc nulls last,
+           f.video_id, f.frame_index, f.sampler_id
+  limit p_limit;
+$$;
+
+-- ===========================================================================
 -- 9 · row level security and grants: read-only for `anon`. Last, so reads are
 --     never denied between enabling RLS and adding its policy.
 -- ===========================================================================
@@ -283,7 +420,8 @@ declare t text;
 begin
   foreach t in array array[
     'vr_videos','vr_timelines','vr_chunks','vr_transcripts','vr_transcript_chunks',
-    'vr_manifests','vr_chunk_samplers','vr_descriptions','vr_embeddings','vr_prompts'
+    'vr_manifests','vr_chunk_samplers','vr_descriptions','vr_embeddings','vr_prompts',
+    'vr_observations'
   ] loop
     execute format('alter table vidra.%I enable row level security', t);
     execute format('drop policy if exists "public read" on vidra.%I', t);
@@ -296,6 +434,10 @@ grant select  on all tables in schema vidra to anon;
 grant all     on all tables in schema vidra to service_role;
 grant execute on function vidra.vr_search(
   text, vector, text, text[], text, text, text, int[], jsonb, int, int)
+  to anon, service_role;
+grant execute on function vidra.vr_search_observations(
+  text, vector, text, text[], text, text, text, double precision,
+  double precision, timestamptz, timestamptz, jsonb, int, int)
   to anon, service_role;
 
 -- ===========================================================================

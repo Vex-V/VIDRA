@@ -265,7 +265,8 @@ COVERAGE: dict[str, list[str]] = {
             "cut.cut", "cut.apply", "cut.load",
             "describe.describe", "describe.answer", "describe.load",
             "embed.embed", "embed.encode", "embed.load", "embed.Unit")],
-    "pages/live.html": ["vidra.video_rag.video_rag_live", "vidra.video_rag.live.send"],
+    "pages/live.html": ["vidra.video_rag.video_rag_live", "vidra.video_rag.live.send",
+                        "vidra.video_rag.search_observations"],
     "pages/samplers.html": [],
     "pages/questions.html": [f"vidra.video_rag.describe.{n}" for n in
                        ("add_question", "question", "questions", "remove_question")],
@@ -288,8 +289,9 @@ COVERAGE: dict[str, list[str]] = {
             "write_media", "write_raw_transcript", "write_cuts", "write_timeline",
             "write_manifest", "write_transcript", "write_descriptions",
             "write_embedded", "write_prompts", "write_source", "write_answer",
-            "write_aggregate_units", "write_definitions", "search",
-            "search_aggregates", "spans", "video_ids", "close", "implements")],
+            "write_aggregate_units", "write_definitions", "write_observations",
+            "search", "search_aggregates", "search_observations", "spans",
+            "video_ids", "close", "implements")],
     "pages/reference.html": [],
 }
 

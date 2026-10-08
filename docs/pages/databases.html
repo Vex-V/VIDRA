@@ -109,6 +109,8 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
   <li><code>aggregates.aggregate(database=...)</code>, <code>workflow</code>: <code>write_source</code> once (if it fails, nothing else runs), <code>write_answer</code> per answer, <code>write_definitions</code> once, then <code>write_aggregate_units</code> once, only if implemented, since it costs an embedding call.</li>
   <li><code>search</code>: <code>video_ids()</code> when no video is named, <code>spans(video_id)</code> per video (unless <code>grids=</code>), then <code>search(...)</code>.</li>
   <li><code>aggregates.search</code>: <code>search_aggregates(...)</code>.</li>
+  <li><code>video_rag_live</code>: <code>write_media</code> when the stream opens (no duration yet); <code>write_observations(video_id, rows)</code> as answers arrive, through one writer (immediately when it keeps up, the backlog in one call when it does not); then the batch documents when the stream ends.</li>
+  <li><code>search_observations</code>: <code>search_observations(...)</code>.</li>
 </ol>
 
 <h2 id="write-hooks">video_rag write hooks</h2>
@@ -124,6 +126,7 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
 <tr><td><code>write_descriptions(video_id, document)</code></td><td><code>descriptions.json</code>: <code>chunks</code> (each with <code>samplers</code>: <code>{answer_id: {sampler, question, description, structured, frame_indexes, ...}}</code>), <code>model</code></td></tr>
 <tr><td><code>write_embedded(video_id, document)</code></td><td><code>embedded.json</code>: <code>embedder</code> (the key) and <code>units</code>, each with <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>content</code>, <code>structured</code>, <code>text_hash</code>, <code>vector</code></td></tr>
 <tr><td><code>write_prompts(rows)</code></td><td>the questions a describe run asked: each <code>name</code>, <code>version</code> (the hash stored with its answers), <code>instruction</code>, <code>shape</code>, <code>summary</code>, <code>builtin</code>, <code>about</code></td></tr>
+<tr><td><code>write_observations(video_id, rows)</code></td><td>a <a href="live.html">live run</a>'s answers, called many times per run: each row one kept frame and question, with <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>content</code>, <code>text_hash</code>, <code>seen_at</code>, <code>answered_at</code>, <code>lag_s</code>, <code>gap_before</code>, <code>embedder</code>, <code>vector</code>. Key a row by <code>(video_id, sampler_id, frame_index, embedder)</code>.</td></tr>
 </table>
 <p>Search needs at least <code>write_timeline</code> and <code>write_embedded</code> (or <code>grids=</code> on <code>search</code> instead of the timeline).</p>
 
@@ -168,6 +171,12 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
 <h3 id="hook-search-aggregates">search_aggregates(...)</h3>
 <div class="sig">search_aggregates(vector, query, embedder_key, level, limit=5, source_ids=None) -&gt; list[dict]</div>
 <p>Rank one <code>level</code>'s units under <code>embedder_key</code>, optionally only <code>source_ids</code>. Return dicts with <code>source_id</code>, <code>video_ids</code>, <code>aggregate_id</code>, <code>item_id</code>, <code>level</code>, <code>content</code>, <code>start_ts</code>, <code>end_ts</code>, <code>score</code>, best first.</p>
+
+<h3 id="hook-search-observations">search_observations(...)</h3>
+<div class="sig">search_observations(vector, query, embedder_key, limit=20, video_ids=None,
+                    sampler=None, question=None, strategy=None, after=None,
+                    before=None, since=None, until=None, structured=None) -&gt; list[dict]</div>
+<p>Rank a live run's rows under <code>embedder_key</code>. The filters are those of <code>search</code>, plus <code>after</code>/<code>before</code> on <code>media_ts</code> and <code>since</code>/<code>until</code> on <code>seen_at</code> (ISO 8601 UTC strings). Return dicts with <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>seen_at</code>, <code>score</code>, <code>dense_rank</code>, <code>text_rank</code>, best first.</p>
 
 <h3 id="hook-close">close()</h3>
 <p>Release connections. Called by <code>with</code>; safe to call twice.</p>

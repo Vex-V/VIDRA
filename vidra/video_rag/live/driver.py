@@ -55,7 +55,7 @@ from .observe import Ask, Tally, observe
 from .source import Source
 
 #: The per-frame answers, one JSON object per line, appended as they arrive.
-OBSERVATIONS = "observations.jsonl"
+OBSERVATIONS = paths.OBSERVATIONS
 #: Where `record=True` keeps the stream, inside the run's folder.
 RECORDING = "recording.ts"
 
@@ -128,6 +128,8 @@ class Observation:
     lag_s: float
     #: True when the stream's clock jumped just before the kept frame.
     gap_before: bool = False
+    #: The embedder's key: the space `vector` is in.
+    embedder: str = ""
 
     @property
     def text_hash(self) -> str:
@@ -143,6 +145,7 @@ class Observation:
                 "content": self.content, "text_hash": self.text_hash,
                 "seen_at": self.seen_at, "answered_at": self.answered_at,
                 "lag_s": round(self.lag_s, 3), "gap_before": self.gap_before,
+                "embedder": self.embedder,
                 "vector": self.vector}
 
 
@@ -159,6 +162,10 @@ class LiveRun:
     frames_sampled: int = 0
     #: Answers written, calls that failed, kept frames dropped from the queue.
     observations: int = 0
+    #: Answers copied to `database` as they arrived, and those that did not get
+    #: there (still in `observations.jsonl`, so they can be sent later).
+    written: int = 0
+    unwritten: int = 0
     failed: int = 0
     dropped: int = 0
     #: Seconds from a kept frame's arrival to its answer: p50, p95, max.
@@ -276,15 +283,18 @@ def process(options: Options,
     with logs.timed("live", video_id) as whole:
         source = Source(options.source, options.open_timeout_s,
                         options.read_timeout_s, record=recording).open()
-        say("live", None)
         run = LiveRun(video_id=video_id, folder=folder, source=options.source,
                       recording=str(recording) if recording else None)
+        # The video exists while it streams: no duration yet, the real one at the end.
+        run.problems += _media(run, options, source, None, _now(), database)
+        say("live", None)
         tally = Tally()
         state = _State(folder / OBSERVATIONS)
         stop = _Stop(options.stop)
         try:
             asyncio.run(_serve(options, video_id, source, built, describer,
-                               embedder, store, tally, state, stop, on_unit))
+                               embedder, store, tally, state, stop, on_unit,
+                               database))
         finally:
             stop.set()
             source.stop()
@@ -331,6 +341,13 @@ class _State:
         self.dropped: list[dict[str, Any]] = []
         self.lags: list[float] = []
         self.questions: set[str] = set()
+        #: Rows waiting for the database, how many reached it, how many did not,
+        #: and the first few reasons -- a database down for a shift would
+        #: otherwise add one message per write.
+        self.unsent: list[dict[str, Any]] = []
+        self.written = 0
+        self.unwritten = 0
+        self.write_errors: list[str] = []
         self.stopped = False
         self.error: Optional[BaseException] = None
 
@@ -379,9 +396,38 @@ class _Inbox:
 async def _serve(options: Options, video_id: str, source: Source, built: list,
                  describer: Any, embedder: Any, store: FrameStore, tally: Tally,
                  state: _State, stop: "_Stop",
-                 on_unit: Optional[Callable[[Observation], None]]) -> None:
+                 on_unit: Optional[Callable[[Observation], None]],
+                 database: Optional[Database] = None) -> None:
     loop = asyncio.get_running_loop()
     inbox = _Inbox(options.queue, state.dropped)
+    # One writer: an answer goes out as soon as it is ready, and when the
+    # database is slower than the answers, what queued meanwhile goes in one call.
+    copying = database is not None and database.implements("write_observations")
+    pending = asyncio.Event()
+    finished = False
+
+    async def writer() -> None:
+        while True:
+            await pending.wait()
+            pending.clear()
+            while state.unsent:
+                batch = list(state.unsent)
+                state.unsent.clear()
+                try:
+                    await asyncio.to_thread(database.write_observations,
+                                            video_id, batch)
+                    state.written += len(batch)
+                except Exception as exc:                     # noqa: BLE001
+                    state.unwritten += len(batch)
+                    if len(state.write_errors) < 20:
+                        message = (f"{len(batch)} observations -> {database.name}: "
+                                   f"{exc}")
+                        state.write_errors.append(message)
+                        logs.logger("live").warning("%s", message, extra={
+                            "component": "live", "event": "export",
+                            "video_id": video_id, "reason": str(exc)[:300]})
+            if finished:
+                return
 
     def post(ask: Ask) -> None:
         loop.call_soon_threadsafe(inbox.put, ask)
@@ -422,8 +468,11 @@ async def _serve(options: Options, video_id: str, source: Source, built: list,
             frame_ts=[f.media_ts for f in images], description=said.summary,
             structured=said.fields, content=content, vector=list(vector),
             seen_at=ask.arrival.seen_at, answered_at=_now(), lag_s=lag,
-            gap_before=ask.arrival.gap_before)
+            gap_before=ask.arrival.gap_before, embedder=embedder.key)
         state.write(observation)
+        if copying:
+            state.unsent.append(observation.as_dict())
+            pending.set()
         state.lags.append(lag)
         state.answers.append({k: v for k, v in observation.as_dict().items()
                               if k != "vector"})
@@ -445,10 +494,15 @@ async def _serve(options: Options, video_id: str, source: Source, built: list,
 
     thread = threading.Thread(target=sample, name=f"live-{video_id}", daemon=True)
     thread.start()
+    copier = asyncio.create_task(writer()) if copying else None
     try:
         await asyncio.gather(*(worker() for _ in range(max(1, describer.concurrency))))
     finally:
         stop.set()
+        if copier is not None:
+            finished = True
+            pending.set()                 # the last answers, then the writer ends
+            await copier
         await asyncio.to_thread(thread.join, 30)
 
 
@@ -472,7 +526,12 @@ def _finish(run: LiveRun, options: Options, source: Source, built: list,
     run.observations = len(state.answers)
     run.failed, run.dropped = len(state.failed), len(state.dropped)
     run.gaps = list(source.gaps)
-    run.problems += state.failed
+    run.problems += state.failed + state.write_errors
+    if state.unwritten > sum(int(m.split(" ", 1)[0]) for m in state.write_errors):
+        run.problems.append(f"... {state.unwritten} observations in all did not reach "
+                            f"{database.name if database else 'the database'}; "
+                            "they are in observations.jsonl")
+    run.written, run.unwritten = state.written, state.unwritten
     if state.lags:
         ordered = sorted(state.lags)
         run.lag_s = {"p50": round(statistics.median(ordered), 3),
@@ -491,11 +550,7 @@ def _finish(run: LiveRun, options: Options, source: Source, built: list,
             run.problems += export(produced, database)
         say(component, produced)
 
-    media = Media(video_id=run.video_id, path=options.source,
-                  container_format=source.container_format, duration_s=duration,
-                  video=source.describe(duration), audio=None,
-                  name=options.name or run.video_id,
-                  recorded_at=source.started_at)
+    media = _media_document(run, options, source, duration, source.started_at)
     step("media", "media", media, live=True)
 
     grid = Timeline(video_id=run.video_id, spans=spans, policy="uniform",
@@ -543,6 +598,27 @@ def _finish(run: LiveRun, options: Options, source: Source, built: list,
                                   grid.fingerprint())
         step("embed", "embedded", document, units=len(unit_list),
              embedder=embedder.key)
+
+
+def _media_document(run: LiveRun, options: Options, source: Source,
+                    duration: Optional[float], recorded_at: Optional[str]) -> Media:
+    return Media(video_id=run.video_id, path=str(options.source),
+                 container_format=source.container_format, duration_s=duration,
+                 video=source.describe(duration), audio=None,
+                 name=options.name or run.video_id, recorded_at=recorded_at)
+
+
+def _media(run: LiveRun, options: Options, source: Source,
+           duration: Optional[float], recorded_at: Optional[str],
+           database: Optional[Database]) -> list[str]:
+    """`media.json`, and its copy, when the stream opens. Returns what failed."""
+    from ..core.export import export
+    document = _media_document(run, options, source, duration, recorded_at)
+    where = files.write(run.folder / paths.ARTIFACTS["media"], document)
+    if database is None:
+        return []
+    return export(Produced(video_id=run.video_id, component="media",
+                           artifacts={"media": where}, stats={"live": True}), database)
 
 
 def _chunks(answers: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:

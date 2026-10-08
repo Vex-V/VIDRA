@@ -4,8 +4,9 @@ server.
     db = Folder("data/out")                      # where video_rag wrote
     search("a man in a red cap", "test", embedder="local", database=db)
 
-Reads `embedded.json` and `timeline.json` where they lie. Dense only: units
-are ranked by cosine in the embedder's space. Of the write hooks it fills in
+Reads `embedded.json` and `timeline.json` where they lie, and a live run's
+`observations.jsonl` while it is still being appended. Dense only: units are
+ranked by cosine in the embedder's space. Of the write hooks it fills in
 only what search reads: `write_timeline` and `write_embedded` copy the file (a
 no-op when the root is the run's own folder), and aggregate vectors are kept
 per embedder in `aggregate_units.json` in the source's folder.
@@ -156,6 +157,63 @@ class Folder(Database):
                                                     "content", "start_ts", "end_ts")},
                  "score": 1.0 / (60 + rank), "dense_rank": rank, "text_rank": None,
                  "similarity": float(similarity[i])}
+                for rank, i in enumerate(order, start=1)]
+
+    def search_observations(self, vector: Sequence[float], query: str,
+                            embedder_key: str, limit: int = 20,
+                            video_ids: Optional[Sequence[str]] = None,
+                            sampler: Optional[str] = None,
+                            question: Optional[str] = None,
+                            strategy: Optional[str] = None,
+                            after: Optional[float] = None,
+                            before: Optional[float] = None,
+                            since: Optional[str] = None,
+                            until: Optional[str] = None,
+                            structured: Optional[dict[str, Any]] = None
+                            ) -> list[dict[str, Any]]:
+        """Dense only: each run's own `observations.jsonl`, read where the live
+        run appends it -- so a run still going is searched up to its last
+        answer."""
+        import json
+        from datetime import datetime
+
+        import numpy as np
+
+        def when(stamp: Optional[str]) -> Optional[datetime]:
+            return datetime.fromisoformat(stamp) if stamp else None
+        lo, hi = when(since), when(until)
+        rows, vectors = [], []
+        scope = video_ids or sorted(
+            d.name for d in self.root.iterdir()
+            if d.is_dir() and (d / paths.OBSERVATIONS).exists())             if self.root.exists() else []
+        for vid in scope:
+            where = self.root / paths.check_id(vid) / paths.OBSERVATIONS
+            if not where.exists():
+                continue
+            with where.open(encoding="utf-8") as lines:
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        o = json.loads(line)
+                    except ValueError:
+                        continue           # a line still being written
+                    seen = when(o.get("seen_at"))
+                    if not o.get("vector")                             or o.get("embedder", embedder_key) != embedder_key                             or (sampler and o["sampler_id"] != sampler)                             or (question and o.get("question") != question)                             or (strategy and o.get("sampler") != strategy)                             or (after is not None and o["media_ts"] < after)                             or (before is not None and o["media_ts"] >= before)                             or (lo is not None and (seen is None or seen < lo))                             or (hi is not None and (seen is None or seen >= hi))                             or (structured and not _matches(o.get("structured") or {},
+                                                            structured)):
+                        continue
+                    rows.append({"video_id": vid, **{k: o.get(k) for k in (
+                        "chunk_id", "sampler_id", "sampler", "question",
+                        "frame_index", "media_ts", "frames", "description",
+                        "structured", "seen_at")}})
+                    vectors.append(o["vector"])
+        if not rows:
+            return []
+        similarity = _cosine(np.asarray(vectors, dtype=np.float32),
+                             np.asarray(vector, dtype=np.float32))
+        order = np.argsort(-similarity, kind="stable")[:limit]
+        return [{**rows[i], "score": 1.0 / (60 + rank), "dense_rank": rank,
+                 "text_rank": None, "similarity": float(similarity[i])}
                 for rank, i in enumerate(order, start=1)]
 
     def spans(self, video_id: str) -> list[tuple[float, float]]:
