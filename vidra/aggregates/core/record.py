@@ -216,16 +216,41 @@ class Record:
             raise RecordError(f"answers[{answer!r}]: name the fields rather than `*`")
         return tuple(fields)
 
+    def _answered_fields(self) -> dict[str, dict[str, Optional[list[str]]]]:
+        """Every question this record's answers are to, with the fields they
+        carry: `{field: [entry keys]}` for a list of objects, None otherwise --
+        the shape `vocabulary()` gives a question it knows."""
+        found: dict[str, dict[str, Optional[list[str]]]] = {}
+        if self.context.descriptions is None:
+            return found
+        for chunk in self.context.descriptions.chunks:
+            for answer_id, block in (chunk.get("samplers") or {}).items():
+                question = block.get("question") or answer_id.split(":")[-1]
+                fields = found.setdefault(question, {})
+                for name, value in (block.get("structured") or {}).items():
+                    entries = ([e for e in value if isinstance(e, dict)]
+                               if isinstance(value, list) else [])
+                    if entries:
+                        fields[name] = list(dict.fromkeys(
+                            [*(fields.get(name) or []), *(k for e in entries for k in e)]))
+                    else:
+                        fields.setdefault(name, None)
+        return found
+
     def _check(self, one: Input) -> None:
         """Every field named exists in its question's shape."""
         import re
 
         from ...video_rag.core import vocabulary
         known = vocabulary()
-        # A sampler this record holds answers from is known, whether or not its
-        # class is registered in this process: the files are what is read.
+        # A sampler or a question this record holds answers from is known,
+        # whether or not this process registered the class or holds the custom
+        # question (another data root, another machine): the files are what is
+        # read. A question's fields are the ones its answers carry.
         known["samplers"] = sorted(set(known["samplers"]) | {
             answer.split(":")[0] for answer in self.answer_ids()})
+        for question, fields in self._answered_fields().items():
+            known["questions"].setdefault(question, fields)
         problems = check([one], known)
         if problems:
             # `yolo:yolo` is how the answer `yolo` is matched; say `yolo`.
