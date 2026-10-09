@@ -45,7 +45,7 @@ aggregates.add_prompt(
 )
 
 aggregates.custom(name="incident_report", input=told,
-                  out=D / "answers" / "incident_report.json", models=models)
+                  out=D / "answers" / "incident_report.json", llm=models.llm)
 report = aggregates.load(D / "answers" / "incident_report.json").payload
 print(report["severity"], "-", report["report"][:200])
 

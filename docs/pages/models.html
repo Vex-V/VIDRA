@@ -70,7 +70,7 @@ models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=Anthropic("claude-haiku-4-5"),
 video_rag("shop.mp4", "data/out", models=models)          # uses vlm and embedder
 aggregates.aggregate(out=..., models=models, summary=...)  # uses llm and embedder
 search("a customer paying", "shop", models=models)         # uses embedder</code></pre>
-<p>Build once and pass everywhere, so indexing and search use the same embedder. Models are checked at construction: right class, a <code>key</code>, and the model's own <code>problems()</code> (e.g. a missing API key). Functions also take <code>vlm=</code>, <code>llm=</code>, <code>embedder=</code>, <code>visual_embedder=</code>; giving a role both ways is refused. <code>models.resolved()</code> shows each role with defaults filled in.</p>
+<p>Build once and pass everywhere, so indexing and search use the same embedder. Models are checked at construction: right class, a <code>key</code>, and the model's own <code>problems()</code> (e.g. a missing API key). Pipelines and searches (<code>video_rag</code>, <code>video_rag_live</code>, <code>workflow</code>, <code>aggregates.aggregate</code>, <code>search</code>, <code>search_observations</code>, <code>aggregates.search</code>) take only <code>models=</code>; None is every default. A single stage takes the model it calls by its role's name: <code>describe(vlm=)</code>, <code>embed(embedder=)</code>, <code>glance(visual_embedder=)</code>, <code>aggregates.summary(llm=)</code>. <code>models.resolved()</code> shows each role with defaults filled in.</p>
 
 <h2 id="ready-made">Ready-made models</h2>
 <table>
@@ -392,7 +392,7 @@ print([(m.chunk_id, round(m.start_ts, 1)) for m in moments])
 d = run.folder
 video = aggregates.record(timeline=d / "timeline.json", descriptions=d / "descriptions.json")
 aggregates.summary(input=video.excerpt(answers={"clip": ["summary"]}),
-                   out=d / "answers" / "summary.json", models=models)
+                   out=d / "answers" / "summary.json", llm=models.llm)
 print(aggregates.load(d / "answers" / "summary.json").stats["model"])   # mine:gpt-5.4-mini</code></pre>
 <!-- /example -->
 <!-- pager -->

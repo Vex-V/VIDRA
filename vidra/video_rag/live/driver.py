@@ -39,8 +39,7 @@ from vidra.shared.contracts.documents import (Descriptions, Manifest, Media,
                                               Produced, Timeline,
                                               fingerprint_of)
 from vidra.shared.contracts.units import render
-from vidra.shared.models.base import Embedder, VLM
-from vidra.shared.models.roles import Models, resolve, unpack
+from vidra.shared.models.roles import Models, given, resolve
 from vidra.shared.reporting import logs
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage import files
@@ -76,8 +75,8 @@ class Options:
     name: Optional[str] = None
     #: A spec string, or a list of strings and Sampler objects.
     sampler: str | Sequence[Any] = "uniform"
-    vlm: Optional[VLM] = None
-    embedder: Optional[Embedder] = None
+    #: The vlm and the embedder; None, or a role left None, is its default.
+    models: Optional[Models] = None
     database: Optional[str | Database] = None
     #: The uniform grid: a chunk is `int(media_ts // chunk_s)`.
     chunk_s: float = 20.0
@@ -210,9 +209,13 @@ def validate(options: Options) -> list[str]:
         problems.append(f"queue must be at least 1, not {options.queue}")
     if options.stop_after_s is not None and options.stop_after_s <= 0:
         problems.append(f"stop_after_s must be positive, not {options.stop_after_s}")
+    try:
+        models = given(options.models)
+    except Refused as exc:
+        return problems + [str(exc)]
     from ..core.checks import run_problems
     problems += run_problems(options.into, options.database, options.sampler,
-                             {"vlm": options.vlm, "embedder": options.embedder})
+                             {"vlm": models.vlm, "embedder": models.embedder})
     return problems
 
 
@@ -239,8 +242,9 @@ def process(options: Options,
     # Everything that can fail is built before the stream is opened.
     built = build_samplers(split_specs(options.sampler),
                            questions=prompts.questions())
-    describer = describe_base.build(options.vlm)
-    embedder = resolve("embedder", options.embedder)
+    models = given(options.models)
+    describer = describe_base.build(models.vlm)
+    embedder = resolve("embedder", models.embedder)
     require("embedder", embedder)
     from vidra.shared.models.embedders.local import LocalEmbedder
     if isinstance(embedder, LocalEmbedder):
@@ -669,12 +673,10 @@ def video_rag_live(source: str | Path,
                    video_id: Optional[str] = None,
                    name: Optional[str] = None,
                    sampler: str | Sequence[Any] = "uniform",
-                   vlm: Optional[VLM] = None,
-                   embedder: Optional[Embedder] = None,
+                   models: Optional[Models] = None,
                    database: Optional[str | Database] = None,
                    on_unit: Optional[Callable[[Observation], None]] = None,
                    on_step: Optional[Callable[..., None]] = None,
-                   models: Optional[Models] = None,
                    chunk_s: float = 20.0,
                    per_second: float = 1.0,
                    context: tuple[int, int] = (0, 0),
@@ -689,13 +691,12 @@ def video_rag_live(source: str | Path,
     Blocks until the stream ends, `stop_after_s` is reached, `stop` is set or
     `on_unit` raises `StopStream`. `on_unit` is called on the event loop for
     every answer, so a slow one delays the answers behind it. Everything lands
-    under `<into>/<video_id>/`.
+    under `<into>/<video_id>/`. `models` carries the vlm and the embedder
+    (None is every default).
     """
-    roles = unpack(models, vlm=vlm, embedder=embedder)
     return process(Options(
         source=source, into=Path(into), video_id=video_id, name=name,
-        sampler=sampler, vlm=roles["vlm"], embedder=roles["embedder"],
-        database=database, chunk_s=chunk_s, per_second=per_second,
+        sampler=sampler, models=models, database=database, chunk_s=chunk_s, per_second=per_second,
         context=context, queue=queue, record=record, stop_after_s=stop_after_s,
         stop=stop, open_timeout_s=open_timeout_s, read_timeout_s=read_timeout_s,
     ), on_unit, on_step)

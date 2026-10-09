@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
 
 from vidra.shared.models import embedders as embedders_mod
-from vidra.shared.models.base import Embedder, require
-from vidra.shared.models.roles import Models, resolve, unpack
+from vidra.shared.models.base import require
+from vidra.shared.models.roles import Models, given, resolve
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage.database import Database, as_database
 from .driver import scope_of
@@ -65,7 +65,6 @@ def _stamp(value: Optional[str | datetime], name: str) -> Optional[str]:
 
 def search_observations(query: str,
                         video_id: Optional[str | Sequence[str]] = None,
-                        embedder: Optional[Embedder] = None,
                         limit: int = 10,
                         sampler: Optional[str] = None,
                         question: Optional[str] = None,
@@ -85,7 +84,7 @@ def search_observations(query: str,
                             since=datetime.now(timezone.utc) - timedelta(minutes=10),
                             models=models, database=db)
 
-    `embedder` (or `models.embedder`) must be the one the live run used.
+    `models.embedder` must be the one the live run used.
     `database` is a built `Database` or a name (`supabase` by default); a
     `Folder` reads each run's `observations.jsonl` in place.
     """
@@ -99,7 +98,7 @@ def search_observations(query: str,
     if lo is not None and hi is not None and hi <= lo:
         raise Refused(f"until ({hi}) must be later than since ({lo})")
 
-    built = resolve("embedder", unpack(models, embedder=embedder)["embedder"])
+    built = resolve("embedder", given(models).embedder)
     require("embedder", built)
     target = as_database(database or "supabase")
     vector = embedders_mod.query_vector(built, query)

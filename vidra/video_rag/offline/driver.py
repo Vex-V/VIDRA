@@ -25,8 +25,7 @@ from typing import Any, Callable, Optional, Sequence
 
 from vidra.shared.config.paths import layout
 from vidra.shared.contracts.documents import Produced
-from vidra.shared.models.base import Embedder, VLM, VisualEmbedder
-from vidra.shared.models.roles import Models, unpack
+from vidra.shared.models.roles import Models, given
 from vidra.shared.reporting import logs
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage.database import DATABASES as _DATABASES
@@ -60,11 +59,9 @@ class Options:
     use_audio: bool = True
     #: What to look at: a spec string, or a list of strings and Sampler objects.
     sampler: str | Sequence[Any] = "uniform"
-    # A model object; None is the default (OpenAI's) when the stage runs.
-    vlm: Optional[VLM] = None                # frames -> answers
-    embedder: Optional[Embedder] = None      # text -> vectors
-    #: Frames -> vectors with no answer (`glance`); None embeds no frames.
-    visual_embedder: Optional[VisualEmbedder] = None
+    #: Who answers: the vlm, the embedder and the visual_embedder (frames ->
+    #: vectors, `glance`). None, or a role left None, is that role's default.
+    models: Optional[Models] = None
     #: Ask the vlm about the kept frames. False with a visual_embedder: no VLM.
     describe: bool = True
     #: Reuse what an earlier run described and embedded when it is still current.
@@ -120,23 +117,27 @@ def validate(options: Options) -> list[str]:
     if options.on_conflict not in ON_CONFLICT:
         problems.append(f"on_conflict must be one of "
                         f"{', '.join(ON_CONFLICT)}")
-    if not options.use_video and options.visual_embedder is not None:
+    try:
+        models = given(options.models)
+    except Refused as exc:
+        return problems + [str(exc)]
+    if not options.use_video and models.visual_embedder is not None:
         problems.append("a visual_embedder embeds frames, which this run is not "
                         "reading")
     if not options.use_video and not options.describe:
         problems.append("describe=False changes nothing when the picture is not read")
-    if options.use_video and not options.describe and options.visual_embedder is None:
+    if options.use_video and not options.describe and models.visual_embedder is None:
         problems.append("describe=False and no visual_embedder: the frames would be "
                         "kept and nothing made of them; pass a visual_embedder")
     from ..core.checks import run_problems
     roles: dict[str, Any] = {}
     # The text embedder only when there may be text: answers or a transcript.
     if options.use_audio or (options.use_video and options.describe):
-        roles["embedder"] = options.embedder
+        roles["embedder"] = models.embedder
     if options.use_video and options.describe:
-        roles["vlm"] = options.vlm
-    if options.use_video and options.visual_embedder is not None:
-        roles["visual_embedder"] = options.visual_embedder
+        roles["vlm"] = models.vlm
+    if options.use_video and models.visual_embedder is not None:
+        roles["visual_embedder"] = models.visual_embedder
     problems += run_problems(options.into, options.database,
                              options.sampler if options.use_video else None, roles)
     return problems
@@ -161,6 +162,7 @@ def _run(options: Options, whole: Any,
         raise Refused("; ".join(problems))
     # Built once, before the first step.
     database = as_database(options.database)
+    models = given(options.models)
 
     say = on_step or (lambda *_: None)
 
@@ -250,16 +252,16 @@ def _run(options: Options, whole: Any,
         step(describe.describe(at["manifest"], at["timeline"], at["store"],
                                at["descriptions"],
                                previous=earlier("descriptions"),
-                               vlm=options.vlm, **ticking))
+                               vlm=models.vlm, **ticking))
     elif use_video:
         run.skipped["describe"] = "describe=False: the frames are embedded, not described"
 
     # 7b · one vector per (chunk, sampler run), from the frames alone
-    if use_video and options.visual_embedder is not None:
+    if use_video and models.visual_embedder is not None:
         say("glance", None)
         step(glance.glance(at["manifest"], at["timeline"], at["store"],
                            at["glances"], previous=earlier("glances"),
-                           visual_embedder=options.visual_embedder, **ticking))
+                           visual_embedder=models.visual_embedder, **ticking))
 
     # 8 · vectors, from whichever documents this run wrote
     if described or use_audio:
@@ -269,7 +271,7 @@ def _run(options: Options, whole: Any,
                          transcript=at["transcript"] if use_audio else None,
                          previous=earlier("embedded"),
                          timeline=at["timeline"],
-                         embedder=options.embedder, **ticking))
+                         embedder=models.embedder, **ticking))
     else:
         run.skipped["embed"] = "no text to embed: nothing described, no soundtrack"
 
@@ -303,31 +305,25 @@ def video_rag(source: str | Path,
               use_video: bool = True,
               use_audio: bool = True,
               sampler: str | Sequence[Any] = "uniform",
-              vlm: Optional[VLM] = None,
-              embedder: Optional[Embedder] = None,
+              models: Optional[Models] = None,
+              describe: bool = True,
               resume: bool = True,
               database: Optional[str | Database] = None,
-              on_step: Optional[Callable[..., None]] = None,
-              models: Optional[Models] = None,
-              visual_embedder: Optional[VisualEmbedder] = None,
-              describe: bool = True) -> Run:
+              on_step: Optional[Callable[..., None]] = None) -> Run:
     """The whole extraction, as keyword arguments: `process` with an `Options`.
 
     Everything lands under `<into>/<video_id>/`. `models` carries the vlm, the
-    embedder and the visual_embedder (or pass them by name); `database` is a
+    embedder and the visual_embedder (None is every default); `database` is a
     name or a built `Database`. `name` and `recorded_at` override the video's
     filename and recording time. A `visual_embedder` also embeds the kept
     frames (`glance`); `describe=False` with one asks no vlm at all.
     """
-    roles = unpack(models, vlm=vlm, embedder=embedder,
-                   visual_embedder=visual_embedder)
     return process(Options(
         source=Path(source), into=Path(into), video_id=video_id,
         on_conflict=on_conflict, name=name, recorded_at=recorded_at,
-        policy=policy, use_video=use_video,
-        use_audio=use_audio, sampler=sampler, vlm=roles["vlm"],
-        embedder=roles["embedder"], visual_embedder=roles["visual_embedder"],
-        describe=describe, resume=resume, database=database,
+        policy=policy, use_video=use_video, use_audio=use_audio,
+        sampler=sampler, models=models, describe=describe, resume=resume,
+        database=database,
     ), on_step)
 
 

@@ -103,5 +103,5 @@ print([(m.chunk_id, round(m.start_ts, 1)) for m in moments])
 d = run.folder
 video = aggregates.record(timeline=d / "timeline.json", descriptions=d / "descriptions.json")
 aggregates.summary(input=video.excerpt(answers={"clip": ["summary"]}),
-                   out=d / "answers" / "summary.json", models=models)
+                   out=d / "answers" / "summary.json", llm=models.llm)
 print(aggregates.load(d / "answers" / "summary.json").stats["model"])   # mine:gpt-5.4-mini

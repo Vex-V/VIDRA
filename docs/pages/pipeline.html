@@ -55,8 +55,8 @@
 
 video_rag(source, into, video_id=None, on_conflict="new", name=None, recorded_at=None,
           policy="uniform", use_video=True, use_audio=True, sampler="uniform",
-          vlm=None, embedder=None, resume=True, database=None, on_step=None,
-          models=None, visual_embedder=None, describe=True) -&gt; Run</div>
+          models=None, describe=True, resume=True, database=None,
+          on_step=None) -&gt; Run</div>
 <pre><code class="python">from vidra import LocalEmbedder, Models, OpenAI, Supabase
 from vidra.video_rag import video_rag
 
@@ -75,20 +75,17 @@ run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
 <tr><td><code>use_video</code></td><td><code>True</code></td><td>Read the picture (<code>video</code> and <code>describe</code>).</td></tr>
 <tr><td><code>use_audio</code></td><td><code>True</code></td><td>Read the soundtrack (<code>audio</code> and <code>cut</code>). Needs <code>vidra[audio]</code>.</td></tr>
 <tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>Which frames to keep and what to ask, e.g. <code>"clip,yolo:overview"</code> (<a href="samplers.html#specs">specs</a>), or a list of names and sampler objects, to set a sampler's settings (<a href="samplers.html#per-call">per call</a>).</td></tr>
-<tr><td><code>vlm</code></td><td><code>OpenAI()</code></td><td>The vision model. Or set it in <code>models</code>.</td></tr>
-<tr><td><code>embedder</code></td><td><code>OpenAIEmbedder()</code></td><td>The embedder; search must use the same one. Or set it in <code>models</code>.</td></tr>
+<tr><td><code>models</code></td><td>every default</td><td>A <a href="models.html#models"><code>Models</code></a>: the <code>vlm</code> (default <code>OpenAI()</code>), the <code>embedder</code> (default <code>OpenAIEmbedder()</code>; search must use the same one), and the <code>visual_embedder</code> (none: frames are not embedded; with one, the kept frames are embedded too, by <a href="stages.html#glance">glance</a>).</td></tr>
 <tr><td><code>resume</code></td><td><code>True</code></td><td>Reuse still-current descriptions and vectors. <code>False</code> redoes them.</td></tr>
 <tr><td><code>database</code></td><td>none</td><td>Where to copy every artifact: a <code>Database</code>, or <code>"supabase"</code> / <code>"folder"</code>.</td></tr>
 <tr><td><code>on_step</code></td><td>none</td><td>Progress callback (<a href="#progress">below</a>).</td></tr>
-<tr><td><code>models</code></td><td>none</td><td>A <code>Models</code> with <code>vlm</code>, <code>embedder</code> and <code>visual_embedder</code>. Giving a role here and as a keyword is refused.</td></tr>
-<tr><td><code>visual_embedder</code></td><td>none</td><td>Also embed the kept frames themselves, with no answer (<a href="stages.html#glance">glance</a>). Or set it in <code>models</code>.</td></tr>
 <tr><td><code>describe</code></td><td><code>True</code></td><td>Ask the vision model about the kept frames. <code>False</code> needs a <code>visual_embedder</code>: no vision model is called and no text is made from the picture.</td></tr>
 </table>
-<pre><code class="python">from vidra import LocalVisualEmbedder
+<pre><code class="python">from vidra import LocalVisualEmbedder, Models
 
 # frames to vectors, no vision model: cheaper, and weaker on actions and text
-video_rag("shop.mp4", "data/out", sampler="clip", use_audio=False,
-          visual_embedder=LocalVisualEmbedder("google/siglip2-base-patch16-224"),
+seen = Models(visual_embedder=LocalVisualEmbedder("google/siglip2-base-patch16-224"))
+video_rag("shop.mp4", "data/out", sampler="clip", use_audio=False, models=seen,
           describe=False)</code></pre>
 <p>The policy, samplers, questions, model keys and database are all checked before the first stage; every problem is raised together as one <code>Refused</code>.</p>
 
@@ -141,7 +138,7 @@ video_rag("shop.mp4", "data/out", sampler="clip", on_step=on_step)</code></pre>
 from vidra.video_rag import Options, process, validate
 
 options = Options(source=Path("shop.mp4"), into=Path("data/out"), policy="scene",
-                  sampler="clip", vlm=OpenAI(), embedder=LocalEmbedder())
+                  sampler="clip", models=Models(vlm=OpenAI(), embedder=LocalEmbedder()))
 problems = validate(options)          # [] when the request is valid; nothing runs
 if not problems:
     run = process(options, on_step=None)</code></pre>
@@ -170,13 +167,12 @@ answers.artifacts                         # {"summary": ".../aggregates/summary.
 answers.stats["skipped"]                  # {"speakers": "...", ...}</code></pre>
 <div class="sig">workflow.Options(source, into=None, video_id=None, name=None, recorded_at=None,
                  policy="uniform", use_video=True, use_audio=True, sampler="uniform",
-                 vlm=None, embedder=None, llm=None, visual_embedder=None, describe=True,
-                 tier="free", database=None, models=None)</div>
+                 describe=True, tier="free", database=None, models=None)</div>
 <p><code>video_rag()</code>'s fields, plus:</p>
 <table class="params">
 <tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>into</code></td><td>the data root's <code>out/</code></td><td>Optional here.</td></tr>
-<tr><td><code>llm</code></td><td><code>OpenAI()</code></td><td>The text model for the <code>llm</code> tier. Or set it in <code>models</code>.</td></tr>
+<tr><td><code>models</code></td><td>every default</td><td>As in <code>video_rag()</code>, and its <code>llm</code> (default <code>OpenAI()</code>) answers the <code>llm</code> tier.</td></tr>
 <tr><td><code>tier</code></td><td><code>"free"</code></td><td>The costliest tier to run: <code>free</code>, <code>local</code> or <code>llm</code>.</td></tr>
 </table>
 <table>

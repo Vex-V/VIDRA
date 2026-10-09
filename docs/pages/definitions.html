@@ -68,7 +68,7 @@ aggregates.add_prompt(
 )
 
 aggregates.custom(name="incident_report", input=seen,
-                  out="data/out/shop/answers/incident_report.json", models=models)</code></pre>
+                  out="data/out/shop/answers/incident_report.json", llm=models.llm)</code></pre>
 <table class="params">
 <tr><th>Argument</th><th>Meaning</th></tr>
 <tr><td><code>name</code></td><td>Lowercase letters, digits, <code>_</code>, <code>-</code>, starting with a letter. Not a built-in, <code>stats</code>, <code>speakers</code>, <code>coverage</code>, <code>ner</code>, <code>sentiment</code> or <code>entities</code>.</td></tr>
@@ -103,7 +103,7 @@ aggregates.add_prompt(
     kind="spans", key="acts")
 
 aggregates.custom(name="acts", input=both, out=D / "answers" / "acts.json",
-                  models=models, max_spans=4)</code></pre>
+                  llm=models.llm, embedder=models.embedder, max_spans=4)</code></pre>
 
 <h3 id="running">Running a prompt</h3>
 <ul>
@@ -129,7 +129,7 @@ aggregates.custom(name="acts", input=both, out=D / "answers" / "acts.json",
 
 tools = video.sightings(profile="tools", answers=["objects"])
 aggregates.entities(profile="tools", input=tools, out=D / "answers" / "tools.json",
-                    models=models)            # answer id: entities:tools</code></pre>
+                    llm=models.llm, embedder=models.embedder)   # answer id: entities:tools</code></pre>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>name</code></td><td>required</td><td>Runs as <code>entities:&lt;name&gt;</code>.</td></tr>
@@ -212,7 +212,7 @@ aggregates.add_prompt(
 )
 
 aggregates.custom(name="incident_report", input=told,
-                  out=D / "answers" / "incident_report.json", models=models)
+                  out=D / "answers" / "incident_report.json", llm=models.llm)
 report = aggregates.load(D / "answers" / "incident_report.json").payload
 print(report["severity"], "-", report["report"][:200])
 

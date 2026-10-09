@@ -35,7 +35,7 @@ from vidra.shared.contracts.documents import (Aggregate, Excerpt, Produced, Sigh
                                           Timeline, Transcript, fingerprint_of)
 from vidra.shared.reporting.errors import VidraError
 from vidra.shared.models.base import Embedder, LLM
-from vidra.shared.models.roles import Models, unpack
+from vidra.shared.models.roles import Models, given
 from vidra.shared.storage import files
 from . import (available, build, definitions, kind_of, settings_of, takes_inputs,
                tier_of, uses_embedder)
@@ -106,21 +106,17 @@ _HOW = {"a record": "aggregates.record(timeline=..., ...)",
 def answer(name: str, data: Any, answer_id: Optional[str] = None,
            llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
            previous: Optional[Aggregate] = None,
-           settings: Optional[Mapping[str, Any]] = None,
-           models: Optional[Models] = None) -> Aggregate:
+           settings: Optional[Mapping[str, Any]] = None) -> Aggregate:
     """One aggregator over one input. Reads and writes nothing.
 
     `data` is a `Record` (or its `Context`) for an aggregator that counts a
     whole record, an `Excerpt` for one that reads text, `Sightings` for a link
     profile. `previous` is an earlier answer, returned unchanged when it read
     the same text under the same version and model. `settings` go to the
-    aggregator's constructor and may override `llm` / `embedder`. `models`
-    carries the llm and the embedder; a role set there and as a keyword is
-    refused. Raises `Inapplicable` when there is nothing to answer.
+    aggregator's constructor and may override `llm` / `embedder` (None is
+    each one's default). Raises `Inapplicable` when there is nothing to answer.
     """
-    roles = unpack(models, llm=llm, embedder=embedder)
-    return _answer(name, data, answer_id, roles["llm"], roles["embedder"],
-                   previous, settings)
+    return _answer(name, data, answer_id, llm, embedder, previous, settings)
 
 
 def _answer(name: str, data: Any, answer_id: Optional[str],
@@ -326,9 +322,13 @@ def plan(settings: Optional[Mapping[str, Mapping[str, Any]]] = None,
 
 
 def validate(settings: Optional[Mapping[str, Mapping[str, Any]]] = None,
-             llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
-             **aggregators: Given) -> list[str]:
+             models: Optional[Models] = None, **aggregators: Given) -> list[str]:
     """Everything that stops a pipeline before it starts, as messages."""
+    try:
+        roles = given(models)
+    except VidraError as exc:
+        return [str(exc)]
+    llm, embedder = roles.llm, roles.embedder
     wanted, problems = plan(settings, **aggregators)
     for planned in wanted:
         name = planned.name
@@ -352,13 +352,13 @@ def validate(settings: Optional[Mapping[str, Mapping[str, Any]]] = None,
     # Each model once: the default is one model, not one per aggregator.
     checked: list[tuple[str, Any]] = []
     for planned in wanted:
-        for role, given, applies in (
+        for role, model, applies in (
                 ("llm", planned.settings.get("llm", llm), tier_of(planned.name) == "llm"),
                 ("embedder", planned.settings.get("embedder", embedder),
                  uses_embedder(planned.name))):
-            if applies and not any(r == role and g is given for r, g in checked):
-                checked.append((role, given))
-                problems += base.problems(role, resolve(role, given))
+            if applies and not any(r == role and g is model for r, g in checked):
+                checked.append((role, model))
+                problems += base.problems(role, resolve(role, model))
     return problems
 
 
@@ -367,7 +367,6 @@ def aggregate(*, out: str | Path,
               database: Optional[Any] = None,
               previous: Optional[str | Path] = None,
               settings: Optional[Mapping[str, Mapping[str, Any]]] = None,
-              llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
               **aggregators: Given) -> Produced:
     """Run the aggregators handed an input, and only those, cheapest first.
 
@@ -379,23 +378,22 @@ def aggregate(*, out: str | Path,
 
     Each answer is a file in `out`, and what it read a file in `out/inputs`.
     `previous` is a folder of earlier answers, each reused while it would be
-    computed identically. `models` carries the llm and the embedder.
+    computed identically. `models` carries the llm and the embedder (None is
+    each one's default).
     `database` (a name or a built `Database`) also gets a copy: the source,
     every answer, its items, and the embedded summary, chapters and entities;
     failed writes are listed in `stats["problems"]`.
     """
-    return _aggregate(out, models, database, previous, settings, llm,
-                      embedder, aggregators)
+    return _aggregate(out, models, database, previous, settings, aggregators)
 
 
 def _aggregate(out: str | Path, models: Optional[Models], database: Optional[Any],
                previous: Optional[str | Path],
                settings: Optional[Mapping[str, Mapping[str, Any]]],
-               llm: Optional[LLM], embedder: Optional[Embedder],
                aggregators: Mapping[str, Given]) -> Produced:
-    roles = unpack(models, llm=llm, embedder=embedder)
-    llm, embedder = roles["llm"], roles["embedder"]
-    problems = validate(settings, llm, embedder, **aggregators)
+    roles = given(models)
+    llm, embedder = roles.llm, roles.embedder
+    problems = validate(settings, models, **aggregators)
     if problems:
         raise AggregateError("; ".join(problems))
     wanted, _ = plan(settings, **aggregators)

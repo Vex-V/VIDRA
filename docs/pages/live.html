@@ -93,8 +93,7 @@ for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
 
 <h2 id="arguments">Arguments</h2>
 <div class="sig">video_rag_live(source, into, video_id=None, name=None, sampler="uniform",
-               vlm=None, embedder=None, database=None, on_unit=None, on_step=None,
-               models=None, chunk_s=20.0, per_second=1.0, context=(0, 0), queue=64,
+               models=None, database=None, on_unit=None, on_step=None, chunk_s=20.0, per_second=1.0, context=(0, 0), queue=64,
                record=False, stop_after_s=None, stop=None, open_timeout_s=60.0,
                read_timeout_s=10.0) -&gt; LiveRun</div>
 <table class="params">
@@ -104,7 +103,7 @@ for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
 <tr><td><code>video_id</code></td><td>file stem, or <code>live-&lt;UTC time&gt;</code></td><td>The run's folder. A folder already in use gets <code>-2</code>, <code>-3</code>.</td></tr>
 <tr><td><code>name</code></td><td>the id</td><td>What to call the video in <code>media.json</code>.</td></tr>
 <tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>The same spec as <code>video_rag</code>: names, or sampler objects with their own settings (<a href="samplers.html#per-call">samplers</a>).</td></tr>
-<tr><td><code>vlm</code>, <code>embedder</code>, <code>models</code></td><td>OpenAI's</td><td>The models, as in <code>video_rag</code>.</td></tr>
+<tr><td><code>models</code></td><td>OpenAI's</td><td>A <code>Models</code> with the <code>vlm</code> and the <code>embedder</code>, as in <code>video_rag</code>.</td></tr>
 <tr><td><code>database</code></td><td>none</td><td>Copy the documents here when the stream ends.</td></tr>
 <tr><td><code>on_unit</code></td><td>none</td><td>Called with each <code>Observation</code>. Raise <code>live.StopStream</code> to end the run.</td></tr>
 <tr><td><code>on_step</code></td><td>none</td><td><code>on_step(component, produced)</code>: once when the stream opens, then per document written.</td></tr>
@@ -154,21 +153,22 @@ for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
 
 <h2 id="database">Writing to a database as it runs</h2>
 <pre><code class="python">from datetime import datetime, timedelta, timezone
-from vidra import LocalEmbedder, Supabase
+from vidra import LocalEmbedder, Models, Supabase
 from vidra.video_rag import search_observations, video_rag_live
 
 db = Supabase()
+models = Models(embedder=LocalEmbedder())
 run = video_rag_live("rtsp://dock-3.local/stream", "data/out", video_id="dock-3",
-                     sampler="clip:safety", embedder=LocalEmbedder(), database=db)
+                     sampler="clip:safety", models=models, database=db)
 
 # from anywhere, while it runs: the last ten minutes on dock-3
 hits = search_observations("liquid spilled on the floor", "dock-3",
                            since=datetime.now(timezone.utc) - timedelta(minutes=10),
-                           embedder=LocalEmbedder(), database=db)
+                           models=models, database=db)
 for h in hits:
     print(h.seen_at, h.media_ts, h.frame_index, h.description)</code></pre>
 <p>With <code>database=</code>, every answer is sent as it arrives (<code>write_observations</code>): at once when the database keeps up, the backlog in one call when it does not. The video's row is written when the stream opens. A write that fails is counted in <code>run.unwritten</code> and the run goes on; every answer is still in <code>observations.jsonl</code>. When the stream ends, the batch documents follow, so <a href="search.html"><code>search</code></a> finds the run by chunk too.</p>
-<div class="sig">search_observations(query, video_id=None, embedder=None, limit=10, sampler=None,
+<div class="sig">search_observations(query, video_id=None, limit=10, sampler=None,
                     question=None, strategy=None, after=None, before=None, since=None,
                     until=None, structured=None, video_ids=None, database=None,
                     models=None) -&gt; list[FrameHit]</div>
@@ -177,7 +177,7 @@ for h in hits:
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>query</code></td><td>required</td><td>The text to find; empty is refused.</td></tr>
 <tr><td><code>video_id</code>, <code>video_ids</code></td><td>every run</td><td>One id or a list.</td></tr>
-<tr><td><code>embedder</code>, <code>models</code></td><td>OpenAI's</td><td>The embedder the live run used.</td></tr>
+<tr><td><code>models</code></td><td>OpenAI's</td><td>Its <code>embedder</code> must be the one the live run used.</td></tr>
 <tr><td><code>database</code></td><td><code>"supabase"</code></td><td>Where to search.</td></tr>
 <tr><td><code>limit</code></td><td><code>10</code></td><td>Answers to return.</td></tr>
 <tr><td><code>after</code>, <code>before</code></td><td>none</td><td>Stream seconds.</td></tr>

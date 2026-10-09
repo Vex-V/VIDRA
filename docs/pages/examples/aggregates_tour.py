@@ -37,13 +37,14 @@ aggregates.ner(input=both, out=out / "ner.json", labels=["person", "product"])
 aggregates.sentiment(input=both, out=out / "sentiment.json")
 
 # llm: model calls.
-aggregates.summary(input=both, out=out / "summary.json", models=models)
-aggregates.chapters(input=both, out=out / "chapters.json", models=models,
+aggregates.summary(input=both, out=out / "summary.json", llm=models.llm)
+aggregates.chapters(input=both, out=out / "chapters.json", llm=models.llm,
+                    embedder=models.embedder,
                     max_spans=5, min_span_s=30)
-aggregates.events(input=seen, out=out / "events.json", models=models)
+aggregates.events(input=seen, out=out / "events.json", llm=models.llm)
 try:
     aggregates.entities(profile="people", input=people, out=out / "people.json",
-                        models=models)
+                        llm=models.llm, embedder=models.embedder)
 except aggregates.Inapplicable as why:      # e.g. nobody was described
     print("entities skipped:", why)
 

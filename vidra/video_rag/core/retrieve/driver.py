@@ -15,8 +15,8 @@ from typing import Any, Mapping, Optional, Sequence
 from vidra.shared.config.paths import MissingArtifact
 from vidra.shared.contracts.documents import Timeline
 from vidra.shared.models import embedders as embedders_mod
-from vidra.shared.models.base import Embedder, VisualEmbedder, require
-from vidra.shared.models.roles import Models, resolve, unpack
+from vidra.shared.models.base import require
+from vidra.shared.models.roles import Models, given, resolve
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage.database import Database, as_database
 from vidra.shared.storage.files import read
@@ -57,7 +57,6 @@ def chunks_in(spans: Sequence[tuple[float, float]],
 
 
 def search(query: str, video_id: Optional[str | Sequence[str]] = None,
-           embedder: Optional[Embedder] = None,
            moments: int = 5,
            sampler: Optional[str] = None,
            candidates: int = 20,
@@ -71,8 +70,7 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
            video_ids: Optional[Sequence[str]] = None,
            grids: Optional[Mapping[str, str | Path]] = None,
            database: Optional[str | Database] = None,
-           models: Optional[Models] = None,
-           visual_embedder: Optional[VisualEmbedder] = None
+           models: Optional[Models] = None
            ) -> tuple[list[Moment], list[str]]:
     """Ranked moments, and notes about the ranking.
 
@@ -96,13 +94,13 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
 
     Read `notes` when `moments` is empty: they say why. A `Moment.score` is a rank
     fusion, not a similarity. `database` is a built `Database` or a name
-    (`supabase` by default). `embedder` (or `models.embedder`) must be the one
-    the index was built with; None is OpenAI's default.
+    (`supabase` by default). `models.embedder` must be the one the index was
+    built with; None is OpenAI's default.
 
-    `visual_embedder` (or `models.visual_embedder`) also searches the frames
-    `glance` embedded, in their own ranking; a chunk both rankings find gets
-    the second-account bonus. Given alone, only the frames are searched -- the
-    default text embedder is used only when no visual embedder is named.
+    `models.visual_embedder` also searches the frames `glance` embedded, in
+    their own ranking; a chunk both rankings find gets the second-account
+    bonus. Given alone, only the frames are searched -- the default text
+    embedder is used only when no visual embedder is named.
     """
     if not (query or "").strip():
         raise Refused("a search needs a query; this one is empty")
@@ -114,10 +112,10 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
         raise Refused(f"before ({before}) must be later than after ({after})")
 
     scope = scope_of(video_id, video_ids)
-    chosen = unpack(models, embedder=embedder, visual_embedder=visual_embedder)
-    visual = chosen["visual_embedder"]
-    built = (resolve("embedder", chosen["embedder"])
-             if chosen["embedder"] is not None or visual is None else None)
+    chosen = given(models)
+    visual = chosen.visual_embedder
+    built = (resolve("embedder", chosen.embedder)
+             if chosen.embedder is not None or visual is None else None)
     spaces: list[tuple[str, Any, Any]] = []
     if built is not None:
         require("embedder", built)

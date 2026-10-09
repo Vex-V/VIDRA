@@ -14,18 +14,17 @@ from typing import Any, Optional, Sequence
 
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.models.base import require
-from vidra.shared.models.roles import Models, resolve, unpack
+from vidra.shared.models.roles import Models, given, resolve
 from .export import LEVELS
 
 
-def search(query: str, level: str = "source", embedder: Optional[Any] = None,
-           limit: int = 5, source_ids: Optional[Sequence[str]] = None,
+def search(query: str, level: str = "source", limit: int = 5,
+           source_ids: Optional[Sequence[str]] = None,
            database: Optional[Any] = None,
            models: Optional[Models] = None) -> list[dict[str, Any]]:
     """Ranked summaries (`source`), chapters (`span`) or entities (`entity`).
 
-    `embedder` must be the one the aggregates were exported with (`models`
-    carries it). `source_ids=None` is every source. Each result has `source_id`,
+    `models.embedder` must be the one the aggregates were exported with. `source_ids=None` is every source. Each result has `source_id`,
     `video_ids`, `aggregate_id`, `item_id`, `content`, `start_ts`/`end_ts` where
     it has a span, and its ranks.
     """
@@ -38,7 +37,7 @@ def search(query: str, level: str = "source", embedder: Optional[Any] = None,
         raise Refused("a search needs a query; this one is empty")
     if limit < 1:
         raise Refused("limit must be 1 or more")
-    built = resolve("embedder", unpack(models, embedder=embedder)["embedder"])
+    built = resolve("embedder", given(models).embedder)
     require("embedder", built)
     # Some models embed a query differently from a passage.
     vector = embedders.query_vector(built, query)

@@ -8,6 +8,9 @@
     aggregates.aggregate(out=out, models=models, summary=video.excerpt(transcript=True))
     search("the reactor", "x", models=models)
 
+Pipelines and searches take `models=` and nothing else; a component takes
+the model it calls by its role's name (`describe(vlm=...)`).
+
 Four roles: the vlm (frames -> answers), the llm (text -> text), the
 embedder (text -> vectors, the same wherever an index is built and read) and
 the visual_embedder (frames -> vectors, beside or instead of the vlm). Each is
@@ -68,22 +71,14 @@ class Models:
         return {role: resolve(role, getattr(self, role)) for role in ROLES}
 
 
-def unpack(models: Optional[Models], **given: Any) -> dict[str, Any]:
-    """The models a call should use, from `models` and its own keywords. A role
-    set in both places is refused; one set in neither stays None.
-    """
+def given(models: Optional[Models]) -> Models:
+    """`models` as a pipeline uses it: None is every role at its default."""
     if models is None:
-        return dict(given)
+        return Models()
     if not isinstance(models, Models):
-        raise Refused(f"models must be a Models, not {type(models).__name__}")
-    out: dict[str, Any] = {}
-    for name, value in given.items():
-        held = getattr(models, name)
-        if value is not None and held is not None:
-            raise Refused(f"{name} is set twice, as {value!r} and on models as "
-                          f"{held!r}; pass it one way")
-        out[name] = value if value is not None else held
-    return out
+        raise Refused(f"models must be a Models, not {type(models).__name__} -- "
+                      f"e.g. Models(vlm=OpenAI())")
+    return models
 
 
-__all__ = ["Models", "default", "resolve", "unpack"]
+__all__ = ["Models", "default", "given", "resolve"]

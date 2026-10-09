@@ -24,8 +24,7 @@ from vidra.shared.config import paths
 from vidra.shared.contracts.documents import Produced
 from .video_rag.offline import driver as video_rag
 from vidra.shared.reporting.errors import Refused
-from vidra.shared.models.base import Embedder, LLM, VLM, VisualEmbedder
-from vidra.shared.models.roles import Models, unpack
+from vidra.shared.models.roles import Models, given
 from vidra.shared.storage.database import Database, as_database
 
 Run = video_rag.Run
@@ -46,35 +45,23 @@ class Options:
     use_video: bool = True
     use_audio: bool = True
     sampler: Any = "uniform"                 # a spec string, or strings and Sampler objects
-    vlm: Optional[VLM] = None                # frames -> answers
-    embedder: Optional[Embedder] = None      # text -> vectors
-    llm: Optional[LLM] = None                # the `llm` aggregate tier
-    visual_embedder: Optional[VisualEmbedder] = None   # frames -> vectors (glance)
     describe: bool = True                    # False: frames embedded, not described
     tier: str = "free"                       # a cost ceiling
     # Also copy every artifact to this database: a name or a built `Database`.
     database: Optional[str | Database] = None
-    #: All the models as one value; a role set here and as a field is refused.
+    #: The vlm, embedder, visual_embedder and llm; None is every default.
     models: Optional[Models] = None
-
-
-def roles(options: Options) -> dict[str, Any]:
-    """The models this run uses, from the fields or `models`."""
-    return unpack(options.models, vlm=options.vlm, embedder=options.embedder,
-                  llm=options.llm, visual_embedder=options.visual_embedder)
 
 
 def extraction(options: Options) -> video_rag.Options:
     """The video_rag half of a run, with `into` resolved."""
-    chosen = roles(options)
     return video_rag.Options(
         source=options.source,
         into=Path(options.into) if options.into else paths.out_root(),
         video_id=options.video_id, name=options.name,
         recorded_at=options.recorded_at, policy=options.policy,
         use_video=options.use_video, use_audio=options.use_audio,
-        sampler=options.sampler, vlm=chosen["vlm"],
-        embedder=chosen["embedder"], visual_embedder=chosen["visual_embedder"],
+        sampler=options.sampler, models=options.models,
         describe=options.describe, database=options.database)
 
 
@@ -118,7 +105,7 @@ def validate(options: Options) -> list[str]:
         return (video_rag.validate(extraction(options))
                 + [f"tier must be one of {', '.join(aggregates.TIERS)}"])
     try:
-        used = roles(options)
+        used = given(options.models)
     except Refused as exc:
         return [str(exc)]
     from vidra.shared.models import base
@@ -127,7 +114,7 @@ def validate(options: Options) -> list[str]:
     problems = video_rag.validate(extraction(options))
     # The embedder is the extraction's, which `video_rag.validate` checked.
     if any(aggregates.tier_of(n) == "llm" for n in names):
-        problems += base.problems("llm", resolve("llm", used["llm"]))
+        problems += base.problems("llm", resolve("llm", used.llm))
     return problems
 
 
@@ -144,7 +131,7 @@ def _process(options: Options,
     if problems:
         raise Refused("; ".join(problems))
     say = on_step or (lambda component, produced: None)
-    used = roles(options)
+    used = given(options.models)
     # Built once and shared by both tiers' exports.
     database = as_database(options.database)
     extract = extraction(options)
@@ -158,7 +145,7 @@ def _process(options: Options,
     answers = video_rag.layout(run.folder)["aggregates"]
     handed, cannot = inputs_for(chosen(options), run.folder)
     produced = aggregates.aggregate(
-        out=answers, previous=answers, llm=used["llm"], embedder=used["embedder"],
+        out=answers, previous=answers, models=used,
         database=database, **{name.replace(":", "_"): data
                               for name, data in handed.items()})
     produced.stats["skipped"] = {**cannot, **produced.stats.get("skipped", {})}

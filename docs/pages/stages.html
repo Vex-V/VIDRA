@@ -306,7 +306,7 @@ index.embedder                    # "local:google/siglip2-base-patch16-224:768:m
 index.units[0]["sampler_id"]      # "clip:image"
 index.units[0]["structured"]      # {"frames": [12, 15, 19]}
 
-search("a forklift by the door", "shop", visual_embedder=seen, database=db)</code></pre>
+search("a forklift by the door", "shop", models=Models(visual_embedder=seen), database=db)</code></pre>
 <p>One unit per chunk and sampler run, holding every frame the run kept there and every <a href="custom-samplers.html#views">view</a> it made, in order; its <code>sampler_id</code> is <code>&lt;run&gt;:image</code>, its <code>question</code> <code>image</code> (no describe question may take that name), its <code>content</code> empty. A unit holding more images than the model's <code>max_images</code> is refused before any image is read. The units are stored under the model's key plus <code>:images</code> (<code>glance.space_of(visual_embedder)</code>), so a model that also embeds text never replaces its own text rows, and a search ranks the two apart, then fuses them by rank (<a href="search.html#arguments">search</a>).</p>
 <p><code>glance.look(manifest, timeline, frames, visual_embedder=None, samplers=None, previous=None, batch=16, on_progress=None)</code> works in memory: <code>frames</code> is a <code>video.FrameStore</code>, <code>previous</code> an earlier document, and it returns the document.</p>
 <p>What it gives up, against <code>describe</code>: no fields to filter on, no text for the lexical half of search or for the aggregates, and image models are weak on actions, negation, counts and writing. Measured on Chernobyl's 10 labelled queries (MRR over 14 chunks, local bge for text):</p>

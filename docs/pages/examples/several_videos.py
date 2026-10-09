@@ -32,5 +32,5 @@ records = [aggregates.record(timeline=run.folder / "timeline.json",
            for run in runs]
 together = aggregates.combine(records=records, out="data/out/combined")
 aggregates.summary(input=together.excerpt(transcript=True, answers={"clip": ["summary"]}),
-                   out="data/out/combined/summary.json", models=models)
+                   out="data/out/combined/summary.json", llm=models.llm)
 print(aggregates.load("data/out/combined/summary.json").payload["summary"])

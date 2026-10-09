@@ -6,7 +6,7 @@ answer file out.
 
     aggregates.stats(record=video, out="answers/stats.json")
     aggregates.ner(input=said, out="answers/ner.json", labels=["person"])
-    aggregates.summary(input=said, out="answers/summary.json", models=models)
+    aggregates.summary(input=said, out="answers/summary.json", llm=OpenAI())
     aggregates.entities(profile="people", input=video.sightings(...), out=...)
 
 What each reads:
@@ -22,7 +22,8 @@ What each reads:
 one they wrote with `out=`. `previous=` is an earlier answer's file, returned
 unchanged when it read the same text with the same definition and model.
 Every function returns the receipt (`Produced`); `aggregates.load(path)`
-reads the answer back.
+reads the answer back. Each takes the models it calls by role (`llm=`,
+`embedder=`), None for the default; `aggregate()` takes a `Models`.
 """
 
 from __future__ import annotations
@@ -32,7 +33,6 @@ from typing import Any, Optional, Sequence
 
 from vidra.shared.contracts.documents import Aggregate, Excerpt, Produced, Sightings
 from vidra.shared.models.base import Embedder, LLM
-from vidra.shared.models.roles import Models
 from vidra.shared.reporting import logs
 from vidra.shared.storage import files
 from . import available, definitions, kind_of, uses_embedder
@@ -57,14 +57,14 @@ def _given(name: str, data: Any) -> Any:
 
 
 def _run(name: str, data: Any, out: PathLike, previous: Optional[PathLike],
-         models: Optional[Models], llm: Optional[LLM] = None,
-         embedder: Optional[Embedder] = None, **settings: Any) -> Produced:
+         llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
+         **settings: Any) -> Produced:
     """`answer` with a write at the end: what every function here is."""
     own = {k: v for k, v in settings.items() if v is not None}
     earlier = files.maybe(previous, Aggregate)
     with logs.timed(name, getattr(data, "video_id", None)) as done:
         document = answer(name, data, llm=llm, embedder=embedder, previous=earlier,
-                          settings=own, models=models)
+                          settings=own)
         where = str(files.write_json(Path(out), document.as_dict()))
         reused = earlier is not None and document is earlier
         done(reused=reused)
@@ -81,20 +81,20 @@ def _run(name: str, data: Any, out: PathLike, previous: Optional[PathLike],
 def stats(*, record: Record, out: PathLike,
           previous: Optional[PathLike] = None) -> Produced:
     """Durations, chunk lengths, words per minute, frames and answers counted."""
-    return _run("stats", record, out, previous, None)
+    return _run("stats", record, out, previous)
 
 
 def coverage(*, record: Record, out: PathLike,
              previous: Optional[PathLike] = None) -> Produced:
     """How many chunks have picture, sound, both or neither."""
-    return _run("coverage", record, out, previous, None)
+    return _run("coverage", record, out, previous)
 
 
 def speakers(*, record: Record, out: PathLike,
              previous: Optional[PathLike] = None) -> Produced:
     """Who spoke, for how long, and how often the voice changed. Needs a
     transcript in the record."""
-    return _run("speakers", record, out, previous, None)
+    return _run("speakers", record, out, previous)
 
 
 # ----------------------------------------------------- local: an excerpt in
@@ -104,7 +104,7 @@ def ner(*, input: InputLike, out: PathLike, previous: Optional[PathLike] = None,
         model: Optional[str] = None) -> Produced:
     """Named entities, and the chunks each appears in. `labels` are what to look
     for; the default is person, organisation, location, product, event, date."""
-    return _run("ner", _given("ner", input), out, previous, None,
+    return _run("ner", _given("ner", input), out, previous,
                 labels=tuple(labels) if labels is not None else None,
                 threshold=threshold, model=model)
 
@@ -113,39 +113,37 @@ def sentiment(*, input: InputLike, out: PathLike,
               previous: Optional[PathLike] = None,
               model: Optional[str] = None) -> Produced:
     """Tone per chunk, overall, and where it turns."""
-    return _run("sentiment", _given("sentiment", input), out, previous, None,
+    return _run("sentiment", _given("sentiment", input), out, previous,
                 model=model)
 
 
 # ----------------------------------------------------- llm: an excerpt in
 
 def summary(*, input: InputLike, out: PathLike,
-            previous: Optional[PathLike] = None, models: Optional[Models] = None,
-            llm: Optional[LLM] = None) -> Produced:
+            previous: Optional[PathLike] = None, llm: Optional[LLM] = None) -> Produced:
     """One account of the whole video: a summary, topics, setting, notable."""
-    return _run("summary", _given("summary", input), out, previous, models, llm)
+    return _run("summary", _given("summary", input), out, previous, llm)
 
 
 def chapters(*, input: InputLike, out: PathLike,
-             previous: Optional[PathLike] = None, models: Optional[Models] = None,
+             previous: Optional[PathLike] = None,
              llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
              max_spans: Optional[int] = None,
              min_span_s: Optional[float] = None) -> Produced:
     """Consecutive chapters: the embedder places the boundaries, the llm names
     them. `max_spans` caps the count; `min_span_s` is the shortest chapter."""
-    return _run("chapters", _given("chapters", input), out, previous, models, llm,
+    return _run("chapters", _given("chapters", input), out, previous, llm,
                 embedder, max_spans=max_spans, min_span_s=min_span_s)
 
 
 def events(*, input: InputLike, out: PathLike,
-           previous: Optional[PathLike] = None, models: Optional[Models] = None,
-           llm: Optional[LLM] = None) -> Produced:
+           previous: Optional[PathLike] = None, llm: Optional[LLM] = None) -> Produced:
     """Discrete things that happened, each tied to the chunk it happened in."""
-    return _run("events", _given("events", input), out, previous, models, llm)
+    return _run("events", _given("events", input), out, previous, llm)
 
 
 def custom(*, name: str, input: InputLike, out: PathLike,
-           previous: Optional[PathLike] = None, models: Optional[Models] = None,
+           previous: Optional[PathLike] = None,
            llm: Optional[LLM] = None, embedder: Optional[Embedder] = None,
            **settings: Any) -> Produced:
     """Run an aggregator defined by a prompt, by name: one added with
@@ -156,14 +154,14 @@ def custom(*, name: str, input: InputLike, out: PathLike,
         hint = (" -- it is a link profile; run it with `entities(profile=...)`"
                 if name in available() and kind_of(name) == "link" else "")
         raise AggregateError(f"no prompt {name!r}{hint}; known: {', '.join(prompts)}")
-    return _run(name, _given(name, input), out, previous, models, llm,
+    return _run(name, _given(name, input), out, previous, llm,
                 embedder if uses_embedder(name) else None, **settings)
 
 
 # ----------------------------------------------------- linking: sightings in
 
 def entities(*, profile: str, input: InputLike, out: PathLike,
-             previous: Optional[PathLike] = None, models: Optional[Models] = None,
+             previous: Optional[PathLike] = None,
              llm: Optional[LLM] = None, embedder: Optional[Embedder] = None) -> Produced:
     """The same person, object or text linked across chunks, with an account of
     each. The embedder decides who is who; the llm writes the accounts."""
@@ -171,12 +169,11 @@ def entities(*, profile: str, input: InputLike, out: PathLike,
     if name not in available():
         raise AggregateError(f"no link profile {profile!r}; known: "
                              f"{', '.join(sorted(definitions.load()['profiles']))}")
-    return _run(name, _given(name, input), out, previous, models, llm, embedder)
+    return _run(name, _given(name, input), out, previous, llm, embedder)
 
 
 def link(entries: Sequence[dict[str, Any]], *, profile: str = "people",
          different: Any = None, threshold: Optional[float] = None,
-         models: Optional[Models] = None,
          embedder: Optional[Embedder] = None) -> Any:
     """Which of `entries` are the same subject, by a link profile's rules: no
     record, no file and no model call but the embedder's. Returns `Linked`,
@@ -190,7 +187,7 @@ def link(entries: Sequence[dict[str, Any]], *, profile: str = "people",
     `attributes` and `different` marks a pair, else a cosine.
     """
     from vidra.shared.models.base import require
-    from vidra.shared.models.roles import resolve, unpack
+    from vidra.shared.models.roles import resolve
     from vidra.shared.reporting.errors import Refused
     from .aggregators.entities.linking import Linked, Mention, link_similar, similarity
 
@@ -219,7 +216,7 @@ def link(entries: Sequence[dict[str, Any]], *, profile: str = "people",
     if not mentions:
         return Linked([], bar, 0, 0)
 
-    chosen = resolve("embedder", unpack(models, embedder=embedder)["embedder"])
+    chosen = resolve("embedder", embedder)
     require("embedder", chosen)
     sim, _ = similarity(mentions, chosen, entry, mask)
     return link_similar(mentions, sim, entry["rule"], entry["mutual"], bar, mask)
