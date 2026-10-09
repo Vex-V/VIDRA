@@ -36,13 +36,23 @@ class ModelDescriber:
     # -- request assembly -----------------------------------------------------
     def parts_for(self, images: Sequence[LoadedFrame],
                   context: dict[str, Any]) -> list[dict[str, Any]]:
-        """The instruction, then every frame labelled with its own timestamp."""
+        """The instruction, then every image labelled with its frame's timestamp;
+        a view also with what it shows. Frames are counted once, however many
+        images were made from them."""
+        position = {index: p for p, index in
+                    enumerate(dict.fromkeys(f.index for f in images), start=1)}
+        total = len(position)
         # The question this call is for, which may differ from the sampler's name.
-        parts = [text(prompts.for_sampler(prompts.question_for(context),
-                                          context, len(images)))]
-        for position, frame in enumerate(images, start=1):
-            parts.append(text(prompts.frame_label(
-                frame.index, frame.media_ts, position, len(images))))
+        instruction = prompts.for_sampler(prompts.question_for(context), context, total)
+        if any(f.label for f in images):
+            instruction += "\n\n" + prompts.VIEWS
+        parts = [text(instruction)]
+        for frame in images:
+            parts.append(text(
+                prompts.view_label(frame.label, frame.media_ts, position[frame.index])
+                if frame.label else
+                prompts.frame_label(frame.index, frame.media_ts,
+                                    position[frame.index], total)))
             parts.append(image(frame.jpeg))
         return parts
 

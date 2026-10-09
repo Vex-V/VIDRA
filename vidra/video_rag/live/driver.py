@@ -439,11 +439,13 @@ async def _serve(options: Options, video_id: str, source: Source, built: list,
                 "reason": str(exc)[:300]})
             return
         lag = time.perf_counter() - ask.arrival.seen
+        # Each frame once, however many views were made from it.
+        shown = {f.index: f.media_ts for f in images}
         observation = Observation(
             video_id=video_id, chunk_id=ask.chunk_id, sampler_id=answer_id,
             sampler=ask.name, question=question, frame_index=ask.frame.index,
-            media_ts=ask.frame.media_ts, frames=[f.index for f in images],
-            frame_ts=[f.media_ts for f in images], description=said.summary,
+            media_ts=ask.frame.media_ts, frames=list(shown),
+            frame_ts=list(shown.values()), description=said.summary,
             structured=said.fields, content=content, vector=list(vector),
             seen_at=ask.arrival.seen_at, answered_at=now(), lag_s=lag,
             gap_before=ask.arrival.gap_before, embedder=embedder.key)
@@ -549,7 +551,9 @@ def _finish(run: LiveRun, options: Options, source: Source, built: list,
                          "context": {"before": before, "after": after},
                          "queue": options.queue}},
         stats={"frames_decimated": tally.decimated, "frames_sampled": tally.sampled,
+               **({"views_made": tally.views} if tally.views else {}),
                "chunks": count, "stored_frames": store.written,
+               **({"stored_views": store.views_written} if store.views_written else {}),
                "stored_mb": round(store.bytes_written / 1024 / 1024, 2),
                "gaps": len(source.gaps), "rewinds": source.rewinds,
                "corrupt_packets": source.corrupt,

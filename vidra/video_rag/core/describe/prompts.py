@@ -120,3 +120,14 @@ def for_sampler(question: str, context: dict[str, Any], frame_count: int) -> str
 def frame_label(index: int, media_ts: float, position: int, total: int) -> str:
     """What precedes each image: its position, timestamp and frame index."""
     return f"Frame {position} of {total} -- t={media_ts:.2f}s (index {index}):"
+
+
+def view_label(label: str, media_ts: float, position: int) -> str:
+    """What precedes an image made from a frame: which frame, and what it shows."""
+    return f"Frame {position}, {label} -- t={media_ts:.2f}s:"
+
+
+#: Added to the instruction when any image is a view made from a frame.
+VIEWS = ("Some images are views made from a frame -- a crop, an enlargement or a "
+         "marked copy -- labelled with what they show. They are the same moment as "
+         "their frame, not further frames: use them for detail.")

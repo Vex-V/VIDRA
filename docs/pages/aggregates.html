@@ -181,6 +181,28 @@ aggregates.entities(profile="people", input=people, out=D / "answers" / "people.
 </table>
 <p>Payload: <code>entities</code>, each with <code>entity_id</code>, <code>label</code>, <code>appearances</code>, <code>chunk_ids</code>, <code>start_ts</code>, <code>end_ts</code>, <code>observed_s</code>, <code>mentions</code> (each sighting), <code>account</code> (the profile's fields, e.g. <code>description</code>, <code>narrative</code>, <code>role</code>) and <code>doubts</code>; also <code>count</code>, <code>linked</code>, <code>narrated</code>, <code>together</code> (pairs seen in the same chunks), and <code>linking</code> (the threshold and how it was set). Stored as <code>entities.people.json</code>. Your own profiles: <a href="definitions.html#profiles">add_profile</a>.</p>
 
+<h3 id="link">link: entries you hold</h3>
+<p>The linking inside <code>entities</code>, on any list of entries, with no record, no file and no LLM: one description per tracked person, for instance, to find the same shopper across cameras.</p>
+<div class="sig">aggregates.link(entries, *, profile="people", different=None, threshold=None, models=None, embedder=None) -&gt; Linked</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>entries</code></td><td>required</td><td>Dicts carrying the profile's identity fields: for <code>people</code>, <code>appearance</code> and <code>clothing</code>, and the fixed attributes when present. An entry with none of the identity fields is refused.</td></tr>
+<tr><td><code>profile</code></td><td><code>"people"</code></td><td>A link profile, built-in or from <code>add_profile</code>; its rules and measures apply.</td></tr>
+<tr><td><code>different</code></td><td>none</td><td>Pairs known to be different subjects: an N x N mask, or a function of two indexes. The threshold is read off these pairs, and no two of them end up in one group.</td></tr>
+<tr><td><code>threshold</code></td><td>the profile's</td><td>A fixed bar instead. Needed when <code>different</code> is not given.</td></tr>
+<tr><td><code>models</code>, <code>embedder</code></td><td><code>OpenAIEmbedder()</code></td><td>The embedder identity is measured in.</td></tr>
+</table>
+<pre><code class="python">entries = [describe.ask(t.crops, "yolo", vlm=vlm).fields["people"][0] for t in tracks]
+
+def overlap(i, j):                     # one person is not in two places at once
+    a, b = tracks[i], tracks[j]
+    return a.start_ts &lt; b.end_ts and b.start_ts &lt; a.end_ts
+
+linked = aggregates.link(entries, different=overlap, embedder=LocalEmbedder())
+for group in linked.groups:            # indexes into entries
+    journey = sorted((tracks[i] for i in group), key=lambda t: t.start_ts)</code></pre>
+<p>It returns an <code>aggregates.Linked</code>: <code>groups</code>, <code>threshold</code> (the bar used), <code>calibration_pairs</code> (the known-different pairs it was read from) and <code>candidate_pairs</code> (the pairs above it). With <code>different</code> marking two entries of one answer, <code>link</code> gives exactly the groups <code>entities</code> does. The threshold is a z-score when the profile measures more than one cosine (as <code>people</code> does) and <code>different</code> marks a pair; otherwise a cosine.</p>
+
 <h3 id="custom">custom</h3>
 <div class="sig">aggregates.custom(*, name, input, out, previous=None, models=None, llm=None, embedder=None, **settings)</div>
 <p>Runs a prompt aggregator by name: one from <code>add_prompt</code>, or a built-in (<code>custom(name="summary")</code> equals <code>summary()</code>). <code>spans</code> prompts also take <code>embedder</code>, <code>max_spans</code>, <code>min_span_s</code>. <a href="definitions.html">Custom prompts</a>.</p>

@@ -188,8 +188,16 @@ grid = boundaries.timeline(m, "scene", cuts=boundaries.detect("scene", media=m))
 <p>Samplers and questions are checked before decoding, and a setting no chosen sampler reads is refused (e.g. <code>every_n</code> without <code>uniform</code>). No readable video stream raises <code>video.UnreadableSource</code>.</p>
 <p><code>video.ingest(media, timeline, sampler="uniform", ..., frames=None, store_scope="sampled", on_progress=None)</code> takes a <code>Media</code> and <code>Timeline</code>, writes frames into <code>frames</code> (a <code>FrameStore</code>, or <code>None</code>), and returns the <code>Manifest</code>. <code>video.load(path)</code> reads one back.</p>
 
+<h3 id="frames">frames</h3>
+<p>The same decode on its own, for a model of your own: a file's frames in order, turned upright. With <code>per_second</code> it keeps the first frame in each slice of that length, as the pipeline does; a frame it skips is never converted to pixels.</p>
+<div class="sig">video.frames(path, per_second=None) -&gt; Iterator[Frame]</div>
+<pre><code class="python">for frame in video.frames("shop.mp4", per_second=2):
+    boxes = detector(frame.image)          # your own model, on BGR pixels
+    print(f"{frame.media_ts:.1f}s", len(boxes))</code></pre>
+<p>Each <code>video.Frame</code> carries <code>index</code> (its position among all decoded frames), <code>media_ts</code> (seconds), <code>pts</code> and <code>image</code>. For a stream, <a href="live.html#frames"><code>live.frames</code></a>.</p>
+
 <h3 id="frame-store">The frame store</h3>
-<p><code>video.FrameStore(root, quality=95, fmt="jpg")</code> writes one JPEG per kept frame into <code>root</code>, named by decode position; a frame kept twice is one file. <code>quality</code> is the JPEG quality.</p>
+<p><code>video.FrameStore(root, quality=95, fmt="jpg")</code> writes one JPEG per kept frame into <code>root</code>, named by decode position; a frame kept twice is one file. <code>quality</code> is the JPEG quality. Images a sampler made from a frame (<a href="custom-samplers.html#views">views</a>, such as <a href="samplers.html#crops">crops</a>) are stored beside it as <code>&lt;index&gt;.&lt;sampler&gt;.&lt;n&gt;.jpg</code>, and <code>prune_store</code> keeps the ones the manifest names.</p>
 <pre><code class="python">store = video.FrameStore(D / "store")
 plan = video.ingest(media.load(D / "media.json"), boundaries.load(D / "timeline.json"),
                     "clip", frames=store)</code></pre>
@@ -210,7 +218,7 @@ plan = video.ingest(media.load(D / "media.json"), boundaries.load(D / "timeline.
                       out="rebuilt", verify=D / "store")
 done["named"], done["written"], done["missing"], done["problems"]
 done["verified"]["identical"]          # True when every frame matches</code></pre>
-<p>No file at <code>video</code> raises <code>video.MissingVideo</code>.</p>
+<p>No file at <code>video</code> raises <code>video.MissingVideo</code>. Views a sampler made are its own code's output and are not rebuilt: <code>done["views_not_rebuilt"]</code> counts them when there are any.</p>
 
 <!-- ============================================================== cut -->
 <h2 id="cut">6. cut</h2>
@@ -225,7 +233,8 @@ spoken.chunks[3]["text"], spoken.chunks[3]["structured"]["speakers"]</code></pre
 <h2 id="describe">7. describe</h2>
 <p>Sends each chunk's frames to the vision model once per sampler and question. Writes <code>descriptions.json</code>. Calls run concurrently, up to the model's <code>concurrency</code>.</p>
 <div class="sig">describe.describe(manifest, timeline, store, out, previous=None, vlm=None, samplers=None,
-                  limit=None, max_output_tokens=None, on_progress=None) -&gt; Produced</div>
+                  limit=None, max_output_tokens=None, on_progress=None,
+                  max_images=None) -&gt; Produced</div>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>manifest</code>, <code>timeline</code></td><td>required</td><td>Paths to <code>manifest.json</code> and <code>timeline.json</code>.</td></tr>
@@ -237,6 +246,7 @@ spoken.chunks[3]["text"], spoken.chunks[3]["structured"]["speakers"]</code></pre
 <tr><td><code>limit</code></td><td>none</td><td>Max new calls this run; a later run with <code>previous=</code> continues. At least 1.</td></tr>
 <tr><td><code>max_output_tokens</code></td><td>2000</td><td>Cap on one answer; too low truncates structured answers. Changing it re-describes everything.</td></tr>
 <tr><td><code>on_progress</code></td><td>none</td><td>Called with a <code>Progress</code> after each call, in completion order.</td></tr>
+<tr><td><code>max_images</code></td><td>none</td><td>Refuse, before any call, a run whose frames and <a href="custom-samplers.html#views">views</a> would send more than this many images in one call.</td></tr>
 </table>
 <pre><code class="python">describe.describe(D / "manifest.json", D / "timeline.json", D / "store",
                   D / "descriptions.json", previous=D / "descriptions.json",
@@ -246,8 +256,28 @@ said = describe.load(D / "descriptions.json")
 answer = said.chunks[0]["samplers"]["clip"]
 answer["description"]           # the prose
 answer["structured"]            # the fields: {"setting": ..., "people": [...], ...}</code></pre>
+<p>A frame whose sampler made views is sent as those views, labelled; <code>frame_count</code> and <code>frame_indexes</code> count each frame once, and <code>image_count</code> appears when views made the images outnumber the frames.</p>
 <p>Frames are read only from the store: a missing store or frame raises <code>describe.StoreUnavailable</code>; an unreachable model, <code>describe.DescriberUnavailable</code>. One failed call fails the run and its new answers are not written.</p>
-<p><code>describe.answer(manifest, timeline, frames, vlm=None, samplers=None, limit=None, existing=None, max_output_tokens=None, on_progress=None)</code> works in memory; <code>existing</code> is an earlier <code>Descriptions</code>. Question functions are on <a href="questions.html">Questions</a>.</p>
+<p><code>describe.answer(manifest, timeline, frames, vlm=None, samplers=None, limit=None, existing=None, max_output_tokens=None, on_progress=None, max_images=None)</code> works in memory; <code>existing</code> is an earlier <code>Descriptions</code>. Question functions are on <a href="questions.html">Questions</a>.</p>
+
+<h3 id="ask">ask: images you hold</h3>
+<p>One question about images you already have, with no manifest, grid or store: crops from a tracker, or a snapshot from a camera alert. Nothing is written and nothing is resumed.</p>
+<div class="sig">describe.ask(images, question, *, timestamps=None, vlm=None, max_output_tokens=None) -&gt; Description</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>images</code></td><td>required</td><td>JPEG or PNG bytes, image file paths, or BGR arrays (what <code>video.frames</code> yields), in time order.</td></tr>
+<tr><td><code>question</code></td><td>required</td><td>Any question in <code>describe.questions()</code>; its shape decides the fields (<a href="questions.html">Questions</a>).</td></tr>
+<tr><td><code>timestamps</code></td><td><code>0, 1, 2, ...</code></td><td>Each image's time in seconds, shown to the model beside it.</td></tr>
+<tr><td><code>vlm</code></td><td><code>OpenAI()</code></td><td>The vision model.</td></tr>
+<tr><td><code>max_output_tokens</code></td><td>2000</td><td>Cap on the answer.</td></tr>
+</table>
+<pre><code class="python">said = describe.ask([crop_1, crop_2, crop_3], "yolo", timestamps=[12.0, 14.5, 17.0],
+                    vlm=OpenAI("gpt-5.4-mini"))
+said.summary                    # the prose
+said.fields["people"]           # [{"appearance": ..., "clothing": ..., "gender": ...}]</code></pre>
+<p>It returns a <code>describe.Description</code>: <code>summary</code> and <code>fields</code>. An unknown question, no images, or a different number of timestamps is refused before the call. <code>describe.ask_async</code> takes the same arguments as a coroutine: use it inside a running event loop, or to ask several at once, up to the model's <code>concurrency</code>.</p>
+<pre><code class="python">answers = await asyncio.gather(*(describe.ask_async(t.crops, "yolo", vlm=vlm)
+                                 for t in tracks))</code></pre>
 
 <!-- ============================================================ embed -->
 <h2 id="embed">8. embed</h2>

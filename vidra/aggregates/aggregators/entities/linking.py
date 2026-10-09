@@ -3,7 +3,8 @@
 Linking embeds what identifies each mention and merges under rules; no
 model decides identity (one writes each entity's account afterwards).
 
-    cannot-link   two entries in one answer are different
+    cannot-link   two entries in one answer are different, or the pairs a
+                  caller marks (`different`)
     calibrated    the threshold is read off those provably different pairs,
                   in this video, with this embedder (`rule`: max or a
                   quantile)
@@ -149,10 +150,19 @@ def _unit(vectors: Any) -> Any:
     return matrix / np.clip(np.linalg.norm(matrix, axis=1, keepdims=True), 1e-12, None)
 
 
-def _different(mentions: Sequence[Mention]) -> Any:
-    """Mask of provably different pairs: two entries of one answer."""
+def _different(mentions: Sequence[Mention], given: Any = None) -> Any:
+    """Mask of provably different pairs: `given`, else two entries of one answer."""
     import numpy as np
 
+    if given is not None:
+        mask = np.asarray(given, dtype=bool)
+        if mask.shape != (len(mentions), len(mentions)):
+            from vidra.shared.reporting.errors import Refused
+            raise Refused(f"different must be {len(mentions)} x {len(mentions)}, "
+                          f"not {' x '.join(map(str, mask.shape))}")
+        mask = mask | mask.T
+        np.fill_diagonal(mask, False)
+        return mask
     answers = [m.answer for m in mentions]
     return np.array([[i != j and answers[i] == answers[j] for j in range(len(answers))]
                      for i in range(len(answers))])
@@ -206,10 +216,11 @@ def attribute_similarity(mentions: Sequence[Mention], profile: dict[str, Any]) -
 
 
 def similarity(mentions: Sequence[Mention], embedder: Any,
-               profile: dict[str, Any]) -> tuple[Any, bool]:
+               profile: dict[str, Any], different: Any = None) -> tuple[Any, bool]:
     """The profile's measure of how alike two mentions are, and whether it is
     standardised. Without `weights` or `attributes`, the cosine over the
-    signature.
+    signature. `different` is an N x N mask of pairs known to be different;
+    by default, two entries of one answer.
     """
     import numpy as np
 
@@ -227,7 +238,7 @@ def similarity(mentions: Sequence[Mention], embedder: Any,
         text = unit @ unit.T
     if not weights and not attributes:
         return text, False
-    different = _different(mentions)
+    different = _different(mentions, different)
     if not different.any():
         # Nothing to standardise against; `link` will not link either.
         return text, False
@@ -249,9 +260,12 @@ def link(mentions: Sequence[Mention], vectors: Sequence[Sequence[float]],
 
 
 def link_similar(mentions: Sequence[Mention], sim: Any, rule: str = "max",
-                 mutual: bool = True, threshold: Optional[float] = None) -> Linked:
+                 mutual: bool = True, threshold: Optional[float] = None,
+                 different: Any = None) -> Linked:
     """Group mentions of the same subject, given how alike each pair is.
-    `threshold` fixes the bar instead of reading it off the video.
+    `threshold` fixes the bar instead of reading it off the video. `different`
+    is an N x N mask of pairs known to be different; by default, two entries
+    of one answer.
     """
     import numpy as np
 
@@ -263,35 +277,35 @@ def link_similar(mentions: Sequence[Mention], sim: Any, rule: str = "max",
         return Linked([], threshold, 0, 0)
 
     sim = np.asarray(sim, dtype=float)
-    answers = [m.answer for m in mentions]
+    apart = _different(mentions, different)
 
     # Calibrated over the whole video and every field.
-    different = [sim[i, j] for i in range(count) for j in range(i + 1, count)
-                 if answers[i] == answers[j]]
+    known = [sim[i, j] for i in range(count) for j in range(i + 1, count)
+             if apart[i, j]]
     if threshold is None:
-        if not different:
+        if not known:
             # No provably different pair to calibrate on: no links.
             return Linked([[i] for i in range(count)], None, 0, 0)
-        threshold = float(max(different) if rule == "max"
-                          else np.quantile(different, {"q95": 0.95, "q90": 0.90}[rule]))
+        threshold = float(max(known) if rule == "max"
+                          else np.quantile(known, {"q95": 0.95, "q90": 0.90}[rule]))
 
     by_field: dict[str, list[int]] = {}
     for i, mention in enumerate(mentions):
         by_field.setdefault(mention.field, []).append(i)
-    in_answer: dict[tuple[int, str, str], list[int]] = {}
-    for i, answer in enumerate(answers):
-        in_answer.setdefault(answer, []).append(i)
+    # `j` and every mention known to differ from it: the candidates `i` could be
+    # instead of `j`. With the default mask, the entries of `j`'s answer.
+    rivals = [sorted([j, *np.flatnonzero(apart[j]).tolist()]) for j in range(count)]
 
-    def best(i: int, answer: tuple[int, str, str]) -> int:
-        return max(in_answer[answer], key=lambda k: sim[i, k])
+    def best(i: int, j: int) -> int:
+        return max(rivals[j], key=lambda k: sim[i, k])
 
     pairs = []
     for indices in by_field.values():
         for position, i in enumerate(indices):
             for j in indices[position + 1:]:
-                if answers[i] == answers[j] or sim[i, j] <= threshold:
+                if apart[i, j] or sim[i, j] <= threshold:
                     continue
-                if mutual and (best(i, answers[j]) != j or best(j, answers[i]) != i):
+                if mutual and (best(i, j) != j or best(j, i) != i):
                     continue
                 pairs.append((float(sim[i, j]), i, j))
 
@@ -301,7 +315,7 @@ def link_similar(mentions: Sequence[Mention], sim: Any, rule: str = "max",
         a, b = group_of[i], group_of[j]
         if a == b:
             continue
-        if {answers[k] for k in members[a]} & {answers[k] for k in members[b]}:
+        if apart[np.ix_(members[a], members[b])].any():
             continue
         members[a].extend(members[b])
         for k in members[b]:
@@ -309,7 +323,7 @@ def link_similar(mentions: Sequence[Mention], sim: Any, rule: str = "max",
         del members[b]
 
     groups = sorted((sorted(g) for g in members.values()), key=lambda g: g[0])
-    return Linked(groups, float(threshold), len(different), len(pairs))
+    return Linked(groups, float(threshold), len(known), len(pairs))
 
 
 __all__ = ["Linked", "Mention", "Mentions", "RULES", "attribute_similarity", "link",

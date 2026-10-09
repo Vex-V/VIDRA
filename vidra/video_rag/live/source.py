@@ -226,4 +226,27 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
-__all__ = ["Arrival", "Source", "StreamUnavailable", "now"]
+def frames(url: str, per_second: Optional[float] = None,
+           open_timeout_s: Optional[float] = 60.0,
+           read_timeout_s: Optional[float] = 10.0,
+           gap_s: float = 2.0) -> Iterator[tuple[Frame, Arrival]]:
+    """A stream's frames as they arrive, each with its `Arrival`, until the
+    sender stops, `read_timeout_s` passes with no packet, or the loop breaks.
+
+    The clock and its rules are `video_rag_live`'s: `media_ts` from the first
+    frame, a jump of more than `gap_s` marked on the next frame's `Arrival`, a
+    packet the decoder rejects skipped. `per_second` keeps the first frame in
+    each slice of that length; a file is read as fast as it decodes. The stream
+    opens on the first `next()`, and closes when the loop ends.
+    """
+    from ..core.sampling.decimate import Decimator
+
+    keep = Decimator(per_second).accepts if per_second is not None else (lambda ts: True)
+    source = Source(url, open_timeout_s, read_timeout_s, gap_s).open()
+    try:
+        yield from source.frames(keep)
+    finally:
+        source.close()
+
+
+__all__ = ["Arrival", "Source", "StreamUnavailable", "frames", "now"]

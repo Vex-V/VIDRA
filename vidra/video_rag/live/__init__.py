@@ -2,7 +2,8 @@
 sampled, and `offline`'s documents when the stream ends.
 
     driver     Options · validate · process · video_rag_live() · Observation
-    source     a stream opened with PyAV, on a clock starting at its first frame
+    source     a stream opened with PyAV, on a clock starting at its first frame;
+               `frames`: that stream's frames, for code of your own
     observe    the sampling thread: decimate, chunk, samplers, context frames
     sender     `send`: push a file to a port at real-time pace, for testing
 
@@ -17,7 +18,8 @@ from typing import Any
 _LAZY = {name: ("driver", name) for name in (
     "LiveRun", "Observation", "Options", "StopStream", "process", "validate",
     "video_rag_live")}
-_LAZY.update({"send": ("sender", "send"), "StreamUnavailable": ("source", "StreamUnavailable")})
+_LAZY.update({"send": ("sender", "send"), "StreamUnavailable": ("source", "StreamUnavailable"),
+              "frames": ("source", "frames"), "Arrival": ("source", "Arrival")})
 
 
 def __getattr__(name: str) -> Any:

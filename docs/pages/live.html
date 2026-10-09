@@ -81,6 +81,16 @@ if __name__ == "__main__":
 <p><code>send(path, url, speed=1.0, connect_timeout_s=120.0, format=None)</code> copies the picture without re-encoding, into MPEG-TS for H.264, HEVC and MPEG-2/4 and into Matroska for the rest (VP9, AV1); <code>format=</code> overrides. A codec this PyAV cannot write (Theora) is refused: re-encode it first. A file path is also a valid <code>source</code>: it is then read as fast as it decodes, which keeps exactly the frames <a href="pipeline.html"><code>video_rag</code></a> keeps with the uniform policy.</p>
 <p>Sources are anything PyAV opens: <code>tcp://host:port?listen=1</code>, <code>udp://</code>, <code>rtmp://</code>, an <code>rtsp://</code> camera. The PyAV wheels have no SRT.</p>
 
+<h2 id="frames">Frames only</h2>
+<p>To run a model of your own on a stream, such as a person tracker, read its frames with the clock and rules <code>video_rag_live</code> uses, without samplers or a model call:</p>
+<div class="sig">live.frames(url, per_second=None, open_timeout_s=60.0, read_timeout_s=10.0, gap_s=2.0) -&gt; Iterator[tuple[Frame, Arrival]]</div>
+<pre><code class="python">from vidra.video_rag import live
+
+for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
+    tracks = tracker.update(frame.image)       # BGR pixels
+    log(arrival.seen_at, frame.media_ts, tracks)</code></pre>
+<p>Each frame is a <a href="stages.html#frames"><code>video.Frame</code></a>, with <code>media_ts</code> counted from the first frame. Each <code>live.Arrival</code> carries <code>seen</code> (<code>time.perf_counter()</code> at decode), <code>seen_at</code> (UTC, ISO 8601) and <code>gap_before</code> (the clock jumped more than <code>gap_s</code> just before this frame). A packet the decoder rejects is skipped. The stream opens when the first frame is asked for and closes when the loop ends, <code>break</code> included; it ends by itself when the sender stops or nothing arrives for <code>read_timeout_s</code>. A file is read as fast as it decodes.</p>
+
 <h2 id="arguments">Arguments</h2>
 <div class="sig">video_rag_live(source, into, video_id=None, name=None, sampler="uniform",
                vlm=None, embedder=None, database=None, on_unit=None, on_step=None,
@@ -114,7 +124,7 @@ if __name__ == "__main__":
 <tr><th><code>Observation</code></th><th>Is</th></tr>
 <tr><td><code>chunk_id</code>, <code>media_ts</code>, <code>frame_index</code></td><td>Where the kept frame is.</td></tr>
 <tr><td><code>sampler_id</code>, <code>sampler</code>, <code>question</code></td><td>Which answer this is, as in <code>video_rag</code>.</td></tr>
-<tr><td><code>frames</code>, <code>frame_ts</code></td><td>Every frame the model was shown, in time order.</td></tr>
+<tr><td><code>frames</code>, <code>frame_ts</code></td><td>Every frame the model was shown, in time order, each once: <a href="custom-samplers.html#views">views</a> made from a frame are not listed.</td></tr>
 <tr><td><code>description</code>, <code>structured</code></td><td>The answer.</td></tr>
 <tr><td><code>content</code>, <code>vector</code></td><td>What was embedded, and its vector.</td></tr>
 <tr><td><code>seen_at</code>, <code>answered_at</code>, <code>lag_s</code></td><td>When the frame arrived and when its answer was ready (UTC), and the seconds between.</td></tr>

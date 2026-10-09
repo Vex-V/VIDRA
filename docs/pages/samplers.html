@@ -134,6 +134,19 @@ video_rag("x.mp4", "data/out",
                    "yolo"])</code></pre>
 <p><code>samplers.build(name, **settings)</code> takes the settings that sampler's class takes, plus <code>min_interval_s</code>, <code>max_per_chunk</code> and <code>prompts</code> (its questions; none means its own). <code>samplers.available()</code> lists every name. Each run uses its own copy of the object, so one object can serve several runs or cameras without their per-chunk state mixing. One sampler is one run: naming <code>clip</code> and passing a <code>clip</code> object in one spec is refused, so put every question on the object.</p>
 
+<h3 id="crops">Crops</h3>
+<p><code>yolo</code> and <code>objects</code> can show the model each kept frame's largest detections, cut out and enlarged, beside the frame or instead of it. The detections are the ones the sampler already made to decide to keep the frame, so crops cost no extra detection; each crop is one more image in the model call. Enlarging adds no detail: it stops a person a few dozen pixels tall from shrinking further when the model's API scales the whole frame down.</p>
+<table class="params">
+<tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>send</code></td><td><code>"frame"</code></td><td>What the model is shown for a kept frame: <code>"frame"</code> the frame alone, <code>"both"</code> the frame then its crops, <code>"crops"</code> the crops alone. A kept frame with nothing detected is shown as itself.</td></tr>
+<tr><td><code>crops</code></td><td><code>3</code></td><td>At most this many detections, the largest, ordered left to right.</td></tr>
+<tr><td><code>crop_size</code></td><td>none</td><td>Enlarge a crop until its shorter side is this many pixels, at most 4 times; never shrink. None keeps the size it was cut at.</td></tr>
+<tr><td><code>crop_margin</code></td><td><code>0.1</code></td><td>Context around each box, as a fraction of its width and height.</td></tr>
+</table>
+<pre><code class="python">video_rag("site.mp4", "data/out",
+          sampler=[samplers.build("yolo", send="both", crops=3, crop_size=512)])</code></pre>
+<p>With <code>"both"</code> the model sees "Frame 2 of 4", then "Frame 2, person 1 of 3 from the left, enlarged 3.1x", and so on; with <code>"crops"</code> only the second kind. <code>"both"</code> keeps where each person stands and what is around them, at the cost of showing everyone twice; <code>"crops"</code> is cheaper and loses that context. Each crop's box, class, confidence and scale are recorded in the manifest, and the crop is stored beside its frame. <code>yolo</code>'s <code>crop_pad</code> is a different setting: the padding of the crops CLIP compares to decide what to keep. A sampler of your own can show the model any images it makes: <a href="custom-samplers.html#views">views</a>.</p>
+
 <h3 id="thresholds">Choosing a threshold</h3>
 <p>Thresholds don't transfer between videos. <code>clip</code> at 0.96 on three similar shop videos:</p>
 <table>

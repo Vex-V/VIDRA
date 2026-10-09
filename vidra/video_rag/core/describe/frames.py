@@ -1,7 +1,8 @@
 """Reading frames back out of the store ingest wrote.
 
 There is no fallback to seeking the video: a missing store, or a frame it
-lacks, raises. A short frame list is never returned.
+lacks, raises. A short frame list is never returned. A frame whose sampler
+recorded views is read as those views, in order.
 """
 
 from __future__ import annotations
@@ -36,6 +37,9 @@ class LoadedFrame:
     index: int
     media_ts: float
     jpeg: bytes
+    #: What a view made from the frame shows ("person 1 of 3, enlarged"); empty
+    #: for the frame itself.
+    label: str = ""
 
     @property
     def size(self) -> int:
@@ -62,16 +66,29 @@ class FrameSource:
         self._cache[index] = data
         return data
 
-    def images_for(self, chunk_id: int, sampler_id: str) -> list[LoadedFrame]:
-        records = self.manifest.frames_of(chunk_id, sampler_id)
-        if not records:
-            return []
-        loaded = [LoadedFrame(r["index"], r["media_ts"], self._read(r["index"]))
-                  for r in records]
-        if len(loaded) != len(records):        # unreachable; the read raises
+    def _read_view(self, index: int, sampler_id: str, number: int) -> bytes:
+        try:
+            return self.frames.read_view(index, sampler_id, number)
+        except KeyError:
             raise StoreUnavailable(
-                f"chunk {chunk_id}/{sampler_id}: {len(loaded)} of "
-                f"{len(records)} frames available")
+                f"view {number} of frame {index} ({sampler_id}) is missing, but the "
+                f"manifest names it. Re-run ingest: views are made by the sampler "
+                f"and recreate does not rebuild them.") from None
+
+    def images_for(self, chunk_id: int, sampler_id: str) -> list[LoadedFrame]:
+        """Every image of one sampler run in one chunk, in order: each kept frame,
+        or the views its sampler recorded for it."""
+        loaded: list[LoadedFrame] = []
+        for r in self.manifest.frames_of(chunk_id, sampler_id):
+            for view in r.get("views") or [{"frame": True}]:
+                if view.get("frame"):
+                    loaded.append(LoadedFrame(r["index"], r["media_ts"],
+                                              self._read(r["index"])))
+                else:
+                    loaded.append(LoadedFrame(
+                        r["index"], r["media_ts"],
+                        self._read_view(r["index"], sampler_id, view["view"]),
+                        view["label"]))
         return loaded
 
     def close(self) -> None:

@@ -39,7 +39,8 @@ _LAZY = {"Models": "vidra.shared.models.roles",
          "Folder": "vidra.shared.storage.folder",
          # The base of a sampler of your own; `vidra.video_rag.samplers` builds
          # and registers them.
-         "Sampler": "vidra.video_rag.core.sampling.samplers.base"}
+         "Sampler": "vidra.video_rag.core.sampling.samplers.base",
+         "View": "vidra.video_rag.core.sampling.samplers.base"}
 
 
 def __getattr__(name: str):
@@ -61,6 +62,6 @@ def __getattr__(name: str):
 
 __all__ = ["Anthropic", "Chat", "Database", "Embedder", "Folder", "HashEmbedder", "LLM",
            "LocalEmbedder", "ModelUnavailable", "Models", "OpenAI", "OpenAIEmbedder",
-           "Sampler", "Stub", "Supabase", "Unavailable", "VLM", "VidraError", "__version__",
+           "Sampler", "Stub", "Supabase", "Unavailable", "VLM", "VidraError", "View", "__version__",
            "configure"]
 

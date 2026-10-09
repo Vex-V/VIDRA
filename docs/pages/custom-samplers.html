@@ -82,6 +82,7 @@ video_rag("x.mp4", "data/out", sampler=[Bright(level=140, prompts=["overview"]),
 <tr><td><code>on_reset(chunk_id)</code></td><td>Called when a chunk opens, before its first frame: reset the strategy's state here.</td></tr>
 <tr><td><code>config()</code></td><td>What the manifest records about the run: <code>{**self._base_config(), ...your settings}</code>, plain JSON.</td></tr>
 <tr><td><code>last_score()</code></td><td>Optional: a number recorded beside each kept frame, e.g. how much the picture changed.</td></tr>
+<tr><td><code>views(frame)</code></td><td>Optional: what the model is shown for a frame this sampler kept; the frame itself by default (<a href="#views">below</a>).</td></tr>
 <tr><td><code>__init__(...)</code></td><td>Your settings first, then <code>min_interval_s</code>, <code>max_per_chunk</code>, <code>sampler_id</code> and <code>prompts</code>, passed to <code>super().__init__</code>.</td></tr>
 </table>
 <table class="params">
@@ -114,6 +115,44 @@ def propose(self, frame, chunk_local_index):
         self.reference = small         # compare with the last kept frame
         return True
     return False</code></pre>
+
+<h2 id="views">Showing the model more than the frame</h2>
+<p>By default the model is shown each kept frame as it is. <code>views(frame)</code> returns, in order, what it is shown instead: <code>View.FRAME</code> is the frame itself, and any other <code>View</code> is an image made from it, such as a crop, an enlargement, a copy with something marked, or the frame with faces blurred. Leave <code>View.FRAME</code> out to show only what you made.</p>
+<div class="sig">View(image, label, meta={})</div>
+<table class="params">
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>image</code></td><td>The picture, a BGR array made from <code>frame.image</code>. A slice of it is fine: views are stored at once.</td></tr>
+<tr><td><code>label</code></td><td>Required. What the model reads beside it, after the frame's number: <code>Frame 2, the till, enlarged 2x -- t=81.00s:</code>.</td></tr>
+<tr><td><code>meta</code></td><td>Plain JSON recorded in the manifest beside it: a box, a scale.</td></tr>
+</table>
+<pre><code class="python">import cv2
+from vidra import Sampler, View
+
+class Till(Sampler):
+    name = "till"
+
+    def __init__(self, box, **base):
+        super().__init__(**base)
+        self.box = box                          # (x1, y1, x2, y2) of the till
+
+    def propose(self, frame, chunk_local_index):
+        return chunk_local_index % 5 == 0
+
+    def views(self, frame):
+        x1, y1, x2, y2 = self.box
+        till = cv2.resize(frame.image[y1:y2, x1:x2], None, fx=2, fy=2)
+        return [View.FRAME, View(till, "the till, enlarged 2x", {"box": list(self.box)})]
+
+    def config(self):
+        return {**self._base_config(), "box": list(self.box)}</code></pre>
+<ul>
+  <li><b>Called once per kept frame</b>, right after <code>propose</code>, while the pixels are there; never for a frame the sampler did not keep.</li>
+  <li><b>Stored beside the frame</b> as <code>&lt;index&gt;.&lt;sampler&gt;.&lt;n&gt;.jpg</code> and recorded in the frame's manifest record as <code>views</code>. A sampler that returns only <code>[View.FRAME]</code> records nothing, so its manifest is unchanged.</li>
+  <li><b>Changing the views re-describes.</b> The views a manifest records are part of its fingerprint. Put what shapes them in <code>config()</code> too, so the change shows in the run's settings.</li>
+  <li><b>Each image is one more in the model call.</b> Offline, a chunk's kept frames go in one call: five frames with three views each is twenty images. <code>describe.describe(..., max_images=)</code> refuses, before any call, a run that would go over.</li>
+  <li><b><code>video.recreate</code> does not rebuild views</b>: they are your code's output. It rebuilds the frames and reports the views it left as <code>views_not_rebuilt</code>; re-running <code>video</code> makes them again.</li>
+</ul>
+<p><code>yolo</code> and <code>objects</code> use this for <a href="samplers.html#crops">crops</a>.</p>
 
 <h2 id="use">Using it</h2>
 <h3 id="object">As an object</h3>

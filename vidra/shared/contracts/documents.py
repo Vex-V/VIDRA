@@ -353,8 +353,8 @@ class Timeline:
 class Manifest:
     """What each sampler kept from each chunk. Times come from the timeline.
 
-    `manifest_fingerprint` hashes the source (minus its path) and the config
-    (minus the frame store).
+    `manifest_fingerprint` hashes the source (minus its path), the config
+    (minus the frame store), and any views a sampler made of its frames.
     """
 
     #: Which video was ingested.
@@ -368,14 +368,20 @@ class Manifest:
     config: dict[str, Any] = field(default_factory=dict)
     #: Frames decimated and sampled, chunks, and stored files and megabytes.
     stats: dict[str, Any] = field(default_factory=dict)
-    #: [{chunk_id, decimated_frames, samplers: {id: {frame_count, frames[]}}}]
+    #: [{chunk_id, decimated_frames, samplers: {id: {frame_count, frames[]}}}];
+    #: a frame record carries `views` when its sampler showed more than the frame
     chunks: list[dict[str, Any]] = field(default_factory=list)
 
     def fingerprint(self) -> str:
+        views = [[c["chunk_id"], run_id, f["index"], f["views"]]
+                 for c in self.chunks for run_id, b in c.get("samplers", {}).items()
+                 for f in b.get("frames", []) if f.get("views")]
         return _hash({
             "source": {k: v for k, v in self.source.items() if k != "path"},
             "config": {k: v for k, v in self.config.items()
                        if k != "frame_store"},
+            # Only when a sampler made images: what the model is shown.
+            **({"views": views} if views else {}),
         })
 
     def sampler_ids(self) -> list[str]:

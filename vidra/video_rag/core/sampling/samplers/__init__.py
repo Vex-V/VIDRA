@@ -19,7 +19,7 @@ import inspect
 import re
 from typing import Type
 
-from .base import Sampler
+from .base import Sampler, View
 from .uniform import UniformSampler
 from vidra.shared.config.lookup import imported
 from vidra.shared.reporting.errors import Refused, UnknownOption
@@ -83,4 +83,4 @@ def available() -> list[str]:
     return sorted(set(_REGISTRY) | set(_LAZY))
 
 
-__all__ = ["BUILTIN", "Sampler", "available", "build", "class_of", "register"]
+__all__ = ["BUILTIN", "Sampler", "View", "available", "build", "class_of", "register"]

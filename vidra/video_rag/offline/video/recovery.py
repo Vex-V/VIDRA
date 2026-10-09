@@ -10,7 +10,8 @@ against an existing store; a rebuilt store matches the original byte for byte.
 
 Decodes with `av` and `cv2`, and imports nothing from the pipeline but the
 error base: the manifest alone is enough. The file can be handed over with a
-manifest and a video.
+manifest and a video. Views a sampler made of its frames are its own code's
+output, so they are counted, not rebuilt.
 """
 
 from __future__ import annotations
@@ -43,6 +44,14 @@ def wanted_frames(manifest: dict[str, Any]) -> dict[int, dict[str, Any]]:
             for record in block.get("frames", []):
                 out.setdefault(int(record["index"]), record)
     return out
+
+
+def named_views(manifest: dict[str, Any]) -> int:
+    """How many images samplers made from the frames the manifest names."""
+    return sum(1 for chunk in manifest.get("chunks", [])
+               for block in chunk.get("samplers", {}).values()
+               for record in block.get("frames", [])
+               for view in record.get("views") or [] if "view" in view)
 
 
 def check_source(manifest: dict[str, Any], path: Path) -> list[str]:
@@ -108,6 +117,8 @@ def recreate(*, manifest: str | Path, video: str | Path, out: str | Path,
         verified                  with `verify=` (an existing store): whether
                                   every named frame is byte-identical, and what
                                   was compared
+        views_not_rebuilt         images samplers made from the frames, which
+                                  only re-running ingest makes (when any)
 
     A video whose width, height, time base, frame count or rate disagrees with
     the manifest is refused (`Mismatch`); `force=True` rebuilds anyway and
@@ -159,8 +170,10 @@ def recreate(*, manifest: str | Path, video: str | Path, out: str | Path,
 
     done: dict[str, Any] = {
         "named": len(records), "written": written,
-        "missing": sorted(set(records) - {int(p.stem) for p in folder.glob("*.jpg")}),
-        "problems": problems, "out": str(folder), "video": str(path)}
+        "missing": sorted(set(records) - {int(p.stem) for p in folder.glob("*.jpg")
+                                          if p.stem.isdigit()}),
+        "problems": problems, "out": str(folder), "video": str(path),
+        **({"views_not_rebuilt": views} if (views := named_views(document)) else {})}
     if verify is not None:
         done["verified"] = _compare(folder, Path(verify),
                                     {f"{i:07d}.jpg" for i in records})

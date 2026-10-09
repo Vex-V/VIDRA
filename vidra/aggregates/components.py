@@ -16,6 +16,7 @@ What each reads:
     summary · chapters · events     input=    an excerpt
     custom(name=...)                input=    an excerpt, for a custom prompt
     entities(profile=...)           input=    sightings
+    link(entries, profile=...)      entries   a list of dicts; returns `Linked`, writes nothing
 
 `input=` is the object `excerpt()` / `sightings()` returned, or the path of
 one they wrote with `out=`. `previous=` is an earlier answer's file, returned
@@ -173,5 +174,56 @@ def entities(*, profile: str, input: InputLike, out: PathLike,
     return _run(name, _given(name, input), out, previous, models, llm, embedder)
 
 
-__all__ = ["chapters", "coverage", "custom", "entities", "events", "ner",
+def link(entries: Sequence[dict[str, Any]], *, profile: str = "people",
+         different: Any = None, threshold: Optional[float] = None,
+         models: Optional[Models] = None,
+         embedder: Optional[Embedder] = None) -> Any:
+    """Which of `entries` are the same subject, by a link profile's rules: no
+    record, no file and no model call but the embedder's. Returns `Linked`,
+    whose `groups` are lists of indexes into `entries`.
+
+    Each entry is a dict carrying the profile's identity keys (`appearance`,
+    `clothing` for `people`). `different` marks pairs known to be different
+    subjects -- an N x N mask, or a function of two indexes -- and the bar is
+    read off them. Without it, a `threshold` is needed (or the profile's own),
+    on the profile's measure: a z-score when the profile has `weights` or
+    `attributes` and `different` marks a pair, else a cosine.
+    """
+    from vidra.shared.models.base import require
+    from vidra.shared.models.roles import resolve, unpack
+    from vidra.shared.reporting.errors import Refused
+    from .aggregators.entities.linking import Linked, Mention, link_similar, similarity
+
+    name = definitions.profile_id(profile)[len(definitions.PROFILE_PREFIX):]
+    entry = definitions.get("profiles", name)
+    identity = entry["identity"]
+    mentions = []
+    for index, item in enumerate(entries):
+        if not isinstance(item, dict):
+            raise Refused(f"entry {index} is a {type(item).__name__}, not a dict")
+        signature = "; ".join(str(item[k]).strip() for k in identity
+                              if str(item.get(k) or "").strip())
+        if not signature:
+            raise Refused(f"entry {index} has none of {', '.join(identity)}, "
+                          f"which the {name} profile links on")
+        mentions.append(Mention(index, "", entry["field"], 0, signature, dict(item)))
+
+    count = len(mentions)
+    mask = ([[i != j and bool(different(i, j)) for j in range(count)]
+             for i in range(count)] if callable(different) else different)
+    bar = threshold if threshold is not None else entry.get("threshold")
+    if mask is None and bar is None:
+        raise Refused("nothing says which entries differ: pass `different` (pairs "
+                      "known to be different, such as two people seen at once) or "
+                      "a `threshold`")
+    if not mentions:
+        return Linked([], bar, 0, 0)
+
+    chosen = resolve("embedder", unpack(models, embedder=embedder)["embedder"])
+    require("embedder", chosen)
+    sim, _ = similarity(mentions, chosen, entry, mask)
+    return link_similar(mentions, sim, entry["rule"], entry["mutual"], bar, mask)
+
+
+__all__ = ["chapters", "coverage", "custom", "entities", "events", "link", "ner",
            "sentiment", "speakers", "stats", "summary"]

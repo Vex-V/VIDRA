@@ -1,8 +1,8 @@
 """One decode pass, feeding every sampler from it.
 
 Per frame: decimate on media time, ask the grid which chunk it is in, reset
-the samplers at a boundary, offer the frame to each, release the pixels. The
-grid is read, never edited.
+the samplers at a boundary, offer the frame to each, store it and any images
+a sampler made from it, release the pixels. The grid is read, never edited.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any, Callable, Optional, Sequence
 from vidra.shared.contracts.documents import Manifest, Media, Timeline
 from ...core.frames import FrameStore
 from ...core.sampling.decimate import Decimator
-from ...core.sampling.offer import Offer, empty_chunk
+from ...core.sampling.offer import Offer, empty_chunk, made
 from ...core.sampling.reader import read_frames, rotation_of
 from ...core.sampling.samplers import Sampler
 from vidra.shared.reporting.errors import Refused, UnknownOption
@@ -63,6 +63,10 @@ def ingest(media: Media, timeline: Timeline,
         kept = offer(frame, chunk_id, chunks[chunk_id])
         if store is not None and (store_scope == "decimated" or kept):
             store.write(frame.index, frame.image)
+        if store is not None:
+            for run_id, views in offer.shown.items():
+                for number, view in made(views):
+                    store.write_view(frame.index, run_id, number, view.image)
         # Pixels are released at once; one frame in memory.
         frame.release()
 
@@ -73,10 +77,13 @@ def ingest(media: Media, timeline: Timeline,
     stats = {
         "frames_decimated": offer.decimated,
         "frames_sampled": offer.sampled,
+        # Only when a sampler made images from its frames.
+        **({"views_made": offer.views} if offer.views else {}),
         "chunks": len(chunks),
         "chunks_with_frames": sum(1 for c in chunks if c["decimated_frames"]),
         "elapsed_s": round(elapsed, 3),
         **({"stored_frames": store.written,
+            **({"stored_views": store.views_written} if store.views_written else {}),
             "stored_mb": round(store.bytes_written / 1024 / 1024, 2)}
            if store is not None else {}),
     }

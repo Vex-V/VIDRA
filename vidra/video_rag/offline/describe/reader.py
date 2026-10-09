@@ -122,6 +122,7 @@ def answer(manifest: Manifest, timeline: Timeline, describer: Describer,
                     del out["samplers"][sampler_id]
                 return
             start_ts, end_ts = timeline.bounds_of(chunk_id)
+            indexes = list(dict.fromkeys(f.index for f in images))
 
             async def ask(sampler_id: str, question: str) -> None:
                 context = {
@@ -139,8 +140,11 @@ def answer(manifest: Manifest, timeline: Timeline, describer: Describer,
                     # Both halves of the sampler id, written out.
                     "sampler": name,
                     "question": question,
-                    "frame_count": len(images),
-                    "frame_indexes": [f.index for f in images],
+                    "frame_count": len(indexes),
+                    "frame_indexes": indexes,
+                    # Only when views made the images outnumber the frames.
+                    **({"image_count": len(images)} if len(images) != len(indexes)
+                       else {}),
                     "description": answer.summary,
                     "structured": answer.fields,
                     "elapsed_s": round(time.perf_counter() - call_started, 3),

@@ -14,7 +14,8 @@ class ObjectChangeSampler(DetectionChangeSampler):
     """Objects, compared by presence and position; no embedder.
 
     Detection uses an open vocabulary (YOLO-World) set by `vocabulary`. Matching
-    is class-aware, so a cart never counts as a bag.
+    is class-aware, so a cart never counts as a bag. `send` can show the model
+    the largest detections cut out, beside the frame or instead of it.
     """
 
     name = "objects"
@@ -31,6 +32,10 @@ class ObjectChangeSampler(DetectionChangeSampler):
         max_per_chunk: Optional[int] = None,
         sampler_id: Optional[str] = None,
         prompts: Optional[Sequence[str]] = None,
+        send: str = "frame",
+        crops: int = 3,
+        crop_size: Optional[int] = None,
+        crop_margin: float = 0.1,
     ) -> None:
         from .perception.descriptors import BoxGeometryDescriptor
 
@@ -46,6 +51,10 @@ class ObjectChangeSampler(DetectionChangeSampler):
             max_per_chunk=max_per_chunk,
             sampler_id=sampler_id,
             prompts=prompts,
+            send=send,
+            crops=crops,
+            crop_size=crop_size,
+            crop_margin=crop_margin,
         )
 
 

@@ -5,7 +5,7 @@ the frame store.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Iterator, Optional, Sequence
 
 from vidra.shared.reporting import logs, progress
 from vidra.shared.contracts.documents import (Manifest, Media, Produced,
@@ -13,6 +13,7 @@ from vidra.shared.contracts.documents import (Manifest, Media, Produced,
 from vidra.shared.storage.files import read, write
 from vidra.shared.contracts.documents import same_video
 from ...core.frames import FrameStore
+from ...core.sampling.reader import Frame
 from ...core.sampling.specs import build_samplers, split_specs
 #: The pipeline's `ingest` takes built samplers; this module's takes a spec.
 from .pipeline import ingest as _pass
@@ -34,8 +35,7 @@ def ingest(media: Media, timeline: Timeline,
     """One decode pass over the picture, onto a given grid. Reads the file
     `media.path` names and writes no artifact.
 
-    `frames` is where kept frames go (a `FrameStore`, `MemoryFrames`), or None to
-    keep none. Questions are checked against the vocabulary before anything
+    `frames` is where kept frames go (a `FrameStore`), or None to keep none. Questions are checked against the vocabulary before anything
     decodes.
     """
     from ...core.describe import prompts
@@ -96,7 +96,10 @@ def video(media: str | Path, timeline: str | Path, out: str | Path,
             # After the pass: delete stored frames the new manifest does not name.
             named = {f["index"] for c in manifest.chunks
                      for b in c["samplers"].values() for f in b["frames"]}
-            pruned = frames.prune(named)
+            views = {(f["index"], run_id, v["view"]) for c in manifest.chunks
+                     for run_id, b in c["samplers"].items() for f in b["frames"]
+                     for v in f.get("views") or [] if "view" in v}
+            pruned = frames.prune(named, views)
 
         where = write(out, manifest)
         done(sampled=manifest.stats.get("frames_sampled"),
@@ -120,3 +123,17 @@ def video(media: str | Path, timeline: str | Path, out: str | Path,
 def load(path: str | Path) -> Manifest:
     """Read a `manifest.json` back, typed."""
     return read(path, Manifest)
+
+
+def frames(path: str | Path, per_second: Optional[float] = None) -> Iterator[Frame]:
+    """A file's frames, decoded in order and turned upright, each with its media
+    time and BGR pixels. Every frame, or with `per_second` the first frame in each
+    slice of that length (the decimation the pipeline applies); a frame not
+    yielded is never converted to pixels.
+    """
+    from ...core.sampling.decimate import Decimator
+    from ...core.sampling.reader import read_frames
+    from ..media.split import split
+
+    keep = Decimator(per_second).accepts if per_second is not None else (lambda ts: True)
+    yield from read_frames(split(path), keep)

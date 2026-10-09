@@ -17,7 +17,9 @@ class PersonChangeSampler(DetectionChangeSampler):
     YOLO locates each person, CLIP embeds each person crop (upsampled to 224),
     and the crop embeddings are compared; no identity tracking. The score is the
     minimum over people, so crowded frames sample more: `min_interval_s` limits
-    that. Default threshold 0.83.
+    that. Default threshold 0.83. `crop_pad` pads the crops CLIP compares;
+    `send`, `crops`, `crop_size` and `crop_margin` shape the crops the model is
+    shown.
     """
 
     name = "yolo"
@@ -32,6 +34,10 @@ class PersonChangeSampler(DetectionChangeSampler):
         max_per_chunk: Optional[int] = None,
         sampler_id: Optional[str] = None,
         prompts: Optional[Sequence[str]] = None,
+        send: str = "frame",
+        crops: int = 3,
+        crop_size: Optional[int] = None,
+        crop_margin: float = 0.1,
     ) -> None:
         from .perception.descriptors import CropEmbeddingDescriptor
 
@@ -47,6 +53,10 @@ class PersonChangeSampler(DetectionChangeSampler):
             max_per_chunk=max_per_chunk,
             sampler_id=sampler_id,
             prompts=prompts,
+            send=send,
+            crops=crops,
+            crop_size=crop_size,
+            crop_margin=crop_margin,
         )
 
 

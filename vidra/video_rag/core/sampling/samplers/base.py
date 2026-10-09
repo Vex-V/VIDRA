@@ -9,15 +9,40 @@ no; it cannot look ahead or revisit a frame. The base class enforces:
 
 Rate limits apply before `propose` runs, and every chunk keeps at least one
 frame. Prompts are opaque strings here.
+
+`views` says how a kept frame is shown to the model: by default the frame
+itself (`View.FRAME`); a sampler may add or substitute images made from it --
+crops, enlargements, a marked copy -- each stored beside the frame.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Sequence
+from dataclasses import dataclass, field
+from typing import Any, ClassVar, Optional, Sequence
 
 from ..reader import Frame
 from vidra.shared.reporting.errors import Refused
+
+
+@dataclass
+class View:
+    """One image a kept frame is shown to the model as. `View.FRAME` is the frame
+    itself, as stored; any other view carries its own pixels (BGR), a `label`
+    the model reads beside it, and `meta` recorded in the manifest."""
+
+    image: Any = field(default=None, repr=False)
+    label: str = ""
+    meta: dict[str, Any] = field(default_factory=dict)
+
+    FRAME: ClassVar["View"]
+
+    @property
+    def is_frame(self) -> bool:
+        return self.image is None
+
+
+View.FRAME = View()
 
 
 class Sampler(ABC):
@@ -95,6 +120,11 @@ class Sampler(ABC):
         """What the last decision was based on, recorded in the manifest."""
         return None
 
+    def views(self, frame: Frame) -> list[View]:
+        """How a frame this sampler kept is shown to the model, in order. Called
+        once per kept frame, with its pixels. The frame itself by default."""
+        return [View.FRAME]
+
     def _base_config(self) -> dict[str, Any]:
         # `prompts` is omitted when empty.
         config: dict[str, Any] = {
@@ -118,4 +148,4 @@ class Sampler(ABC):
         return self._base_config()
 
 
-__all__ = ["Sampler"]
+__all__ = ["Sampler", "View"]

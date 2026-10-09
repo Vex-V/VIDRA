@@ -20,7 +20,8 @@ only when used.
 
 `add_prompt` and `add_profile` add definitions of your own (`remove_prompt`,
 `remove_profile`, `definition` beside them); they run like the built-ins.
-`combine` lays several records end to end as one. `aggregators/` holds the
+`link` links entries you hold (a list of dicts) by a profile's rules, with no
+record. `combine` lays several records end to end as one. `aggregators/` holds the
 implementations, `core/` what they share, `database/` the export and `search`.
 """
 
@@ -159,24 +160,26 @@ from .driver import (AggregateError, Inapplicable, aggregate,  # noqa: E402
                      answer, answers, definition_rows, load, load_all,
                      load_input, validate)
 from .components import (chapters, coverage, custom, entities, events,  # noqa: E402
-                         ner, sentiment, speakers, stats, summary)
+                         link, ner, sentiment, speakers, stats, summary)
 
 
 def __getattr__(name: str) -> Any:
-    """PEP 562: `combine`, `merge` and `search` resolve on first use."""
+    """PEP 562: `combine`, `merge`, `search` and `Linked` resolve on first use."""
     if name in ("combine", "merge"):
         return getattr(importlib.import_module(".combination", __name__), name)
     if name == "search":
         return importlib.import_module(".database.search", __name__).search
+    if name == "Linked":
+        return importlib.import_module(".aggregators.entities.linking", __name__).Linked
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = ["REGISTRY", "RUNNERS", "TIERS", "AggregateError", "Context",
-           "DefinitionError", "Inapplicable", "ProtectedDefinition", "Record",
+           "DefinitionError", "Inapplicable", "Linked", "ProtectedDefinition", "Record",
            "RecordError", "about", "add_profile", "add_prompt", "aggregate",
            "answer", "answers", "available", "build", "chapters", "combine",
            "coverage", "custom", "definition", "definition_rows", "entities", "events",
-           "kind_of", "load", "load_all", "load_input", "merge", "missing", "ner",
+           "kind_of", "link", "load", "load_all", "load_input", "merge", "missing", "ner",
            "record", "remove_profile", "remove_prompt", "search", "sentiment",
            "settings_of", "speakers", "stats", "summary", "takes_inputs",
            "tier_of", "uses_embedder", "validate"]
