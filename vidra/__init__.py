@@ -34,6 +34,9 @@ _LAZY = {"Models": "vidra.shared.models.roles",
          "OpenAIEmbedder": "vidra.shared.models.embedders.remote",
          "LocalEmbedder": "vidra.shared.models.embedders.local",
          "HashEmbedder": "vidra.shared.models.embedders",
+         "VisualEmbedder": "vidra.shared.models.base",
+         "LocalVisualEmbedder": "vidra.shared.models.embedders.visual",
+         "LocalMultimodalEmbedder": "vidra.shared.models.embedders.multimodal",
          "Database": "vidra.shared.storage.database",
          "Supabase": "vidra.shared.storage.supabase",
          "Folder": "vidra.shared.storage.folder",
@@ -61,7 +64,7 @@ def __getattr__(name: str):
 
 
 __all__ = ["Anthropic", "Chat", "Database", "Embedder", "Folder", "HashEmbedder", "LLM",
-           "LocalEmbedder", "ModelUnavailable", "Models", "OpenAI", "OpenAIEmbedder",
-           "Sampler", "Stub", "Supabase", "Unavailable", "VLM", "VidraError", "View", "__version__",
-           "configure"]
+           "LocalEmbedder", "LocalMultimodalEmbedder", "LocalVisualEmbedder", "ModelUnavailable", "Models", "OpenAI",
+           "OpenAIEmbedder", "Sampler", "Stub", "Supabase", "Unavailable", "VLM", "VidraError",
+           "View", "VisualEmbedder", "__version__", "configure"]
 

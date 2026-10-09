@@ -56,7 +56,7 @@
 video_rag(source, into, video_id=None, on_conflict="new", name=None, recorded_at=None,
           policy="uniform", use_video=True, use_audio=True, sampler="uniform",
           vlm=None, embedder=None, resume=True, database=None, on_step=None,
-          models=None) -&gt; Run</div>
+          models=None, visual_embedder=None, describe=True) -&gt; Run</div>
 <pre><code class="python">from vidra import LocalEmbedder, Models, OpenAI, Supabase
 from vidra.video_rag import video_rag
 
@@ -80,8 +80,16 @@ run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
 <tr><td><code>resume</code></td><td><code>True</code></td><td>Reuse still-current descriptions and vectors. <code>False</code> redoes them.</td></tr>
 <tr><td><code>database</code></td><td>none</td><td>Where to copy every artifact: a <code>Database</code>, or <code>"supabase"</code> / <code>"folder"</code>.</td></tr>
 <tr><td><code>on_step</code></td><td>none</td><td>Progress callback (<a href="#progress">below</a>).</td></tr>
-<tr><td><code>models</code></td><td>none</td><td>A <code>Models</code> with <code>vlm</code> and <code>embedder</code>. Giving a role here and as a keyword is refused.</td></tr>
+<tr><td><code>models</code></td><td>none</td><td>A <code>Models</code> with <code>vlm</code>, <code>embedder</code> and <code>visual_embedder</code>. Giving a role here and as a keyword is refused.</td></tr>
+<tr><td><code>visual_embedder</code></td><td>none</td><td>Also embed the kept frames themselves, with no answer (<a href="stages.html#glance">glance</a>). Or set it in <code>models</code>.</td></tr>
+<tr><td><code>describe</code></td><td><code>True</code></td><td>Ask the vision model about the kept frames. <code>False</code> needs a <code>visual_embedder</code>: no vision model is called and no text is made from the picture.</td></tr>
 </table>
+<pre><code class="python">from vidra import LocalVisualEmbedder
+
+# frames to vectors, no vision model: cheaper, and weaker on actions and text
+video_rag("shop.mp4", "data/out", sampler="clip", use_audio=False,
+          visual_embedder=LocalVisualEmbedder("google/siglip2-base-patch16-224"),
+          describe=False)</code></pre>
 <p>The policy, samplers, questions, model keys and database are all checked before the first stage; every problem is raised together as one <code>Refused</code>.</p>
 
 <h3 id="run">What it returns: Run</h3>
@@ -106,7 +114,7 @@ for step in run.steps:
 <p>The policy decides the order:</p>
 <table>
 <tr><th>Policy</th><th>Order</th></tr>
-<tr><td><code>uniform</code></td><td>media, audio, boundaries, video, cut, describe, embed</td></tr>
+<tr><td><code>uniform</code></td><td>media, audio, boundaries, video, cut, describe, glance (with a <code>visual_embedder</code>), embed</td></tr>
 <tr><td><code>scene</code></td><td>media, audio, boundaries.evidence (decodes the picture), boundaries, video, cut, describe, embed</td></tr>
 <tr><td><code>vad</code>, <code>speaker</code></td><td>media, audio, boundaries.evidence (reads the transcript), boundaries, video, cut, describe, embed</td></tr>
 </table>
@@ -162,8 +170,8 @@ answers.artifacts                         # {"summary": ".../aggregates/summary.
 answers.stats["skipped"]                  # {"speakers": "...", ...}</code></pre>
 <div class="sig">workflow.Options(source, into=None, video_id=None, name=None, recorded_at=None,
                  policy="uniform", use_video=True, use_audio=True, sampler="uniform",
-                 vlm=None, embedder=None, llm=None, tier="free", database=None,
-                 models=None)</div>
+                 vlm=None, embedder=None, llm=None, visual_embedder=None, describe=True,
+                 tier="free", database=None, models=None)</div>
 <p><code>video_rag()</code>'s fields, plus:</p>
 <table class="params">
 <tr><th>Field</th><th>Default</th><th>Meaning</th></tr>

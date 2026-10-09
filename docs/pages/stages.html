@@ -48,19 +48,19 @@
 </nav>
 <main>
 <h1>Stages</h1>
-<p class="lede">The eight steps <code>video_rag()</code> runs, each callable on its own with all its settings.</p>
+<p class="lede">The steps <code>video_rag()</code> runs, each callable on its own with all its settings.</p>
 
 <p>Each stage is a module under <code>vidra.video_rag</code> with three kinds of function:</p>
 <table>
 <tr><th>Function</th><th>Takes</th><th>Does</th></tr>
 <tr><td>the stage's own name: <code>media.media</code>, <code>audio.audio</code>, ...</td><td>file paths</td><td>reads its inputs, writes one output file, returns a receipt (<code>Produced</code>)</td></tr>
-<tr><td>a verb: <code>split</code>, <code>listen</code>, <code>detect</code>, <code>timeline</code>, <code>ingest</code>, <code>apply</code>, <code>answer</code>, <code>encode</code></td><td>documents already in memory</td><td>the same work, returning the document; reads and writes no file</td></tr>
+<tr><td>a verb: <code>split</code>, <code>listen</code>, <code>detect</code>, <code>timeline</code>, <code>ingest</code>, <code>apply</code>, <code>answer</code>, <code>look</code>, <code>encode</code></td><td>documents already in memory</td><td>the same work, returning the document; reads and writes no file</td></tr>
 <tr><td><code>load</code></td><td>a path</td><td>reads the stage's output back, typed</td></tr>
 </table>
 <p>The file function is the verb plus a read and a write, so both run the same checks. A receipt has <code>.video_id</code>, <code>.component</code>, <code>.artifacts</code> (<code>{name: path}</code>), <code>.stats</code> and <code>.skipped</code>.</p>
 <p>Full script: <a href="recipes.html#stage-by-stage">stage-by-stage recipe</a>. Below, <code>D</code> is a video's folder.</p>
 <pre><code class="python">from pathlib import Path
-from vidra.video_rag import audio, boundaries, cut, describe, embed, media, video</code></pre>
+from vidra.video_rag import audio, boundaries, cut, describe, embed, glance, media, video</code></pre>
 
 <!-- ============================================================ media -->
 <h2 id="media">1. media</h2>
@@ -278,6 +278,46 @@ said.fields["people"]           # [{"appearance": ..., "clothing": ..., "gender"
 <p>It returns a <code>describe.Description</code>: <code>summary</code> and <code>fields</code>. An unknown question, no images, or a different number of timestamps is refused before the call. <code>describe.ask_async</code> takes the same arguments as a coroutine: use it inside a running event loop, or to ask several at once, up to the model's <code>concurrency</code>.</p>
 <pre><code class="python">answers = await asyncio.gather(*(describe.ask_async(t.crops, "yolo", vlm=vlm)
                                  for t in tracks))</code></pre>
+
+<!-- =========================================================== glance -->
+<h2 id="glance">7b. glance</h2>
+<p>Embeds each chunk's kept frames with a visual embedder, with no answer in between: beside <code>describe</code>, or instead of it. Writes <code>glances.json</code>, <code>embedded.json</code>'s shape, which <code>search</code> reads like any other index.</p>
+<div class="sig">glance.glance(manifest, timeline, store, out, previous=None, visual_embedder=None,
+              samplers=None, batch=16, on_progress=None) -&gt; Produced</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>manifest</code>, <code>timeline</code></td><td>required</td><td>Paths to <code>manifest.json</code> and <code>timeline.json</code>.</td></tr>
+<tr><td><code>store</code></td><td>required</td><td>The frame folder <code>video</code> wrote.</td></tr>
+<tr><td><code>out</code></td><td>required</td><td>Where to write <code>glances.json</code>.</td></tr>
+<tr><td><code>previous</code></td><td>none</td><td>Earlier <code>glances.json</code> (usually <code>out</code>); units whose images are unchanged keep their vectors.</td></tr>
+<tr><td><code>visual_embedder</code></td><td>required</td><td>A <a href="models.html#roles"><code>VisualEmbedder</code></a>; there is no default. Search must use the same one.</td></tr>
+<tr><td><code>samplers</code></td><td>all</td><td>Only these sampler runs, e.g. <code>["clip"]</code>; a name the manifest lacks is refused.</td></tr>
+<tr><td><code>batch</code></td><td><code>16</code></td><td>Units per call to the model.</td></tr>
+<tr><td><code>on_progress</code></td><td>none</td><td>Called with a <code>Progress</code> after each batch.</td></tr>
+</table>
+<pre><code class="python">from vidra import LocalVisualEmbedder, Models
+
+seen = LocalVisualEmbedder("google/siglip2-base-patch16-224")
+glance.glance(D / "manifest.json", D / "timeline.json", D / "store",
+              D / "glances.json", previous=D / "glances.json", visual_embedder=seen)
+
+index = glance.load(D / "glances.json")
+index.embedder                    # "local:google/siglip2-base-patch16-224:768:mean:images"
+index.units[0]["sampler_id"]      # "clip:image"
+index.units[0]["structured"]      # {"frames": [12, 15, 19]}
+
+search("a forklift by the door", "shop", visual_embedder=seen, database=db)</code></pre>
+<p>One unit per chunk and sampler run, holding every frame the run kept there and every <a href="custom-samplers.html#views">view</a> it made, in order; its <code>sampler_id</code> is <code>&lt;run&gt;:image</code>, its <code>question</code> <code>image</code> (no describe question may take that name), its <code>content</code> empty. A unit holding more images than the model's <code>max_images</code> is refused before any image is read. The units are stored under the model's key plus <code>:images</code> (<code>glance.space_of(visual_embedder)</code>), so a model that also embeds text never replaces its own text rows, and a search ranks the two apart, then fuses them by rank (<a href="search.html#arguments">search</a>).</p>
+<p><code>glance.look(manifest, timeline, frames, visual_embedder=None, samplers=None, previous=None, batch=16, on_progress=None)</code> works in memory: <code>frames</code> is a <code>video.FrameStore</code>, <code>previous</code> an earlier document, and it returns the document.</p>
+<p>What it gives up, against <code>describe</code>: no fields to filter on, no text for the lexical half of search or for the aggregates, and image models are weak on actions, negation, counts and writing. Measured on Chernobyl's 10 labelled queries (MRR over 14 chunks, local bge for text):</p>
+<table>
+<tr><th>Searched</th><th>CLIP ViT-B/32</th><th>SigLIP 2 base</th><th>EmbeddingGemma 2</th></tr>
+<tr><td>described text</td><td colspan="3">0.550</td></tr>
+<tr><td>frames only</td><td>0.416</td><td>0.558</td><td>0.526</td></tr>
+<tr><td>transcript + described text</td><td colspan="3">0.586</td></tr>
+<tr><td>transcript + described text + frames</td><td>0.519</td><td>0.658</td><td>0.632</td></tr>
+</table>
+<p>Ten queries on one video is a direction, not a result. A weak image model fused with good text pulls the ranking down: rank fusion weighs both rankings alike.</p>
 
 <!-- ============================================================ embed -->
 <h2 id="embed">8. embed</h2>

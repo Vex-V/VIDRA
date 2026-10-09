@@ -21,6 +21,7 @@ from typing import Any, Optional
 from vidra.shared.config import paths
 from vidra.shared.reporting.errors import VidraError
 from vidra.shared.contracts.fields import check_fields, compile_fields
+from vidra.shared.contracts.units import IMAGE_QUESTION
 
 BUILTIN_PATH = Path(__file__).with_name("prompts.json")
 
@@ -214,6 +215,9 @@ def check(name: str, entry: dict[str, Any],
     if not NAME.match(name or ""):
         problems.append(f"name {name!r} must match {NAME.pattern} -- lowercase, "
                         "no colon, since `sampler:question` splits on one")
+    if name == IMAGE_QUESTION:
+        problems.append(f"{name!r} is taken: it is the question half of every "
+                        "unit `glance` makes from frames")
 
     instruction = (entry.get("instruction") or "").strip()
     if not instruction:

@@ -183,6 +183,11 @@ class Supabase(Database):
         db.upsert("vr_descriptions", rows, self.writer())
         # No stale-row delete: descriptions are not removed by a re-ingest.
 
+    def write_glances(self, video_id: str, document: dict[str, Any]) -> None:
+        """`glances.json` into the moment index, as `write_embedded` writes
+        `embedded.json`: its own embedder key keeps the two sets of rows apart."""
+        self.write_embedded(video_id, document)
+
     def write_embedded(self, video_id: str, document: dict[str, Any]) -> None:
         """`embedded.json` into the moment index, vectors and all, under the
         document's embedder. Rows the document no longer holds are deleted after

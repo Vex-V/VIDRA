@@ -266,6 +266,7 @@ COVERAGE: dict[str, list[str]] = {
             "cut.cut", "cut.apply", "cut.load",
             "describe.describe", "describe.answer", "describe.load",
             "describe.ask", "describe.ask_async",
+            "glance.glance", "glance.look", "glance.load", "glance.space_of",
             "embed.embed", "embed.encode", "embed.load", "embed.Unit")],
     "pages/live.html": ["vidra.video_rag.video_rag_live", "vidra.video_rag.live.send",
                         "vidra.video_rag.search_observations",
@@ -291,13 +292,15 @@ COVERAGE: dict[str, list[str]] = {
         "add_prompt", "add_profile", "remove_prompt", "remove_profile", "definition")],
     "pages/models.html": [f"vidra.{n}" for n in (
         "Models", "VLM.generate", "LLM.complete", "Embedder.embed",
-        "Embedder.embed_query", "OpenAI", "Chat", "Anthropic", "Stub",
-        "OpenAIEmbedder", "LocalEmbedder", "HashEmbedder")],
+        "Embedder.embed_query", "VisualEmbedder.embed_images",
+        "VisualEmbedder.embed_query", "OpenAI", "Chat", "Anthropic", "Stub",
+        "OpenAIEmbedder", "LocalEmbedder", "HashEmbedder", "LocalVisualEmbedder",
+        "LocalMultimodalEmbedder")],
     "pages/databases.html": ["vidra.Supabase", "vidra.Folder"] + [
         f"vidra.Database.{n}" for n in (
             "write_media", "write_raw_transcript", "write_cuts", "write_timeline",
             "write_manifest", "write_transcript", "write_descriptions",
-            "write_embedded", "write_prompts", "write_source", "write_answer",
+            "write_embedded", "write_glances", "write_prompts", "write_source", "write_answer",
             "write_aggregate_units", "write_definitions", "write_observations",
             "search", "search_aggregates", "search_observations", "spans",
             "video_ids", "close", "implements")],
@@ -308,7 +311,8 @@ COVERAGE: dict[str, list[str]] = {
 PUBLIC = ["vidra", "vidra.video_rag", "vidra.video_rag.samplers", "vidra.aggregates",
           "vidra.workflow"] + [
     f"vidra.video_rag.{m}" for m in
-    ("media", "audio", "boundaries", "video", "cut", "describe", "embed", "retrieve")]
+    ("media", "audio", "boundaries", "video", "cut", "describe", "glance", "embed",
+     "retrieve")]
 
 #: Parameters that are not settings a reader looks up.
 UNLISTED = {"self", "cls"}

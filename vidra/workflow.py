@@ -24,7 +24,7 @@ from vidra.shared.config import paths
 from vidra.shared.contracts.documents import Produced
 from .video_rag.offline import driver as video_rag
 from vidra.shared.reporting.errors import Refused
-from vidra.shared.models.base import Embedder, LLM, VLM
+from vidra.shared.models.base import Embedder, LLM, VLM, VisualEmbedder
 from vidra.shared.models.roles import Models, unpack
 from vidra.shared.storage.database import Database, as_database
 
@@ -49,17 +49,19 @@ class Options:
     vlm: Optional[VLM] = None                # frames -> answers
     embedder: Optional[Embedder] = None      # text -> vectors
     llm: Optional[LLM] = None                # the `llm` aggregate tier
+    visual_embedder: Optional[VisualEmbedder] = None   # frames -> vectors (glance)
+    describe: bool = True                    # False: frames embedded, not described
     tier: str = "free"                       # a cost ceiling
     # Also copy every artifact to this database: a name or a built `Database`.
     database: Optional[str | Database] = None
-    #: All three models as one value; a role set here and as a field is refused.
+    #: All the models as one value; a role set here and as a field is refused.
     models: Optional[Models] = None
 
 
 def roles(options: Options) -> dict[str, Any]:
-    """The vlm, embedder and llm this run uses, from the fields or `models`."""
-    return unpack(options.models, vlm=options.vlm,
-                  embedder=options.embedder, llm=options.llm)
+    """The models this run uses, from the fields or `models`."""
+    return unpack(options.models, vlm=options.vlm, embedder=options.embedder,
+                  llm=options.llm, visual_embedder=options.visual_embedder)
 
 
 def extraction(options: Options) -> video_rag.Options:
@@ -72,7 +74,8 @@ def extraction(options: Options) -> video_rag.Options:
         recorded_at=options.recorded_at, policy=options.policy,
         use_video=options.use_video, use_audio=options.use_audio,
         sampler=options.sampler, vlm=chosen["vlm"],
-        embedder=chosen["embedder"], database=options.database)
+        embedder=chosen["embedder"], visual_embedder=chosen["visual_embedder"],
+        describe=options.describe, database=options.database)
 
 
 def chosen(options: Options) -> list[str]:

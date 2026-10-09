@@ -7,6 +7,7 @@ documents out.
     video        5  which frames each sampler keeps
     cut          6  the transcript, onto the grid
     describe     7  one model answer per (chunk, sampler:question)
+    glance      7b  kept frames to vectors, with no answer (beside or instead)
     embed        8  both modalities to vectors
 
 `driver.video_rag()` runs them all. Everything a stage shares with other

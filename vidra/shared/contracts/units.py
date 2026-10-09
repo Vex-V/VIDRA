@@ -42,6 +42,11 @@ def _render_value(value: Any) -> str:
     return str(value)
 
 
+#: The question half of a unit made from frames rather than an answer
+#: (`glance`): no describe question may take this name.
+IMAGE_QUESTION = "image"
+
+
 @dataclass
 class Unit:
     """One embeddable thing, keyed by a hash of its own text."""
@@ -86,4 +91,4 @@ class Unit:
                    d.get("sampler", ""), d.get("question", ""))
 
 
-__all__ = ["Unit", "render"]
+__all__ = ["IMAGE_QUESTION", "Unit", "render"]

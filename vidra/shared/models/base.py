@@ -1,8 +1,10 @@
 """What a model is to this library: three base classes, one per role.
 
-    VLM        frames and text in, a structured answer out   describe
-    LLM        text in, text or a structured answer out      the llm aggregates
-    Embedder   text in, vectors out                          embed, search, linking
+    VLM             frames and text in, a structured answer out   describe
+    LLM             text in, text or a structured answer out      the llm aggregates
+    Embedder        text in, vectors out                          embed, search, linking
+    VisualEmbedder  images in, vectors out; a query into the      glance, search
+                    same space
 
 Subclass one and fill in its method to bring any model:
 
@@ -23,7 +25,8 @@ calls it through `calls()`, which caps calls in flight at `concurrency`, parses
 a JSON string returned for a schema, and turns any failure into `ModelFailed`.
 
 The ready-made classes are in `llm.py` (`OpenAI`, `Chat`, `Anthropic`,
-`Stub`) and `embedders/` (`OpenAIEmbedder`, `LocalEmbedder`, `HashEmbedder`).
+`Stub`) and `embedders/` (`OpenAIEmbedder`, `LocalEmbedder`, `HashEmbedder`,
+`LocalVisualEmbedder`, `LocalMultimodalEmbedder`).
 """
 
 from __future__ import annotations
@@ -138,8 +141,29 @@ class Embedder(_Model):
         return self.embed([text])[0]
 
 
+class VisualEmbedder(_Model):
+    """Images to vectors, and a text query into the same space. Not an
+    `Embedder`: a model whose text side reads a few dozen tokens must not
+    embed transcripts. A model that does both subclasses both."""
+
+    #: The most images one vector may be made from; None is no limit.
+    max_images: Optional[int] = None
+
+    def embed_images(self, groups: Sequence[Sequence[dict[str, Any]]]) -> list[list[float]]:
+        """One vector per group, in order. A group is request parts, as a
+        `VLM` is sent them: an `image` part per picture, each view's preceded
+        by a `text` part saying what it shows. A model that takes one image
+        pools the group's vectors itself."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement embed_images()")
+
+    def embed_query(self, text: str) -> list[float]:
+        """The vector for a search, in the images' space."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement embed_query()")
+
+
 #: Role -> the class a model must be to fill it.
-ROLES: dict[str, type] = {"vlm": VLM, "llm": LLM, "embedder": Embedder}
+ROLES: dict[str, type] = {"vlm": VLM, "llm": LLM, "embedder": Embedder,
+                          "visual_embedder": VisualEmbedder}
 
 
 # --------------------------------------------------------------- checking
@@ -150,7 +174,7 @@ def _misfit(role: str, model: Any) -> Optional[str]:
     probing its width), and this check runs before any work."""
     wanted = ROLES[role]
     if not isinstance(model, wanted):
-        article = "a" if wanted is VLM else "an"
+        article = "a" if wanted in (VLM, VisualEmbedder) else "an"
         return (f"{role} must be {article} {wanted.__name__}, not {type(model).__name__}"
                 + (" -- pass a model object, e.g. OpenAI(\"gpt-5.4-mini\")"
                    if isinstance(model, str) else ""))
@@ -260,4 +284,5 @@ def calls(role: str, model: Any) -> Calls:
 
 
 __all__ = ["Calls", "Embedder", "LLM", "ModelFailed", "ROLES",
-           "VLM", "calls", "image", "parse_json", "problems", "require", "text"]
+           "VLM", "VisualEmbedder", "calls", "image", "parse_json", "problems",
+           "require", "text"]

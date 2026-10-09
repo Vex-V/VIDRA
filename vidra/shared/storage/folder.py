@@ -4,12 +4,13 @@ server.
     db = Folder("data/out")                      # where video_rag wrote
     search("a man in a red cap", "test", embedder="local", database=db)
 
-Reads `embedded.json` and `timeline.json` where they lie, and a live run's
-`observations.jsonl` while it is still being appended. Dense only: units are
-ranked by cosine in the embedder's space. Of the write hooks it fills in
-only what search reads: `write_timeline` and `write_embedded` copy the file (a
-no-op when the root is the run's own folder), and aggregate vectors are kept
-per embedder in `aggregate_units.json` in the source's folder.
+Reads `embedded.json`, `glances.json` and `timeline.json` where they lie, and
+a live run's `observations.jsonl` while it is still being appended. Dense
+only: units are ranked by cosine in the embedder's space. Of the write hooks
+it fills in only what search reads: `write_timeline`, `write_embedded` and
+`write_glances` copy the file (a no-op when the root is the run's own folder),
+and aggregate vectors are kept per embedder in `aggregate_units.json` in the
+source's folder.
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ from .database import Database
 
 #: An aggregate source's row and its vectors, per embedder.
 AGGREGATE_UNITS = "aggregate_units.json"
+
+#: The artifacts a moment search reads, each under one embedder.
+INDEXES = ("embedded", "glances")
 
 
 class Folder(Database):
@@ -60,6 +64,9 @@ class Folder(Database):
     def write_embedded(self, video_id: str, document: dict[str, Any]) -> None:
         self._copy(video_id, "embedded", document)
 
+    def write_glances(self, video_id: str, document: dict[str, Any]) -> None:
+        self._copy(video_id, "glances", document)
+
     def _units_file(self, source_id: str) -> tuple[Path, dict[str, Any]]:
         where = self.root / paths.check_id(source_id) / AGGREGATE_UNITS
         held = files.read_json(where) if where.exists() else {}
@@ -96,8 +103,10 @@ class Folder(Database):
         wanted = set(chunk_ids) if chunk_ids else None
         rows, vectors = [], []
         for vid in (video_ids or self.video_ids()):
-            index = self._read(vid, "embedded")
-            if not index or index.get("embedder") != embedder_key:
+            # Text units and frame units are in different spaces: one file each.
+            index = next((d for d in (self._read(vid, a) for a in INDEXES)
+                          if d and d.get("embedder") == embedder_key), None)
+            if index is None:
                 continue
             spans = self.spans(vid)
             for u in index["units"]:
@@ -207,7 +216,7 @@ class Folder(Database):
             return []
         return sorted(d.name for d in self.root.iterdir()
                       if d.is_dir() and not d.name.startswith(paths.RESERVED_PREFIX)
-                      and (d / paths.ARTIFACTS["embedded"]).exists())
+                      and any((d / paths.ARTIFACTS[a]).exists() for a in INDEXES))
 
 
 def _rank(rows: list[dict[str, Any]], vectors: list[Any], vector: Sequence[float],

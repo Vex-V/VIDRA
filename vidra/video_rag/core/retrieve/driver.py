@@ -2,7 +2,9 @@
 
 The query is embedded with the embedder that built the index; every row
 carries its embedder key and only rows in that space are searched. Ranking is
-the database's (`Database.search`; for Supabase the `vr_search` RPC).
+the database's (`Database.search`; for Supabase the `vr_search` RPC). With a
+visual embedder too, the frames' space is searched apart and the two rankings
+are fused by rank, never by similarity.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from typing import Any, Mapping, Optional, Sequence
 from vidra.shared.config.paths import MissingArtifact
 from vidra.shared.contracts.documents import Timeline
 from vidra.shared.models import embedders as embedders_mod
-from vidra.shared.models.base import Embedder, require
+from vidra.shared.models.base import Embedder, VisualEmbedder, require
 from vidra.shared.models.roles import Models, resolve, unpack
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage.database import Database, as_database
@@ -69,7 +71,8 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
            video_ids: Optional[Sequence[str]] = None,
            grids: Optional[Mapping[str, str | Path]] = None,
            database: Optional[str | Database] = None,
-           models: Optional[Models] = None
+           models: Optional[Models] = None,
+           visual_embedder: Optional[VisualEmbedder] = None
            ) -> tuple[list[Moment], list[str]]:
     """Ranked moments, and notes about the ranking.
 
@@ -95,6 +98,11 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
     fusion, not a similarity. `database` is a built `Database` or a name
     (`supabase` by default). `embedder` (or `models.embedder`) must be the one
     the index was built with; None is OpenAI's default.
+
+    `visual_embedder` (or `models.visual_embedder`) also searches the frames
+    `glance` embedded, in their own ranking; a chunk both rankings find gets
+    the second-account bonus. Given alone, only the frames are searched -- the
+    default text embedder is used only when no visual embedder is named.
     """
     if not (query or "").strip():
         raise Refused("a search needs a query; this one is empty")
@@ -106,8 +114,18 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
         raise Refused(f"before ({before}) must be later than after ({after})")
 
     scope = scope_of(video_id, video_ids)
-    built = resolve("embedder", unpack(models, embedder=embedder)["embedder"])
-    require("embedder", built)
+    chosen = unpack(models, embedder=embedder, visual_embedder=visual_embedder)
+    visual = chosen["visual_embedder"]
+    built = (resolve("embedder", chosen["embedder"])
+             if chosen["embedder"] is not None or visual is None else None)
+    spaces: list[tuple[str, Any, Any]] = []
+    if built is not None:
+        require("embedder", built)
+        spaces.append((built.key, built, embedders_mod.query_vector))
+    if visual is not None:
+        require("visual_embedder", visual)
+        from ...offline.glance.driver import space_of
+        spaces.append((space_of(visual), visual, lambda model, q: model.embed_query(q)))
     target = as_database(database or "supabase")
     grid = _Grids(target, grids or {})
     notes: list[str] = []
@@ -117,20 +135,34 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
         return [], ["no chunk matches that window"]
 
     # Some models embed a query differently from a passage.
-    vector = embedders_mod.query_vector(built, query)
-    hits = target.search(vector, query, built.key, candidates, scope,
-                         sampler, question, strategy, narrowed, structured)
-    if not hits:
+    ranked = []
+    for key, model, embed_query in spaces:
+        ranked.append((key, target.search(embed_query(model, query), query, key,
+                                          candidates, scope, sampler, question,
+                                          strategy, narrowed, structured)))
+    keys = " or ".join(key for key, _ in ranked)
+    if not any(found for _, found in ranked):
         if any(f is not None for f in (sampler, question, strategy,
                                        narrowed, structured, scope)):
             # Nothing matched the filters, as opposed to nothing indexed in this space.
-            return [], [f"nothing matched those filters in {built.key} -- "
+            return [], [f"nothing matched those filters in {keys} -- "
                         "if that embedder never indexed these videos, "
                         "embed them with it first"]
         raise MissingArtifact(
-            f"any video: nothing indexed for {built.key}. Run embed with this "
-            f"embedder, and a pipeline naming a database, first -- a "
+            f"any video: nothing indexed for {keys}. Run embed (or glance) with "
+            f"this embedder, and a pipeline naming a database, first -- a "
             f"different embedder writes different rows.")
+    if len(ranked) == 1:
+        hits = ranked[0][1]
+    else:
+        # Each space's own ranking, re-scored by position: scores from two
+        # spaces are not on one scale.
+        hits = [{**hit, "score": 1.0 / (60 + rank), "space": key}
+                for key, found in ranked for rank, hit in enumerate(found, start=1)]
+        for key, found in ranked:
+            if not found:
+                notes.append(f"nothing indexed for {key} in this scope; only "
+                             f"the other space ranked")
     if any(f is not None for f in (sampler, question, strategy, structured)):
         notes.append("filtering gives up the agreement signal: a chunk "
                      "contributes fewer terms, so scores fall -- to a single "

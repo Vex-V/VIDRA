@@ -78,6 +78,12 @@ class Database:
         with `chunk_id`, `sampler_id`, `sampler`, `question`, `content`,
         `structured`, `text_hash` and `vector`."""
 
+    def write_glances(self, video_id: str, document: dict[str, Any]) -> None:
+        """`glances.json`: frames embedded with no model answer, in
+        `embedded.json`'s shape. `embedder` is the visual embedder's key plus
+        `:images`; each unit's `content` is empty, its `question` is `image`
+        and its `text_hash` covers the images."""
+
     def write_prompts(self, rows: list[dict[str, Any]]) -> None:
         """The questions a describe run asked, at the version it asked them."""
 

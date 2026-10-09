@@ -13,6 +13,7 @@ The batch stages, in order:
     video        5  which frames each sampler keeps
     cut          6  the transcript, onto the grid
     describe     7  one model answer per (chunk, sampler:question)
+    glance      7b  kept frames to vectors, with no answer (beside or instead)
     embed        8  both modalities to vectors
     retrieve        a query to ranked moments
 
@@ -26,11 +27,12 @@ Every component takes the paths it reads and the path it writes:
     video.video(media, timeline, out, store=, sampler=, ...)
     cut.cut(timeline, raw_transcript, out)
     describe.describe(manifest, timeline, store, out, previous=, ...)
+    glance.glance(manifest, timeline, store, out, previous=, visual_embedder=)
     embed.embed(out, descriptions=, transcript=, previous=, timeline=, ...)
     retrieve.search(query, video_id=, grids=, ...)
 
 Each also has a verb over documents in hand (`split`, `listen`, `detect`,
-`timeline`, `ingest`, `apply`, `answer`, `encode`). `video_rag(source, into,
+`timeline`, `ingest`, `apply`, `answer`, `look`, `encode`). `video_rag(source, into,
 ...)` runs them all: `media` makes `<into>/<id>/` and `layout()` names every
 path inside it.
 
@@ -55,7 +57,8 @@ _LAZY: dict[str, tuple[str, Optional[str]]] = {
     "video_rag_live": ("live.driver", "video_rag_live"),
     "live": ("live", None),
     **{name: (f"offline.{name}", None) for name in (
-        "media", "audio", "boundaries", "video", "cut", "describe", "embed")},
+        "media", "audio", "boundaries", "video", "cut", "describe", "glance",
+        "embed")},
     "retrieve": ("core.retrieve", None),
     # Build a configured sampler, register one of your own, list them.
     "samplers": ("core.sampling.samplers", None),

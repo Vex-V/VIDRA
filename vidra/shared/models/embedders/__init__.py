@@ -3,6 +3,8 @@
     OpenAIEmbedder("text-embedding-3-small")     OpenAI, or any server's /embeddings
     LocalEmbedder("BAAI/bge-small-en-v1.5")      a Hugging Face model in this process
     HashEmbedder()                               no model: for exercising a pipeline
+    LocalVisualEmbedder()                        images, not text: CLIP or SigLIP
+    LocalMultimodalEmbedder()                    text and images, one space: EmbeddingGemma 2
 
 One vector space per embedder: its key is `name:model:dims`, and vectors from
 different keys are never compared. A query and a document are embedded with
@@ -91,8 +93,14 @@ def __getattr__(name: str) -> Any:
     if name == "LocalEmbedder":
         from .local import LocalEmbedder
         return LocalEmbedder
+    if name == "LocalVisualEmbedder":
+        from .visual import LocalVisualEmbedder
+        return LocalVisualEmbedder
+    if name == "LocalMultimodalEmbedder":
+        from .multimodal import LocalMultimodalEmbedder
+        return LocalMultimodalEmbedder
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = ["Embedder", "EmbedderUnavailable", "HashEmbedder", "LocalEmbedder",
-           "OpenAIEmbedder", "PREFIXES", "key_for", "prefixes_for", "query_vector"]
+           "LocalMultimodalEmbedder", "LocalVisualEmbedder", "OpenAIEmbedder", "PREFIXES", "key_for", "prefixes_for", "query_vector"]

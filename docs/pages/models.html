@@ -48,7 +48,7 @@
 </nav>
 <main>
 <h1>Models</h1>
-<p class="lede">The three model roles, the ready-made classes, and writing your own.</p>
+<p class="lede">The four model roles, the ready-made classes, and writing your own.</p>
 
 <h2 id="roles">Roles</h2>
 <table>
@@ -56,11 +56,12 @@
 <tr><td><code>vlm</code></td><td><code>VLM</code></td><td><code>describe</code>: frames in, an answer out</td><td><code>OpenAI("gpt-5.4-mini")</code></td></tr>
 <tr><td><code>llm</code></td><td><code>LLM</code></td><td>the llm aggregators: summary, chapters, events, custom prompts, entity accounts</td><td><code>OpenAI("gpt-5.4-mini")</code></td></tr>
 <tr><td><code>embedder</code></td><td><code>Embedder</code></td><td><code>embed</code>, <code>search</code>, chapter boundaries, entity linking</td><td><code>OpenAIEmbedder("text-embedding-3-small")</code></td></tr>
+<tr><td><code>visual_embedder</code></td><td><code>VisualEmbedder</code></td><td><a href="stages.html#glance"><code>glance</code></a>: frames in, a vector out, no answer; <code>search</code> over those vectors</td><td>none: frames are not embedded</td></tr>
 </table>
-<p>An unset role uses its default. VLM and LLM are separate, so they can be different models.</p>
+<p>An unset role uses its default, except <code>visual_embedder</code>, which has none. VLM and LLM are separate, so they can be different models; so are <code>Embedder</code> and <code>VisualEmbedder</code>, since an image model's text side may read only a few dozen tokens. A model that does both subclasses both and fills either role.</p>
 
 <h2 id="models">Models</h2>
-<div class="sig">Models(vlm=None, llm=None, embedder=None)</div>
+<div class="sig">Models(vlm=None, llm=None, embedder=None, visual_embedder=None)</div>
 <pre><code class="python">from vidra import Anthropic, LocalEmbedder, Models, OpenAI
 
 models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=Anthropic("claude-haiku-4-5"),
@@ -69,7 +70,7 @@ models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=Anthropic("claude-haiku-4-5"),
 video_rag("shop.mp4", "data/out", models=models)          # uses vlm and embedder
 aggregates.aggregate(out=..., models=models, summary=...)  # uses llm and embedder
 search("a customer paying", "shop", models=models)         # uses embedder</code></pre>
-<p>Build once and pass everywhere, so indexing and search use the same embedder. Models are checked at construction: right class, a <code>key</code>, and the model's own <code>problems()</code> (e.g. a missing API key). Functions also take <code>vlm=</code>, <code>llm=</code>, <code>embedder=</code>; giving a role both ways is refused. <code>models.resolved()</code> shows each role with defaults filled in.</p>
+<p>Build once and pass everywhere, so indexing and search use the same embedder. Models are checked at construction: right class, a <code>key</code>, and the model's own <code>problems()</code> (e.g. a missing API key). Functions also take <code>vlm=</code>, <code>llm=</code>, <code>embedder=</code>, <code>visual_embedder=</code>; giving a role both ways is refused. <code>models.resolved()</code> shows each role with defaults filled in.</p>
 
 <h2 id="ready-made">Ready-made models</h2>
 <table>
@@ -81,6 +82,8 @@ search("a customer paying", "shop", models=models)         # uses embedder</code
 <tr><td><code>OpenAIEmbedder</code></td><td>embedder</td><td>OpenAI, or any server with an <code>/embeddings</code> endpoint</td></tr>
 <tr><td><code>LocalEmbedder</code></td><td>embedder</td><td>a sentence-transformers model in this process</td></tr>
 <tr><td><code>HashEmbedder</code></td><td>embedder</td><td>nothing: vectors from word hashes, for tests</td></tr>
+<tr><td><code>LocalVisualEmbedder</code></td><td>visual_embedder</td><td>a CLIP or SigLIP model in this process</td></tr>
+<tr><td><code>LocalMultimodalEmbedder</code></td><td>embedder, visual_embedder</td><td>EmbeddingGemma 2 in this process: text and images in one space</td></tr>
 </table>
 <p>The VLM/LLM classes fill either role.</p>
 
@@ -157,9 +160,36 @@ vlm = Chat("gpt-5.4-mini", base_url="https://api.openai.com/v1", name="openai-ch
 <h3 id="hash-embedder">HashEmbedder</h3>
 <p><code>HashEmbedder(dims=256)</code> hashes words into vectors: no model, no network. Exact words only, so for tests. Key: <code>hash:none:&lt;dims&gt;</code>.</p>
 
+<h3 id="local-visual-embedder">LocalVisualEmbedder</h3>
+<div class="sig">LocalVisualEmbedder(model="openai/clip-vit-base-patch32", device=None, batch=32)</div>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>model</code></td><td>A CLIP or SigLIP checkpoint on Hugging Face, e.g. <code>"google/siglip2-base-patch16-224"</code>.</td></tr>
+<tr><td><code>device</code></td><td>Default: cuda, then mps, then the CPU.</td></tr>
+<tr><td><code>batch</code></td><td>Images per forward pass.</td></tr>
+</table>
+<p>Needs <code>vidra[local]</code>. The model sees one image at a time, so a unit's frames and views are averaged into one vector; the key says so: <code>local:&lt;model&gt;:&lt;width&gt;:mean</code>. A query is cut at the text tower's length (77 tokens for CLIP, 64 for SigLIP). On Chernobyl's labelled queries SigLIP 2 base matched the described text and CLIP ViT-B/32 fell well short (<a href="stages.html#glance">glance</a>).</p>
+
+<h3 id="local-multimodal-embedder">LocalMultimodalEmbedder</h3>
+<div class="sig">LocalMultimodalEmbedder(model="google/embeddinggemma-2", dims=None, device=None, batch=8,
+                        query_prompt="SearchQuery", document_prompt="Document")</div>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>model</code></td><td>A sentence-transformers model that embeds text and images together.</td></tr>
+<tr><td><code>dims</code></td><td>Shorter vectors: 768, 512, 256 or 128 for EmbeddingGemma 2. Part of the key.</td></tr>
+<tr><td><code>device</code></td><td>Default: cuda, then mps, then the CPU; bfloat16 on a GPU that has it.</td></tr>
+<tr><td><code>batch</code></td><td>Inputs per forward pass.</td></tr>
+<tr><td><code>query_prompt</code>, <code>document_prompt</code></td><td>The model's own prompt names for a search and for a passage.</td></tr>
+</table>
+<pre><code class="python">from vidra import LocalMultimodalEmbedder, Models
+
+gemma = LocalMultimodalEmbedder()
+models = Models(vlm=OpenAI(), embedder=gemma, visual_embedder=gemma)</code></pre>
+<p>A unit's frames and views go in as one input, each view's label before its image, and the model makes one vector of them; up to 29 images (<code>max_images</code>). Fills either role, or both: the frames are stored under the key plus <code>:images</code>, so they never replace the text's rows and are ranked apart. Needs <code>sentence-transformers&gt;=6.1</code> and <code>transformers&gt;=5.18</code>, newer than <code>vidra[local]</code> asks for.</p>
+
 <h2 id="own">Writing your own</h2>
 <p>Subclass a base, set <code>key</code>, fill in one method (<code>async def</code> or plain <code>def</code>).</p>
-<pre><code class="python">from vidra import Embedder, LLM, VLM
+<pre><code class="python">from vidra import Embedder, LLM, VLM, VisualEmbedder
 
 class MyVLM(VLM):
     key = "mylab:vision-v2"
@@ -180,7 +210,19 @@ class MyEmbedder(Embedder):
 
     def embed(self, texts):
         ...
-        return [[0.0] * 768 for _ in texts]             # one vector per text, one width</code></pre>
+        return [[0.0] * 768 for _ in texts]             # one vector per text, one width
+
+class MyVisualEmbedder(VisualEmbedder):
+    key = "mylab:see-v1:512"
+    max_images = 8                                      # refused before work above this
+
+    def embed_images(self, groups):
+        ...
+        return [[0.0] * 512 for _ in groups]            # one vector per group of parts
+
+    def embed_query(self, text):
+        ...
+        return [0.0] * 512                              # a search, in the same space</code></pre>
 
 <h3 id="vlm-method">VLM.generate</h3>
 <div class="sig">generate(parts, schema=None, system=None, max_output_tokens=4000)</div>
@@ -201,6 +243,11 @@ class MyEmbedder(Embedder):
 <div class="sig">embed(texts) -&gt; list[list[float]]
 embed_query(text) -&gt; list[float]</div>
 <p><code>embed(texts)</code> returns one vector per text, all one width. <code>embed_query(text)</code> embeds search queries; it defaults to <code>embed([text])[0]</code>.</p>
+
+<h3 id="visual-method">VisualEmbedder.embed_images and embed_query</h3>
+<div class="sig">embed_images(groups) -&gt; list[list[float]]
+embed_query(text) -&gt; list[float]</div>
+<p><code>embed_images(groups)</code> returns one vector per group. A group is one unit's images as request parts, in order, the shape <code>VLM.generate</code> is sent: an <code>{"type": "image", "data": bytes, ...}</code> part per frame or view, each view's preceded by a <code>{"type": "text", "text": label}</code> part. A model that takes one image pools the group itself. <code>embed_query(text)</code> embeds a search into the same space; it has no default. <code>max_images</code> (default none) is the most images one group may hold, checked before any image is read.</p>
 
 <h3 id="attributes">Attributes and checks</h3>
 <table class="params">
