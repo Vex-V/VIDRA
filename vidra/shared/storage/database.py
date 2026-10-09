@@ -21,15 +21,15 @@ search reads. Subclass `Database` and fill in only the ones you want:
 A write hook left alone does nothing: a run does not save that artifact. A
 read hook left alone raises `Unsupported`.
 
-`Supabase` and `Folder` are backends built this way; `DATABASES` maps a name
-to each. A pipeline writes to a database; components never do.
+`Supabase` and `Folder` are backends built this way; a run is handed one,
+built. A pipeline writes to a database; components never do.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from ..reporting.errors import Unavailable, UnknownOption
+from ..reporting.errors import Refused, Unavailable, UnknownOption
 
 
 class Unsupported(Unavailable, NotImplementedError):
@@ -186,32 +186,31 @@ class Database:
                            f"subclass it and define {hook} to read through it")
 
 
-#: Name -> "module:Class" for its backend.
-DATABASES: dict[str, str] = {
-    "folder": "vidra.shared.storage.folder:Folder",
-    "supabase": "vidra.shared.storage.supabase:Supabase",
-}
-
-
-def backend(name: str) -> type[Database]:
-    """The class a name builds."""
-    if name not in DATABASES:
-        raise UnknownOption(f"unknown database {name!r}; pass a Database, or one "
-                            f"of: {', '.join(DATABASES)}")
-    from ..config.lookup import imported
-    return imported(DATABASES[name])
-
-
-def as_database(value: "Optional[str | Database]") -> Optional[Database]:
-    """A `Database` from one already built, a name (built with its defaults from
-    the environment), or None.
-    """
+def problem(value: Any) -> Optional[str]:
+    """Why `value` is not a database a run can take, or None: a built
+    `Database`, or None."""
     if value is None or isinstance(value, Database):
-        return value
-    if not isinstance(value, str):
-        raise UnknownOption(f"a database is a Database or a name, not "
-                            f"{type(value).__name__}")
-    return backend(value)()
+        return None
+    if isinstance(value, str):
+        return (f"database must be a built Database, not the name {value!r} -- "
+                f"e.g. Supabase() or Folder(\"data/out\")")
+    return f"database must be a Database, not {type(value).__name__}"
 
 
-__all__ = ["DATABASES", "Database", "Unsupported", "as_database", "backend"]
+def as_database(value: Optional[Database]) -> Optional[Database]:
+    """`value`, checked: a built `Database`, or None."""
+    found = problem(value)
+    if found:
+        raise Refused(found)
+    return value
+
+
+def searched(value: Optional[Database]) -> Database:
+    """The database a search reads: `value`, or `Supabase()` when None."""
+    if value is None:
+        from .supabase import Supabase
+        return Supabase()
+    return as_database(value)
+
+
+__all__ = ["Database", "Unsupported", "as_database", "problem", "searched"]

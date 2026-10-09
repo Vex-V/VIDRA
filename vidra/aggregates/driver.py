@@ -380,7 +380,7 @@ def aggregate(*, out: str | Path,
     `previous` is a folder of earlier answers, each reused while it would be
     computed identically. `models` carries the llm and the embedder (None is
     each one's default).
-    `database` (a name or a built `Database`) also gets a copy: the source,
+    `database` (a built `Database`) also gets a copy: the source,
     every answer, its items, and the embedded summary, chapters and entities;
     failed writes are listed in `stats["problems"]`.
     """
@@ -415,7 +415,7 @@ def _aggregate(out: str | Path, models: Optional[Models], database: Optional[Any
             else Timeline.from_dict(first.timeline))
 
     from vidra.shared.storage.database import as_database
-    target = as_database(database)      # built before any work: a bad name fails here
+    target = as_database(database)      # checked before any work
     directory = Path(out)
     earlier = load_all(previous)
     written: dict[str, str] = {}

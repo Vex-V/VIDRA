@@ -4,11 +4,13 @@ first asked for, and read what its constructor accepts.
     imported("folder:Folder", __package__)    # `.folder`, relative to the caller
     imported("vidra.shared.storage.folder:Folder")
     keyword_parameters(WhisperTranscriber)    # ["model", "device", ...]
+
+And what a `validate` beside a function shares with it: the same arguments.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional, Sequence
 
 
 def imported(target: str, package: Optional[str] = None) -> Any:
@@ -34,4 +36,27 @@ def keyword_parameters(cls: type) -> list[str]:
             if p.name != "self" and p.kind in named]
 
 
-__all__ = ["imported", "keyword_parameters"]
+def bound(function: Callable[..., Any], args: Sequence[Any], kwargs: dict[str, Any],
+          drop: Sequence[str] = ()) -> dict[str, Any]:
+    """The arguments a call to `function` would have, defaults filled in, less
+    `drop`. A call `function` would not accept raises its `TypeError`."""
+    import inspect
+
+    arguments = inspect.signature(function).bind(*args, **kwargs)
+    arguments.apply_defaults()
+    return {k: v for k, v in arguments.arguments.items() if k not in drop}
+
+
+def signature_without(function: Callable[..., Any], drop: Sequence[str],
+                      returns: str) -> Any:
+    """`function`'s signature less `drop`, returning `returns`: what a
+    `validate` taking the same arguments shows to `help` and the docs check."""
+    import inspect
+
+    signature = inspect.signature(function)
+    return signature.replace(
+        parameters=[p for p in signature.parameters.values() if p.name not in drop],
+        return_annotation=returns)
+
+
+__all__ = ["bound", "imported", "keyword_parameters", "signature_without"]

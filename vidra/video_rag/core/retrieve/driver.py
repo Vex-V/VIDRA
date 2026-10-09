@@ -18,19 +18,15 @@ from vidra.shared.models import embedders as embedders_mod
 from vidra.shared.models.base import require
 from vidra.shared.models.roles import Models, given, resolve
 from vidra.shared.reporting.errors import Refused
-from vidra.shared.storage.database import Database, as_database
+from vidra.shared.storage.database import Database, searched
 from vidra.shared.storage.files import read
 from .moments import Moment, to_moments
 
 
-def scope_of(video_id: Optional[str | Sequence[str]] = None,
-             video_ids: Optional[Sequence[str]] = None) -> Optional[list[str]]:
+def scope_of(video_id: Optional[str | Sequence[str]] = None) -> Optional[list[str]]:
     """The set of videos to search, from a string or a sequence. None means every
     one.
     """
-    if video_ids is not None:
-        chosen = [v for v in video_ids if v]
-        return chosen or None
     if isinstance(video_id, str) and video_id:
         return [video_id]
     if isinstance(video_id, (list, tuple, set)):
@@ -41,11 +37,11 @@ def scope_of(video_id: Optional[str | Sequence[str]] = None,
 
 def spans_of(video_id: str,
              timeline: Optional[str | Path] = None,
-             database: Optional[str | Database] = None) -> list[tuple[float, float]]:
+             database: Optional[Database] = None) -> list[tuple[float, float]]:
     """The grid: from a `timeline.json` if one is named, else from the database."""
     if timeline is not None and Path(timeline).exists():
         return read(timeline, Timeline).spans
-    return as_database(database or "supabase").spans(video_id)
+    return searched(database).spans(video_id)
 
 
 def chunks_in(spans: Sequence[tuple[float, float]],
@@ -67,9 +63,8 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
            after: Optional[float] = None,
            before: Optional[float] = None,
            structured: Optional[dict[str, Any]] = None,
-           video_ids: Optional[Sequence[str]] = None,
            grids: Optional[Mapping[str, str | Path]] = None,
-           database: Optional[str | Database] = None,
+           database: Optional[Database] = None,
            models: Optional[Models] = None
            ) -> tuple[list[Moment], list[str]]:
     """Ranked moments, and notes about the ranking.
@@ -89,12 +84,11 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
                                          question="text")
 
         # several named videos
-        moments, notes = retrieve.search("the budget",
-                                         video_ids=["q1", "q2"])
+        moments, notes = retrieve.search("the budget", ["q1", "q2"])
 
     Read `notes` when `moments` is empty: they say why. A `Moment.score` is a rank
-    fusion, not a similarity. `database` is a built `Database` or a name
-    (`supabase` by default). `models.embedder` must be the one the index was
+    fusion, not a similarity. `database` is a built `Database`
+    (`Supabase()` when None). `models.embedder` must be the one the index was
     built with; None is OpenAI's default.
 
     `models.visual_embedder` also searches the frames `glance` embedded, in
@@ -111,7 +105,7 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
     if after is not None and before is not None and before <= after:
         raise Refused(f"before ({before}) must be later than after ({after})")
 
-    scope = scope_of(video_id, video_ids)
+    scope = scope_of(video_id)
     chosen = given(models)
     visual = chosen.visual_embedder
     built = (resolve("embedder", chosen.embedder)
@@ -124,7 +118,7 @@ def search(query: str, video_id: Optional[str | Sequence[str]] = None,
         require("visual_embedder", visual)
         from ...offline.glance.driver import space_of
         spaces.append((space_of(visual), visual, lambda model, q: model.embed_query(q)))
-    target = as_database(database or "supabase")
+    target = searched(database)
     grid = _Grids(target, grids or {})
     notes: list[str] = []
 
@@ -200,7 +194,7 @@ def _chunks_wanted(scope: Optional[Sequence[str]], chunk_ids: Optional[Sequence[
         return None
     # Every grid in scope; with no scope, every video the database lists.
     known = list(scope) if scope else database.video_ids()
-    # An empty list is no constraint, as with `video_ids`.
+    # An empty list is no constraint, as with `video_id`.
     wanted = {int(c) for c in chunk_ids} if chunk_ids else None
     if timed:
         in_window = {c for vid in known for c in chunks_in(grid(vid), after, before)}

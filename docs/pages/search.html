@@ -67,15 +67,14 @@ for m in moments:
 <h2 id="arguments">Arguments</h2>
 <div class="sig">search(query, video_id=None, moments=5, sampler=None, candidates=20,
        question=None, strategy=None, chunk_ids=None, window=0, after=None, before=None,
-       structured=None, video_ids=None, grids=None, database=None, models=None)
+       structured=None, grids=None, database=None, models=None)
     -&gt; (list[Moment], list[str])</div>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>query</code></td><td>required</td><td>The text to find; empty is refused.</td></tr>
 <tr><td><code>video_id</code></td><td>every video</td><td>One id, or a list of ids.</td></tr>
-<tr><td><code>video_ids</code></td><td>none</td><td>A list of ids; same as a list in <code>video_id</code>.</td></tr>
 <tr><td><code>models</code></td><td>every default</td><td>A <code>Models</code>; only two roles are used. Its <code>embedder</code> (default <code>OpenAIEmbedder()</code>) must be the one the index was built with. Its <code>visual_embedder</code> also searches the frames <a href="stages.html#glance">glance</a> embedded, in their own ranking; given alone, only the frames are searched.</td></tr>
-<tr><td><code>database</code></td><td><code>"supabase"</code></td><td>Where to search: a <code>Database</code>, or a name.</td></tr>
+<tr><td><code>database</code></td><td><code>Supabase()</code></td><td>Where to search: a built <code>Database</code>.</td></tr>
 <tr><td><code>moments</code></td><td><code>5</code></td><td>How many chunks to return.</td></tr>
 <tr><td><code>candidates</code></td><td><code>20</code></td><td>Units ranked before grouping into chunks. Raise it if filters or many samplers leave too few moments.</td></tr>
 <tr><td><code>question</code></td><td>none</td><td>Only this question's answers, from any sampler: <code>"text"</code> matches <code>clip:text</code> and <code>uniform:text</code>.</td></tr>

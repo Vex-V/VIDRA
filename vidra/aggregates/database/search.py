@@ -29,7 +29,7 @@ def search(query: str, level: str = "source", limit: int = 5,
     it has a span, and its ranks.
     """
     from vidra.shared.models import embedders
-    from vidra.shared.storage.database import as_database
+    from vidra.shared.storage.database import searched
 
     if level not in LEVELS:
         raise Refused(f"unknown level {level!r}; known: {', '.join(LEVELS)}")
@@ -41,7 +41,7 @@ def search(query: str, level: str = "source", limit: int = 5,
     require("embedder", built)
     # Some models embed a query differently from a passage.
     vector = embedders.query_vector(built, query)
-    return as_database(database or "supabase").search_aggregates(
+    return searched(database).search_aggregates(
         vector, query, built.key, level, limit, source_ids)
 
 

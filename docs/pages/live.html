@@ -116,7 +116,7 @@ for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
 <tr><td><code>stop</code></td><td>none</td><td>A <code>threading.Event</code>; set it from anywhere to end the run.</td></tr>
 <tr><td><code>open_timeout_s</code>, <code>read_timeout_s</code></td><td><code>60.0</code>, <code>10.0</code></td><td>How long to wait for a sender, and for the next packet.</td></tr>
 </table>
-<p>Everything is checked before the stream opens: an unknown sampler or question, a bad <code>context</code>, a model without a key.</p>
+<p>Everything is checked before the stream opens: an unknown sampler or question, a bad <code>context</code>, a model without a key. <code>live.validate(...)</code> takes the same arguments, less <code>on_unit</code> and <code>on_step</code>, and returns those problems as a list without opening anything.</p>
 
 <h2 id="observations">What each answer carries</h2>
 <table class="params">
@@ -170,15 +170,15 @@ for h in hits:
 <p>With <code>database=</code>, every answer is sent as it arrives (<code>write_observations</code>): at once when the database keeps up, the backlog in one call when it does not. The video's row is written when the stream opens. A write that fails is counted in <code>run.unwritten</code> and the run goes on; every answer is still in <code>observations.jsonl</code>. When the stream ends, the batch documents follow, so <a href="search.html"><code>search</code></a> finds the run by chunk too.</p>
 <div class="sig">search_observations(query, video_id=None, limit=10, sampler=None,
                     question=None, strategy=None, after=None, before=None, since=None,
-                    until=None, structured=None, video_ids=None, database=None,
+                    until=None, structured=None, database=None,
                     models=None) -&gt; list[FrameHit]</div>
 <p>Ranks individual answers rather than chunks. A <code>Folder</code> reads each run's <code>observations.jsonl</code> in place, so it finds answers from a run still going.</p>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>query</code></td><td>required</td><td>The text to find; empty is refused.</td></tr>
-<tr><td><code>video_id</code>, <code>video_ids</code></td><td>every run</td><td>One id or a list.</td></tr>
+<tr><td><code>video_id</code></td><td>every run</td><td>One id or a list.</td></tr>
 <tr><td><code>models</code></td><td>OpenAI's</td><td>Its <code>embedder</code> must be the one the live run used.</td></tr>
-<tr><td><code>database</code></td><td><code>"supabase"</code></td><td>Where to search.</td></tr>
+<tr><td><code>database</code></td><td><code>Supabase()</code></td><td>Where to search: a built <code>Database</code>.</td></tr>
 <tr><td><code>limit</code></td><td><code>10</code></td><td>Answers to return.</td></tr>
 <tr><td><code>after</code>, <code>before</code></td><td>none</td><td>Stream seconds.</td></tr>
 <tr><td><code>since</code>, <code>until</code></td><td>none</td><td>When the frames arrived: a <code>datetime</code> or ISO 8601 (a naive one is UTC).</td></tr>

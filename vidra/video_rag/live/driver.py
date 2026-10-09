@@ -39,6 +39,7 @@ from vidra.shared.contracts.documents import (Descriptions, Manifest, Media,
                                               Produced, Timeline,
                                               fingerprint_of)
 from vidra.shared.contracts.units import render
+from vidra.shared.config.lookup import bound, signature_without
 from vidra.shared.models.roles import Models, given, resolve
 from vidra.shared.reporting import logs
 from vidra.shared.reporting.errors import Refused
@@ -77,7 +78,7 @@ class Options:
     sampler: str | Sequence[Any] = "uniform"
     #: The vlm and the embedder; None, or a role left None, is its default.
     models: Optional[Models] = None
-    database: Optional[str | Database] = None
+    database: Optional[Database] = None
     #: The uniform grid: a chunk is `int(media_ts // chunk_s)`.
     chunk_s: float = 20.0
     #: Decimated frames per second of media.
@@ -182,7 +183,7 @@ class LiveRun:
 
 
 # ------------------------------------------------------------------ checks
-def validate(options: Options) -> list[str]:
+def problems_of(options: Options) -> list[str]:
     """Problems found before the stream is opened, as messages; empty is valid."""
     problems: list[str] = []
     source = (os.fspath(options.source) if isinstance(options.source, os.PathLike)
@@ -227,7 +228,7 @@ def process(options: Options,
     answer as it is ready; `on_step(component, produced)` is called once the
     stream is open (with None) and for each document written at the end.
     """
-    problems = validate(options)
+    problems = problems_of(options)
     if problems:
         raise Refused("; ".join(problems))
     if isinstance(options.source, os.PathLike):
@@ -674,7 +675,7 @@ def video_rag_live(source: str | Path,
                    name: Optional[str] = None,
                    sampler: str | Sequence[Any] = "uniform",
                    models: Optional[Models] = None,
-                   database: Optional[str | Database] = None,
+                   database: Optional[Database] = None,
                    on_unit: Optional[Callable[[Observation], None]] = None,
                    on_step: Optional[Callable[..., None]] = None,
                    chunk_s: float = 20.0,
@@ -686,7 +687,7 @@ def video_rag_live(source: str | Path,
                    stop: Optional[threading.Event] = None,
                    open_timeout_s: Optional[float] = 60.0,
                    read_timeout_s: Optional[float] = 10.0) -> LiveRun:
-    """A live run, as keyword arguments: `process` with an `Options`.
+    """A live run: a stream in, an answer per kept frame as it arrives.
 
     Blocks until the stream ends, `stop_after_s` is reached, `stop` is set or
     `on_unit` raises `StopStream`. `on_unit` is called on the event loop for
@@ -694,13 +695,25 @@ def video_rag_live(source: str | Path,
     under `<into>/<video_id>/`. `models` carries the vlm and the embedder
     (None is every default).
     """
-    return process(Options(
-        source=source, into=Path(into), video_id=video_id, name=name,
-        sampler=sampler, models=models, database=database, chunk_s=chunk_s, per_second=per_second,
-        context=context, queue=queue, record=record, stop_after_s=stop_after_s,
-        stop=stop, open_timeout_s=open_timeout_s, read_timeout_s=read_timeout_s,
-    ), on_unit, on_step)
+    given = {k: v for k, v in locals().items() if k not in ("on_unit", "on_step")}
+    return process(_options(given), on_unit, on_step)
 
 
-__all__ = ["LiveRun", "OBSERVATIONS", "Observation", "Options", "StopStream",
-           "process", "validate", "video_rag_live"]
+def _options(given: dict[str, Any]) -> Options:
+    return Options(**{**given, "into": Path(given["into"])})
+
+
+def validate(*args: Any, **kwargs: Any) -> list[str]:
+    """Every problem `video_rag_live(...)` would refuse with these same
+    arguments, as messages, before a stream is opened; empty means it would
+    start."""
+    return problems_of(_options(bound(video_rag_live, args, kwargs,
+                                      drop=("on_unit", "on_step"))))
+
+
+validate.__signature__ = signature_without(video_rag_live, ("on_unit", "on_step"),
+                                           "list[str]")
+
+
+__all__ = ["LiveRun", "OBSERVATIONS", "Observation", "StopStream",
+           "validate", "video_rag_live"]

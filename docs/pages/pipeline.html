@@ -77,7 +77,7 @@ run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
 <tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>Which frames to keep and what to ask, e.g. <code>"clip,yolo:overview"</code> (<a href="samplers.html#specs">specs</a>), or a list of names and sampler objects, to set a sampler's settings (<a href="samplers.html#per-call">per call</a>).</td></tr>
 <tr><td><code>models</code></td><td>every default</td><td>A <a href="models.html#models"><code>Models</code></a>: the <code>vlm</code> (default <code>OpenAI()</code>), the <code>embedder</code> (default <code>OpenAIEmbedder()</code>; search must use the same one), and the <code>visual_embedder</code> (none: frames are not embedded; with one, the kept frames are embedded too, by <a href="stages.html#glance">glance</a>).</td></tr>
 <tr><td><code>resume</code></td><td><code>True</code></td><td>Reuse still-current descriptions and vectors. <code>False</code> redoes them.</td></tr>
-<tr><td><code>database</code></td><td>none</td><td>Where to copy every artifact: a <code>Database</code>, or <code>"supabase"</code> / <code>"folder"</code>.</td></tr>
+<tr><td><code>database</code></td><td>none</td><td>Where to copy every artifact: a built <code>Database</code>, e.g. <code>Supabase()</code> or <code>Folder("data/out")</code>.</td></tr>
 <tr><td><code>on_step</code></td><td>none</td><td>Progress callback (<a href="#progress">below</a>).</td></tr>
 <tr><td><code>describe</code></td><td><code>True</code></td><td>Ask the vision model about the kept frames. <code>False</code> needs a <code>visual_embedder</code>: no vision model is called and no text is made from the picture.</td></tr>
 </table>
@@ -132,17 +132,13 @@ for step in run.steps:
 video_rag("shop.mp4", "data/out", sampler="clip", on_step=on_step)</code></pre>
 <p><code>Progress</code> has <code>component</code>, <code>total</code>, <code>completed</code>, <code>skipped</code>, <code>current</code> (e.g. <code>3:clip</code>) and <code>result</code>. Describe reports in completion order. Raising in the callback stops the run.</p>
 
-<h3 id="options">Options, process, validate</h3>
-<p><code>video_rag()</code> is shorthand for these:</p>
-<pre><code class="python">from pathlib import Path
-from vidra.video_rag import Options, process, validate
+<h3 id="validate">validate</h3>
+<p><code>validate</code> takes <code>video_rag()</code>'s arguments, less <code>on_step</code>, and returns every problem the run would be refused for, as a list; nothing runs.</p>
+<pre><code class="python">from vidra.video_rag import validate, video_rag
 
-options = Options(source=Path("shop.mp4"), into=Path("data/out"), policy="scene",
-                  sampler="clip", models=Models(vlm=OpenAI(), embedder=LocalEmbedder()))
-problems = validate(options)          # [] when the request is valid; nothing runs
+problems = validate("shop.mp4", "data/out", policy="scene", sampler="clip", models=models)
 if not problems:
-    run = process(options, on_step=None)</code></pre>
-<p><code>Options</code> has <code>video_rag()</code>'s fields except <code>on_step</code> and <code>models</code>. <code>validate(options)</code> returns every problem as a list; <code>process(options, on_step)</code> runs it.</p>
+    run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip", models=models)</code></pre>
 
 <h3 id="layout">layout()</h3>
 <p><code>layout(folder)</code> gives every artifact's path in a video's folder:</p>
@@ -153,24 +149,23 @@ at["timeline"]          # Path("data/out/shop/timeline.json")
 at["store"]             # Path("data/out/shop/store")</code></pre>
 
 <h2 id="workflow">workflow: both tiers</h2>
-<p><code>workflow.process</code> runs <code>video_rag</code>, then every aggregator up to a cost <b>tier</b>. Answers go to <code>&lt;folder&gt;/aggregates/</code> and are reused while current.</p>
-<pre><code class="python">from pathlib import Path
-from vidra import LocalEmbedder, Models, OpenAI, Supabase, workflow
+<p><code>workflow.workflow</code> runs <code>video_rag</code>, then every aggregator up to a cost <b>tier</b>. Answers go to <code>&lt;folder&gt;/aggregates/</code> and are reused while current.</p>
+<pre><code class="python">from vidra import LocalEmbedder, Models, OpenAI, Supabase, workflow
 
-run = workflow.process(workflow.Options(
-    source=Path("shop.mp4"), sampler="clip,yolo", policy="scene", tier="llm",
-    models=Models(vlm=OpenAI(), llm=OpenAI(), embedder=LocalEmbedder()),
-    database=Supabase()))
+run = workflow.workflow("shop.mp4", sampler="clip,yolo", policy="scene", tier="llm",
+                        models=Models(vlm=OpenAI(), llm=OpenAI(), embedder=LocalEmbedder()),
+                        database=Supabase())
 
 answers = run.steps[-1]                   # the aggregate step's receipt
 answers.artifacts                         # {"summary": ".../aggregates/summary.json", ...}
 answers.stats["skipped"]                  # {"speakers": "...", ...}</code></pre>
-<div class="sig">workflow.Options(source, into=None, video_id=None, name=None, recorded_at=None,
-                 policy="uniform", use_video=True, use_audio=True, sampler="uniform",
-                 describe=True, tier="free", database=None, models=None)</div>
-<p><code>video_rag()</code>'s fields, plus:</p>
+<div class="sig">workflow.workflow(source, into=None, video_id=None, name=None, recorded_at=None,
+                  policy="uniform", use_video=True, use_audio=True, sampler="uniform",
+                  models=None, describe=True, tier="free", database=None,
+                  on_step=None) -&gt; Run</div>
+<p><code>video_rag()</code>'s arguments, plus:</p>
 <table class="params">
-<tr><th>Field</th><th>Default</th><th>Meaning</th></tr>
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>into</code></td><td>the data root's <code>out/</code></td><td>Optional here.</td></tr>
 <tr><td><code>models</code></td><td>every default</td><td>As in <code>video_rag()</code>, and its <code>llm</code> (default <code>OpenAI()</code>) answers the <code>llm</code> tier.</td></tr>
 <tr><td><code>tier</code></td><td><code>"free"</code></td><td>The costliest tier to run: <code>free</code>, <code>local</code> or <code>llm</code>.</td></tr>
@@ -183,9 +178,8 @@ answers.stats["skipped"]                  # {"speakers": "...", ...}</code></pre
 </table>
 <p>An aggregator with nothing to read (<code>speakers</code> on a silent video) is skipped with the reason. To choose inputs yourself, run the <a href="aggregates.html">aggregates</a> directly.</p>
 <ul>
-  <li><code>workflow.validate(options)</code> lists every problem either tier would raise, including a missing LLM key.</li>
-  <li><code>workflow.process(options, on_step)</code> reports <code>"aggregate"</code> as a final step.</li>
-  <li><code>workflow.extraction(options)</code> returns the <code>video_rag.Options</code> part.</li>
+  <li><code>workflow.validate(...)</code> takes the same arguments, less <code>on_step</code>, and lists every problem either tier would raise, including a missing LLM key.</li>
+  <li><code>on_step</code> reports <code>"aggregate"</code> as a final step.</li>
   <li><code>workflow.Run</code> is a <code>Run</code> with the aggregate step last in <code>steps</code>.</li>
 </ul>
 <!-- pager -->

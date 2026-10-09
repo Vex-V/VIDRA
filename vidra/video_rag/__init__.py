@@ -47,8 +47,6 @@ from typing import Any, Optional
 #: Resolved on first use. An attribute of None is the module itself.
 _LAZY: dict[str, tuple[str, Optional[str]]] = {
     "video_rag": ("offline.driver", "video_rag"),
-    "process": ("offline.driver", "process"),
-    "Options": ("offline.driver", "Options"),
     "Run": ("offline.driver", "Run"),
     "validate": ("offline.driver", "validate"),
     "layout": ("offline.driver", "layout"),
@@ -78,5 +76,5 @@ def __dir__() -> list[str]:
     return sorted([*globals(), *_LAZY])
 
 
-__all__ = ["Options", "Run", "layout", "process", "search",
-           "search_observations", "validate", "video_rag", "video_rag_live"]
+__all__ = ["Run", "layout", "search", "search_observations", "validate", "video_rag",
+           "video_rag_live"]

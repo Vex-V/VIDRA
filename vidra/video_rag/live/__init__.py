@@ -1,7 +1,7 @@
 """The live pipeline: a stream in, an answer per kept frame as soon as it is
 sampled, and `offline`'s documents when the stream ends.
 
-    driver     Options · validate · process · video_rag_live() · Observation
+    driver     video_rag_live() · validate (the same arguments) · Observation
     source     a stream opened with PyAV, on a clock starting at its first frame;
                `frames`: that stream's frames, for code of your own
     observe    the sampling thread: decimate, chunk, samplers, context frames
@@ -16,8 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 _LAZY = {name: ("driver", name) for name in (
-    "LiveRun", "Observation", "Options", "StopStream", "process", "validate",
-    "video_rag_live")}
+    "LiveRun", "Observation", "StopStream", "validate", "video_rag_live")}
 _LAZY.update({"send": ("sender", "send"), "StreamUnavailable": ("source", "StreamUnavailable"),
               "frames": ("source", "frames"), "Arrival": ("source", "Arrival")})
 

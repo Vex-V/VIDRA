@@ -74,8 +74,19 @@ def class_of(name: str) -> Type[Sampler]:
 
 def build(name: str, **settings) -> Sampler:
     """A sampler object, by name, with its settings: what a spec string builds,
-    configured. Pass the object in a spec to use these settings in a run."""
-    return class_of(name)(**settings)
+    configured. Pass the object in a spec to use these settings in a run. A
+    setting the sampler does not take is refused, naming what it does take."""
+    cls = class_of(name)
+    parameters = inspect.signature(cls.__init__).parameters.values()
+    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters):
+        takes = [p.name for p in parameters if p.name not in ("self", "sampler_id")
+                 and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                inspect.Parameter.KEYWORD_ONLY)]
+        unknown = sorted(set(settings) - set(takes))
+        if unknown:
+            raise Refused(f"{name} takes no {', '.join(unknown)}; it takes "
+                          f"{', '.join(takes)}")
+    return cls(**settings)
 
 
 def available() -> list[str]:

@@ -34,7 +34,7 @@ def prompt_rows(versions: dict[str, str]) -> list[dict[str, object]]:
     return entries
 
 
-def export(produced: Produced, database: str | Database) -> list[str]:
+def export(produced: Produced, database: Database) -> list[str]:
     """Write a component's artifacts to a database. Returns what failed.
 
     Reads each artifact file back from the receipt and hands it to the

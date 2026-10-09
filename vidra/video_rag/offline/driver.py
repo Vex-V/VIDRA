@@ -23,20 +23,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
+from vidra.shared.config.lookup import bound, signature_without
 from vidra.shared.config.paths import layout
 from vidra.shared.contracts.documents import Produced
 from vidra.shared.models.roles import Models, given
 from vidra.shared.reporting import logs
 from vidra.shared.reporting.errors import Refused
-from vidra.shared.storage.database import DATABASES as _DATABASES
 from vidra.shared.storage.database import Database, as_database
 from ..core.export import export
 from . import audio, boundaries, cut, describe, embed, glance, media, video
 #: The conflict rules `media` accepts.
 from .media.driver import ON_CONFLICT
-
-#: The databases a run may name by string.
-DATABASES = tuple(_DATABASES)
 
 
 @dataclass
@@ -66,8 +63,8 @@ class Options:
     describe: bool = True
     #: Reuse what an earlier run described and embedded when it is still current.
     resume: bool = True
-    # Also copy every artifact to this database: a name or a built `Database`.
-    database: Optional[str | Database] = None
+    # Also copy every artifact to this database, built: `Supabase()`, `Folder(...)`.
+    database: Optional[Database] = None
 
 
 @dataclass
@@ -97,7 +94,7 @@ class Run:
                 "artifacts": self.artifacts()}
 
 
-def validate(options: Options) -> list[str]:
+def problems_of(options: Options) -> list[str]:
     """Problems no single component can see, as messages; empty means valid."""
     problems: list[str] = []
     if options.policy not in boundaries.POLICIES:
@@ -157,7 +154,7 @@ def process(options: Options,
 
 def _run(options: Options, whole: Any,
          on_step: Optional[Callable[..., None]] = None) -> Run:
-    problems = validate(options)
+    problems = problems_of(options)
     if problems:
         raise Refused("; ".join(problems))
     # Built once, before the first step.
@@ -308,24 +305,32 @@ def video_rag(source: str | Path,
               models: Optional[Models] = None,
               describe: bool = True,
               resume: bool = True,
-              database: Optional[str | Database] = None,
+              database: Optional[Database] = None,
               on_step: Optional[Callable[..., None]] = None) -> Run:
-    """The whole extraction, as keyword arguments: `process` with an `Options`.
+    """The whole extraction: every component in order, under one folder.
 
     Everything lands under `<into>/<video_id>/`. `models` carries the vlm, the
     embedder and the visual_embedder (None is every default); `database` is a
-    name or a built `Database`. `name` and `recorded_at` override the video's
+    built `Database`. `name` and `recorded_at` override the video's
     filename and recording time. A `visual_embedder` also embeds the kept
     frames (`glance`); `describe=False` with one asks no vlm at all.
     """
-    return process(Options(
-        source=Path(source), into=Path(into), video_id=video_id,
-        on_conflict=on_conflict, name=name, recorded_at=recorded_at,
-        policy=policy, use_video=use_video, use_audio=use_audio,
-        sampler=sampler, models=models, describe=describe, resume=resume,
-        database=database,
-    ), on_step)
+    given = {k: v for k, v in locals().items() if k != "on_step"}
+    return process(_options(given), on_step)
 
 
-__all__ = ["DATABASES", "Options", "Run", "export", "layout", "process",
-           "validate", "video_rag"]
+def _options(given: dict[str, Any]) -> Options:
+    return Options(**{**given, "source": Path(given["source"]),
+                      "into": Path(given["into"])})
+
+
+def validate(*args: Any, **kwargs: Any) -> list[str]:
+    """Every problem `video_rag(...)` would refuse with these same arguments, as
+    messages; empty means it would start. Nothing runs."""
+    return problems_of(_options(bound(video_rag, args, kwargs, drop=("on_step",))))
+
+
+validate.__signature__ = signature_without(video_rag, ("on_step",), "list[str]")
+
+
+__all__ = ["Run", "export", "layout", "validate", "video_rag"]

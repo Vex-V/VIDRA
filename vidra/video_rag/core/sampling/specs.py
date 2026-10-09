@@ -4,12 +4,12 @@ samplers.
 Shared by every pipeline that samples. A spec is a string, or a list mixing
 strings and `Sampler` objects:
 
-    "clip:[text,scene],yolo"                         by name, built-in settings
+    "clip:[text,scene],yolo"                         by name, default settings
     [samplers.build("clip", threshold=0.93, prompts=["safety"]), "yolo"]
     [Brightness(step=12, prompts=["overview"])]      a class of your own
 
-A sampler named by a string gets the settings passed beside the spec, each
-routed to the samplers whose constructor takes it; an object carries its own.
+A sampler named by a string is built with its defaults; settings are given
+only on an object, so each lands on the sampler it was written on.
 Questions are checked against a vocabulary the caller passes; nothing here
 reads the question library.
 """
@@ -21,7 +21,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
-from vidra.shared.config.lookup import keyword_parameters
 from vidra.shared.reporting.errors import Refused, UnknownOption
 from . import samplers as samplers_mod
 from .samplers import Sampler
@@ -65,7 +64,7 @@ def parse_spec(spec: str) -> tuple[str, list[str]]:
         return name, []
     if rest.startswith("[") and rest.endswith("]"):
         rest = rest[1:-1]
-    parts = [q.strip() for q in rest.replace("+", ",").split(",")]
+    parts = [q.strip() for q in rest.split(",")]
     seen, questions = set(), []
     for q in parts:
         if q and q not in seen:          # each question once
@@ -78,28 +77,6 @@ def spec_text(sampler: Spec | Sequence[Spec]) -> str:
     """A spec as one line, for logs: an object appears as `name(object)`."""
     return ",".join(s if isinstance(s, str) else f"{s.name}(object)"
                     for s in split_specs(sampler))
-
-
-#: The built-in samplers' settings: setting -> the samplers that read it.
-#: Published; a sampler's settings are read off its constructor, and
-#: `library_check` holds this table to the built-ins' signatures.
-SAMPLER_SETTINGS: dict[str, tuple[str, ...]] = {
-    "every_n": ("uniform",),
-    # Samplers that keep a frame when it changed enough.
-    "threshold": ("clip", "yolo", "objects", "text"),
-    "vocabulary": ("objects",),
-    "confidence": ("objects",),
-    "languages": ("text",),
-}
-
-#: Settings every sampler takes: the rate limits the base class enforces.
-RATE_SETTINGS = ("min_interval_s", "max_per_chunk")
-
-
-def settings_of(cls: type) -> set[str]:
-    """The settings a sampler class takes: its constructor's keyword parameters,
-    less the bookkeeping every sampler has."""
-    return {n for n in keyword_parameters(cls) if n not in ("sampler_id", "prompts")}
 
 
 @dataclass
@@ -153,7 +130,10 @@ def _plan(specs: Sequence[Spec], questions: Optional[Sequence[str]]) -> _Plan:
                      f"{', '.join(known)}", unknown=True)
             continue
         for question in asked:
-            if questions is not None and question not in questions:
+            if "+" in question:
+                plan.add(f"{spec!r}: questions are listed in brackets, "
+                         f"{name}:[{question.replace('+', ',')}]")
+            elif questions is not None and question not in questions:
                 plan.add(f"unknown question {question!r} in {spec!r}; "
                          f"known: {', '.join(questions)}", unknown=True)
         if name not in grouped:
@@ -196,15 +176,8 @@ def problems(sampler: Spec | Sequence[Spec],
     return _plan(split_specs(sampler), questions).problems
 
 
-def build_samplers(specs: Sequence[Spec], every_n: Optional[int] = None,
-                   min_interval_s: float = 0.0,
-                   max_per_chunk: Optional[int] = None,
-                   threshold: Optional[float] = None,
-                   vocabulary: Optional[Sequence[str]] = None,
-                   confidence: Optional[float] = None,
-                   languages: Optional[Sequence[str]] = None,
-                   questions: Optional[Sequence[str]] = None
-                   ) -> list[Sampler]:
+def build_samplers(specs: Sequence[Spec],
+                   questions: Optional[Sequence[str]] = None) -> list[Sampler]:
     """`["yolo", "clip:[text,scene]", Brightness(step=12)]` -> sampler objects,
     one per run, in spec order.
 
@@ -212,43 +185,13 @@ def build_samplers(specs: Sequence[Spec], every_n: Optional[int] = None,
     the question is the sampler's own name. Specs naming the same sampler merge
     into one run, so `clip:text,clip:scene` means `clip:[text,scene]`. A sampler
     object is copied, so every run has its own state; it carries its own
-    settings and questions. `questions` is the vocabulary to check against;
-    None accepts any name.
-
-    The settings go to the samplers named by string whose constructor takes
-    them: `threshold` is how much a frame must change to be kept, `confidence`
-    the detector's box threshold, `languages` what the OCR reads. A setting no
-    named sampler takes is refused.
+    settings and questions, and a name is built with its defaults.
+    `questions` is the vocabulary to check against; None accepts any name.
     """
     plan = _plan(list(specs), questions)
     if plan.problems:
         error = UnknownOption if plan.unknown_only else Refused
         raise error("; ".join(plan.problems))
-
-    given: dict[str, Any] = {k: v for k, v in {
-        "every_n": every_n, "threshold": threshold, "vocabulary": vocabulary,
-        "confidence": confidence, "languages": languages}.items() if v is not None}
-    for listed in ("vocabulary", "languages"):
-        if listed in given:
-            given[listed] = list(given[listed])
-    rate = {"min_interval_s": min_interval_s, "max_per_chunk": max_per_chunk}
-
-    named = [run for run in plan.runs if not isinstance(run, Sampler)]
-    takes = {name: settings_of(samplers_mod.class_of(name)) for name, _ in named}
-    unreachable = sorted(s for s in given
-                         if not any(s in takes[name] for name, _ in named))
-    if unreachable:
-        readers = {s: sorted(n for n in samplers_mod.available()
-                             if s in settings_of(samplers_mod.class_of(n)))
-                   for s in unreachable}
-        detail = "; ".join(f"{s} is read by {', '.join(readers[s]) or 'no sampler'}"
-                           for s in unreachable)
-        objects = [run.name for run in plan.runs if isinstance(run, Sampler)]
-        hint = (" (a sampler object carries its own settings: set them on it)"
-                if objects else "")
-        raise Refused(
-            f"no sampler named in the spec reads {', '.join(unreachable)} "
-            f"(named: {', '.join(n for n, _ in named) or 'none'}) -- {detail}{hint}")
 
     built: list[Sampler] = []
     for run in plan.runs:
@@ -258,11 +201,9 @@ def build_samplers(specs: Sequence[Spec], every_n: Optional[int] = None,
             built.append(copy.copy(run))
             continue
         name, asked = run
-        settings = {s: v for s, v in given.items() if s in takes[name]}
-        ask = {"prompts": asked} if asked else {}
-        built.append(samplers_mod.build(name, **ask, **rate, **settings))
+        built.append(samplers_mod.build(name, **({"prompts": asked} if asked else {})))
     return built
 
 
-__all__ = ["RATE_SETTINGS", "SAMPLER_SETTINGS", "Spec", "build_samplers",
-           "parse_spec", "problems", "settings_of", "spec_text", "split_specs"]
+__all__ = ["Spec", "build_samplers", "parse_spec", "problems", "spec_text",
+           "split_specs"]

@@ -9,9 +9,8 @@ from __future__ import annotations
 #: The public surface: entry points, errors and return types.
 from ...core.frames import FrameStore
 from ...core.sampling.reader import Frame, UnreadableSource
-from ...core.sampling.specs import SAMPLER_SETTINGS
 from .driver import frames, ingest, load, video
 from .recovery import Mismatch, MissingVideo, recreate
 
-__all__ = ["SAMPLER_SETTINGS", "Frame", "FrameStore", "Mismatch", "MissingVideo",
+__all__ = ["Frame", "FrameStore", "Mismatch", "MissingVideo",
            "UnreadableSource", "frames", "ingest", "load", "recreate", "video"]

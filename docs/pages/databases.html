@@ -57,7 +57,7 @@
 <tr><td><code>Folder(root)</code></td><td>nothing; reads the output folder in place</td><td>vectors only</td><td>nothing</td></tr>
 <tr><td>your own <code>Database</code> subclass</td><td>whatever its hooks keep</td><td>whatever its read hooks do</td><td>your code</td></tr>
 </table>
-<p>Pass it as <code>database=</code> to <code>video_rag</code>, <code>workflow</code>, <code>aggregates.aggregate</code>, <code>search</code> and <code>aggregates.search</code>, or by name (<code>"supabase"</code>, <code>"folder"</code>). Build once and reuse. A <code>Database</code> is a context manager that calls <code>close()</code> on exit.</p>
+<p>Pass it as <code>database=</code> to <code>video_rag</code>, <code>workflow</code>, <code>aggregates.aggregate</code>, <code>search</code> and <code>aggregates.search</code>, built: a name is refused. A search given none reads <code>Supabase()</code>. Build once and reuse. A <code>Database</code> is a context manager that calls <code>close()</code> on exit.</p>
 
 <h2 id="supabase">Supabase</h2>
 <div class="sig">Supabase(url=None, key=None, read_key=None)</div>

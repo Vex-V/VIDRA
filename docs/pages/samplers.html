@@ -104,27 +104,27 @@
 </table>
 
 <h2 id="settings">Settings</h2>
+<p>A setting is set on the sampler it belongs to, with <code>samplers.build</code>; a name in a spec string is built with its defaults. <code>threshold</code> is on four samplers and means something different on each scale, so one number never reaches two of them.</p>
 <table>
-<tr><th>Setting</th><th>Read by</th><th>Default</th></tr>
-<tr><td><code>per_second</code></td><td>all (what is offered)</td><td><code>1.0</code></td></tr>
-<tr><td><code>min_interval_s</code></td><td>all</td><td><code>0.0</code></td></tr>
-<tr><td><code>max_per_chunk</code></td><td>all</td><td>none</td></tr>
-<tr><td><code>every_n</code></td><td><code>uniform</code></td><td><code>1</code></td></tr>
-<tr><td><code>threshold</code></td><td><code>clip</code>, <code>yolo</code>, <code>objects</code>, <code>text</code></td><td>each sampler's own</td></tr>
-<tr><td><code>vocabulary</code></td><td><code>objects</code></td><td>shop items</td></tr>
-<tr><td><code>confidence</code></td><td><code>objects</code></td><td><code>0.30</code></td></tr>
-<tr><td><code>languages</code></td><td><code>text</code></td><td><code>["en"]</code></td></tr>
+<tr><th>Setting</th><th>Sampler</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>min_interval_s</code></td><td>all</td><td><code>0.0</code></td><td>At least this many seconds between kept frames.</td></tr>
+<tr><td><code>max_per_chunk</code></td><td>all</td><td>none</td><td>At most this many kept frames per chunk.</td></tr>
+<tr><td><code>every_n</code></td><td><code>uniform</code></td><td><code>1</code></td><td>Keep every Nth offered frame.</td></tr>
+<tr><td><code>threshold</code></td><td><code>clip</code>, <code>yolo</code>, <code>objects</code>, <code>text</code></td><td>each sampler's own</td><td>How much the frame must change; see each sampler.</td></tr>
+<tr><td><code>mode</code></td><td><code>clip</code></td><td><code>"reference"</code></td><td>Compare to the last kept frame, or with <code>"consecutive"</code> to the frame before.</td></tr>
+<tr><td><code>vocabulary</code></td><td><code>objects</code></td><td>shop items</td><td>What to detect.</td></tr>
+<tr><td><code>confidence</code></td><td><code>objects</code></td><td><code>0.30</code></td><td>How sure a detection must be.</td></tr>
+<tr><td><code>class_aware</code></td><td><code>objects</code></td><td><code>True</code></td><td>Match boxes only within a class.</td></tr>
+<tr><td><code>metric</code></td><td><code>objects</code></td><td><code>"proximity"</code></td><td>How boxes are matched: <code>"proximity"</code> or <code>"iou"</code>.</td></tr>
+<tr><td><code>languages</code></td><td><code>text</code></td><td><code>["en"]</code></td><td>EasyOCR's languages.</td></tr>
+<tr><td><code>grid</code></td><td><code>text</code></td><td><code>128</code></td><td>The size the text layout is compared at.</td></tr>
+<tr><td><code>send</code>, <code>crops</code>, <code>crop_size</code>, <code>crop_margin</code></td><td><code>yolo</code>, <code>objects</code></td><td><code>"frame"</code></td><td>What the model is shown (<a href="#crops">crops</a>).</td></tr>
+<tr><td><code>detector</code>, <code>embedder</code></td><td>the model-backed ones</td><td>built on first use</td><td>A detector or frame embedder to use instead of the default, e.g. one already loaded.</td></tr>
 </table>
-<p>A setting no sampler named in the spec takes is refused. Each goes to the samplers whose constructor takes it, so a sampler of your own with a <code>threshold</code> parameter gets one too. <code>video.SAMPLER_SETTINGS</code> is this table as data for the built-ins: <code>{setting: (samplers)}</code>. A value applies to every sampler that reads it: <code>threshold=0.9</code> with <code>clip,yolo</code> sets both.</p>
-<pre><code class="python">from vidra.video_rag import video
+<p>A setting the sampler does not take is refused, naming what it does take. How many frames are offered at all, <code>per_second</code>, belongs to the stage (<code>video.video</code>, <code>video_rag_live</code>), not to a sampler.</p>
 
-video.video(D / "media.json", D / "timeline.json", D / "manifest.json", store=D / "store",
-            sampler="clip,objects", threshold=0.9,
-            vocabulary=["forklift", "pallet", "hard hat"], confidence=0.4,
-            min_interval_s=2.0, max_per_chunk=5)</code></pre>
-
-<h3 id="per-call">Setting a sampler up per call</h3>
-<p>The settings above reach a sampler only when you call the <code>video</code> stage yourself. To set them for <code>video_rag</code> or <code>video_rag_live</code>, build the sampler and put the object in the spec: it carries its own settings and questions, and a spec may mix objects and names.</p>
+<h3 id="per-call">Building a configured sampler</h3>
+<p>Build the sampler and put the object in the spec: it carries its own settings and questions, and a spec may mix objects and names. The same list works for <code>video.video</code>, <code>video_rag</code> and <code>video_rag_live</code>.</p>
 <pre><code class="python">from vidra.video_rag import samplers, video_rag
 
 video_rag("x.mp4", "data/out",
@@ -165,7 +165,6 @@ video_rag("x.mp4", "data/out",
 <tr><td><code>uniform:text</code></td><td>every Nth frame, asked to read the screen</td><td><code>uniform:text</code></td></tr>
 <tr><td><code>yolo:overview</code></td><td>frames where people changed, as short prose</td><td><code>yolo:overview</code></td></tr>
 <tr><td><code>clip:[text,scene]</code></td><td>one pass, two questions</td><td><code>clip:text</code>, <code>clip:scene</code></td></tr>
-<tr><td><code>clip:text+scene</code></td><td>the same, without brackets</td><td><code>clip:text</code>, <code>clip:scene</code></td></tr>
 <tr><td><code>clip,yolo</code></td><td>two samplers, one decode</td><td><code>clip</code>, <code>yolo</code></td></tr>
 <tr><td><code>clip,clip:checkout</code></td><td>one clip pass, its own question and <code>checkout</code></td><td><code>clip</code>, <code>clip:checkout</code></td></tr>
 </table>

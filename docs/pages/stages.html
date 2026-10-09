@@ -160,33 +160,26 @@ grid = boundaries.timeline(m, "scene", cuts=boundaries.detect("scene", media=m))
 <!-- ============================================================ video -->
 <h2 id="video">5. video</h2>
 <p>Decodes the picture once, offers frames to each sampler and stores the ones kept. Writes <code>manifest.json</code> and the JPEGs in <code>store/</code>. See <a href="samplers.html">Samplers</a>.</p>
-<div class="sig">video.video(media, timeline, out, store=None, sampler="uniform", per_second=1.0, every_n=None,
-            min_interval_s=0.0, max_per_chunk=None, threshold=None, vocabulary=None,
-            confidence=None, languages=None, store_scope="sampled", prune_store=False,
-            on_progress=None) -&gt; Produced</div>
+<div class="sig">video.video(media, timeline, out, store=None, sampler="uniform", per_second=1.0,
+            store_scope="sampled", prune_store=False, on_progress=None) -&gt; Produced</div>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>media</code>, <code>timeline</code></td><td>required</td><td>Paths to <code>media.json</code> and <code>timeline.json</code>.</td></tr>
 <tr><td><code>out</code></td><td>required</td><td>Where to write <code>manifest.json</code>.</td></tr>
 <tr><td><code>store</code></td><td>none</td><td>Frame folder. Without it no frames are kept and <code>describe</code> has nothing to read.</td></tr>
-<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>A <a href="samplers.html#specs">sampler spec</a>: <code>"clip,yolo:overview"</code>, or a list of specs and sampler objects (<a href="samplers.html#per-call">per call</a>).</td></tr>
+<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>A <a href="samplers.html#specs">sampler spec</a>: <code>"clip,yolo:overview"</code>, or a list of specs and sampler objects, each with its own <a href="samplers.html#settings">settings</a>.</td></tr>
 <tr><td><code>per_second</code></td><td><code>1.0</code></td><td>Frames offered to the samplers per second of video.</td></tr>
-<tr><td><code>every_n</code></td><td><code>1</code></td><td><code>uniform</code>: keep every Nth offered frame.</td></tr>
-<tr><td><code>min_interval_s</code></td><td><code>0.0</code></td><td>Every sampler: at least this many seconds between kept frames.</td></tr>
-<tr><td><code>max_per_chunk</code></td><td>none</td><td>Every sampler: at most this many frames per chunk.</td></tr>
-<tr><td><code>threshold</code></td><td>per sampler</td><td><code>clip</code>, <code>yolo</code>, <code>objects</code>, <code>text</code>: keep a frame when similarity to the last kept one falls below this.</td></tr>
-<tr><td><code>vocabulary</code></td><td>shop items</td><td><code>objects</code>: what to detect, e.g. <code>["forklift", "pallet"]</code>.</td></tr>
-<tr><td><code>confidence</code></td><td><code>0.30</code></td><td><code>objects</code>: how sure a detection must be.</td></tr>
-<tr><td><code>languages</code></td><td><code>["en"]</code></td><td><code>text</code>: EasyOCR's languages.</td></tr>
 <tr><td><code>store_scope</code></td><td><code>"sampled"</code></td><td><code>"sampled"</code> stores kept frames; <code>"decimated"</code> stores every offered frame.</td></tr>
 <tr><td><code>prune_store</code></td><td><code>False</code></td><td>Delete frames this manifest doesn't use; otherwise the store keeps growing across runs.</td></tr>
 <tr><td><code>on_progress</code></td><td>none</td><td>Called with a <code>Progress</code> after each chunk.</td></tr>
 </table>
-<pre><code class="python">video.video(D / "media.json", D / "timeline.json", D / "manifest.json",
-            store=D / "store", sampler="objects", vocabulary=["cart", "basket"],
-            confidence=0.4, max_per_chunk=4)</code></pre>
-<p>Samplers and questions are checked before decoding, and a setting no chosen sampler reads is refused (e.g. <code>every_n</code> without <code>uniform</code>). No readable video stream raises <code>video.UnreadableSource</code>.</p>
-<p><code>video.ingest(media, timeline, sampler="uniform", ..., frames=None, store_scope="sampled", on_progress=None)</code> takes a <code>Media</code> and <code>Timeline</code>, writes frames into <code>frames</code> (a <code>FrameStore</code>, or <code>None</code>), and returns the <code>Manifest</code>. <code>video.load(path)</code> reads one back.</p>
+<pre><code class="python">from vidra.video_rag import samplers
+
+video.video(D / "media.json", D / "timeline.json", D / "manifest.json", store=D / "store",
+            sampler=[samplers.build("objects", vocabulary=["cart", "basket"],
+                                    confidence=0.4, max_per_chunk=4), "clip"])</code></pre>
+<p>Samplers and questions are checked before decoding. No readable video stream raises <code>video.UnreadableSource</code>.</p>
+<p><code>video.ingest(media, timeline, sampler="uniform", per_second=1.0, frames=None, store_scope="sampled", on_progress=None)</code> takes a <code>Media</code> and <code>Timeline</code>, writes frames into <code>frames</code> (a <code>FrameStore</code>, or <code>None</code>), and returns the <code>Manifest</code>. <code>video.load(path)</code> reads one back.</p>
 
 <h3 id="frames">frames</h3>
 <p>The same decode on its own, for a model of your own: a file's frames in order, turned upright. With <code>per_second</code> it keeps the first frame in each slice of that length, as the pipeline does; a frame it skips is never converted to pixels.</p>

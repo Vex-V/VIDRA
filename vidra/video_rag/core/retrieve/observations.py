@@ -17,7 +17,7 @@ from vidra.shared.models import embedders as embedders_mod
 from vidra.shared.models.base import require
 from vidra.shared.models.roles import Models, given, resolve
 from vidra.shared.reporting.errors import Refused
-from vidra.shared.storage.database import Database, as_database
+from vidra.shared.storage.database import Database, searched
 from .driver import scope_of
 
 
@@ -74,8 +74,7 @@ def search_observations(query: str,
                         since: Optional[str | datetime] = None,
                         until: Optional[str | datetime] = None,
                         structured: Optional[dict[str, Any]] = None,
-                        video_ids: Optional[Sequence[str]] = None,
-                        database: Optional[str | Database] = None,
+                        database: Optional[Database] = None,
                         models: Optional[Models] = None) -> list[FrameHit]:
     """Ranked live answers, best first.
 
@@ -85,7 +84,7 @@ def search_observations(query: str,
                             models=models, database=db)
 
     `models.embedder` must be the one the live run used.
-    `database` is a built `Database` or a name (`supabase` by default); a
+    `database` is a built `Database` (`Supabase()` when None); a
     `Folder` reads each run's `observations.jsonl` in place.
     """
     if not (query or "").strip():
@@ -100,10 +99,10 @@ def search_observations(query: str,
 
     built = resolve("embedder", given(models).embedder)
     require("embedder", built)
-    target = as_database(database or "supabase")
+    target = searched(database)
     vector = embedders_mod.query_vector(built, query)
     rows = target.search_observations(
-        vector, query, built.key, limit, scope_of(video_id, video_ids), sampler,
+        vector, query, built.key, limit, scope_of(video_id), sampler,
         question, strategy, after, before, lo, hi, structured)
     known = set(FrameHit.__dataclass_fields__) - {"extra"}
     return [FrameHit(**{k: r.get(k) for k in known if k in r},

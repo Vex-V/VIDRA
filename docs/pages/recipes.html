@@ -151,7 +151,7 @@ from pathlib import Path
 
 import vidra
 from vidra import LocalEmbedder, OpenAI
-from vidra.video_rag import audio, boundaries, cut, describe, embed, media, video
+from vidra.video_rag import audio, boundaries, cut, describe, embed, media, samplers, video
 
 vidra.configure(env_file=".env")
 source = sys.argv[1]
@@ -180,12 +180,13 @@ boundaries.boundaries(D / "media.json", D / "timeline.json", policy="scene",
                       cuts=D / "cuts.json", min_s=10, max_s=40)
 print("chunks:", len(boundaries.load(D / "timeline.json")))
 
-# 5. video: which frames to keep. Two samplers in one decode: uniform keeps
-#    every 5th frame (one per 5 s at per_second=1) and is asked to read the
-#    screen; clip keeps a frame when the scene changes.
+# 5. video: which frames to keep. Two samplers in one decode, each with its own
+#    settings: uniform keeps every 5th frame (one per 5 s at per_second=1) and is
+#    asked to read the screen; clip keeps a frame when the scene changes.
 video.video(D / "media.json", D / "timeline.json", D / "manifest.json",
-            store=D / "store", sampler="uniform:text,clip",
-            per_second=1.0, every_n=5, threshold=0.95, max_per_chunk=6)
+            store=D / "store", per_second=1.0,
+            sampler=[samplers.build("uniform", every_n=5, max_per_chunk=6, prompts=["text"]),
+                     samplers.build("clip", threshold=0.95, max_per_chunk=6)])
 
 # 6. cut: the transcript onto the grid.
 cut.cut(D / "timeline.json", D / "transcript.raw.json", D / "transcript.json")

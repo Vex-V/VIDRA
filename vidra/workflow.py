@@ -24,6 +24,7 @@ from vidra.shared.config import paths
 from vidra.shared.contracts.documents import Produced
 from .video_rag.offline import driver as video_rag
 from vidra.shared.reporting.errors import Refused
+from vidra.shared.config.lookup import bound, signature_without
 from vidra.shared.models.roles import Models, given
 from vidra.shared.storage.database import Database, as_database
 
@@ -47,13 +48,13 @@ class Options:
     sampler: Any = "uniform"                 # a spec string, or strings and Sampler objects
     describe: bool = True                    # False: frames embedded, not described
     tier: str = "free"                       # a cost ceiling
-    # Also copy every artifact to this database: a name or a built `Database`.
-    database: Optional[str | Database] = None
+    # Also copy every artifact to this database, built: `Supabase()`, `Folder(...)`.
+    database: Optional[Database] = None
     #: The vlm, embedder, visual_embedder and llm; None is every default.
     models: Optional[Models] = None
 
 
-def extraction(options: Options) -> video_rag.Options:
+def _extraction(options: Options) -> video_rag.Options:
     """The video_rag half of a run, with `into` resolved."""
     return video_rag.Options(
         source=options.source,
@@ -99,10 +100,10 @@ def inputs_for(names: list[str], folder: Path) -> tuple[dict[str, Any], dict[str
     return handed, skipped
 
 
-def validate(options: Options) -> list[str]:
+def problems_of(options: Options) -> list[str]:
     """Everything either tier would refuse, before either runs."""
     if options.tier not in aggregates.TIERS:
-        return (video_rag.validate(extraction(options))
+        return (video_rag.problems_of(_extraction(options))
                 + [f"tier must be one of {', '.join(aggregates.TIERS)}"])
     try:
         used = given(options.models)
@@ -111,30 +112,61 @@ def validate(options: Options) -> list[str]:
     from vidra.shared.models import base
     from vidra.shared.models.roles import resolve
     names = chosen(options)
-    problems = video_rag.validate(extraction(options))
-    # The embedder is the extraction's, which `video_rag.validate` checked.
+    problems = video_rag.problems_of(_extraction(options))
+    # The embedder is the extraction's, which `video_rag.problems_of` checked.
     if any(aggregates.tier_of(n) == "llm" for n in names):
         problems += base.problems("llm", resolve("llm", used.llm))
     return problems
+
+
+def workflow(source: str | Path,
+             into: Optional[str | Path] = None,
+             video_id: Optional[str] = None,
+             name: Optional[str] = None,
+             recorded_at: Optional[str | datetime] = None,
+             policy: str = "uniform",
+             use_video: bool = True,
+             use_audio: bool = True,
+             sampler: Any = "uniform",
+             models: Optional[Models] = None,
+             describe: bool = True,
+             tier: str = "free",
+             database: Optional[Database] = None,
+             on_step: Optional[Callable[[str, Optional[Produced]], None]] = None) -> Run:
+    """Extract with `video_rag`, then run every aggregator up to `tier` on what
+    it wrote. The arguments are `video_rag`'s, with `into` optional (the data
+    root's `out/`) and `tier` the costliest aggregators to run; `on_step`
+    reports `"aggregate"` last."""
+    given = {k: v for k, v in locals().items() if k != "on_step"}
+    return process(_options(given), on_step)
+
+
+def _options(given: dict[str, Any]) -> Options:
+    return Options(**{**given, "source": Path(given["source"]),
+                      "into": Path(given["into"]) if given["into"] else None})
+
+
+def validate(*args: Any, **kwargs: Any) -> list[str]:
+    """Every problem `workflow(...)` would refuse with these same arguments, in
+    either tier, as messages; empty means it would start. Nothing runs."""
+    return problems_of(_options(bound(workflow, args, kwargs, drop=("on_step",))))
+
+
+validate.__signature__ = signature_without(workflow, ("on_step",), "list[str]")
 
 
 def process(options: Options,
             on_step: Optional[Callable[[str, Optional[Produced]], None]] = None
             ) -> Run:
     """Extract, then aggregate."""
-    return _process(options, on_step)
-
-
-def _process(options: Options,
-             on_step: Optional[Callable[[str, Optional[Produced]], None]]) -> Run:
-    problems = validate(options)
+    problems = problems_of(options)
     if problems:
         raise Refused("; ".join(problems))
     say = on_step or (lambda component, produced: None)
     used = given(options.models)
     # Built once and shared by both tiers' exports.
     database = as_database(options.database)
-    extract = extraction(options)
+    extract = _extraction(options)
     extract.database = database
 
     run = video_rag.process(extract, on_step)
@@ -157,4 +189,4 @@ def _process(options: Options,
 
 
 #: The public surface.
-__all__ = ["Options", "Run", "extraction", "process", "validate"]
+__all__ = ["Run", "validate", "workflow"]

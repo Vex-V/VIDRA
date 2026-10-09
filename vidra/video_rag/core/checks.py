@@ -8,10 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from vidra.shared.storage.database import DATABASES, Database
+from vidra.shared.storage.database import Database, problem
 
 
-def run_problems(into: str | Path, database: Optional[str | Database],
+def run_problems(into: str | Path, database: Optional[Database],
                  sampler: Optional[str | Sequence[Any]],
                  models: Mapping[str, Any]) -> list[str]:
     """Problems with where a run writes, what it looks at and who answers, as
@@ -19,10 +19,8 @@ def run_problems(into: str | Path, database: Optional[str | Database],
     reading the picture); `models` is role -> model, None for the default.
     """
     problems: list[str] = []
-    if not (database is None or isinstance(database, Database)
-            or database in DATABASES):
-        problems.append(f"unknown database {database!r}; pass a "
-                        f"Database, or one of: {', '.join(DATABASES)}")
+    if problem(database):
+        problems.append(problem(database))
     # `into` must be a directory, when it exists.
     where = Path(into)
     if where.exists() and not where.is_dir():

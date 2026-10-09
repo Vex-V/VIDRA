@@ -250,10 +250,9 @@ class Code(HTMLParser):
 COVERAGE: dict[str, list[str]] = {
     "index.html": ["vidra.configure"],
     "pages/pipeline.html": [
-        "vidra.video_rag.video_rag", "vidra.video_rag.process",
-        "vidra.video_rag.Options", "vidra.video_rag.Run", "vidra.video_rag.validate",
-        "vidra.video_rag.layout", "vidra.workflow.process", "vidra.workflow.Options",
-        "vidra.workflow.validate", "vidra.workflow.extraction", "vidra.workflow.Run"],
+        "vidra.video_rag.video_rag", "vidra.video_rag.Run", "vidra.video_rag.validate",
+        "vidra.video_rag.layout", "vidra.workflow.workflow", "vidra.workflow.validate",
+        "vidra.workflow.Run"],
     "pages/stages.html": [
         f"vidra.video_rag.{m}" for m in (
             "media.media", "media.split", "media.load",
@@ -268,7 +267,8 @@ COVERAGE: dict[str, list[str]] = {
             "describe.ask", "describe.ask_async",
             "glance.glance", "glance.look", "glance.load", "glance.space_of",
             "embed.embed", "embed.encode", "embed.load", "embed.Unit")],
-    "pages/live.html": ["vidra.video_rag.video_rag_live", "vidra.video_rag.live.send",
+    "pages/live.html": ["vidra.video_rag.video_rag_live", "vidra.video_rag.live.validate",
+                        "vidra.video_rag.live.send",
                         "vidra.video_rag.search_observations",
                         "vidra.video_rag.live.frames", "vidra.video_rag.live.Arrival"],
     "pages/samplers.html": ["vidra.video_rag.samplers.build",
@@ -380,9 +380,11 @@ def check(built: dict[Path, str]) -> list[str]:
 
     # Every sampler, sampler setting, question and shape, on its page.
     from vidra.video_rag.core.sampling import samplers
-    from vidra.video_rag.core.sampling.specs import SAMPLER_SETTINGS
     from vidra.video_rag.core.describe import prompts
-    for name in [*samplers.available(), *SAMPLER_SETTINGS]:
+    settings = {p for n in samplers.available()
+                for p in inspect.signature(samplers.class_of(n).__init__).parameters
+                if p not in ("self", "sampler_id", "prompts")}
+    for name in [*samplers.available(), *sorted(settings)]:
         if not mentioned("pages/samplers.html", name):
             problems.append(f"pages/samplers.html: sampler or setting `{name}` is not documented")
     builtin = json.loads((ROOT / "vidra/video_rag/core/describe/prompts.json").read_text())
