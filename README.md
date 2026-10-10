@@ -127,13 +127,14 @@ Exposed schemas.
 ## Hardware
 
 PyTorch models use CUDA if available, then Apple's `mps`, then the CPU.
-Whisper uses CUDA or the CPU. Measured on an RTX 4060 laptop:
+Whisper uses CUDA or the CPU. Time per minute of video on a mid-range laptop
+GPU and on its CPU:
 
 | Step | GPU | CPU |
 |---|---|---|
-| Whisper + pyannote, 205 s of narration | 21 s | 316 s |
-| `clip`, `yolo` and `objects` samplers, 60 s video | 25 s | 52 s |
-| `text` sampler, 60 s of slides | 13 s | 212 s |
+| Whisper + pyannote | ~6 s | ~1.5 min |
+| `clip`, `yolo` and `objects` samplers | ~25 s | ~50 s |
+| `text` sampler | ~15 s | ~3.5 min |
 
 The `mps` path has not been run on a Mac. Intel Macs cannot install the
 PyTorch in `requirements.txt`.

@@ -72,10 +72,10 @@ from vidra.video_rag import live, video_rag_live
 
 if __name__ == "__main__":
     sender = multiprocessing.Process(target=live.send,
-                                     args=("samples/test.mp4", "tcp://127.0.0.1:9000"),
+                                     args=("shop.mp4", "tcp://127.0.0.1:9000"),
                                      kwargs={"speed": 1.0})
     sender.start()
-    run = video_rag_live("tcp://127.0.0.1:9000?listen=1", "data/out", video_id="test-live")
+    run = video_rag_live("tcp://127.0.0.1:9000?listen=1", "data/out", video_id="shop-live")
     sender.join()</code></pre>
 <p>Run the sender in its own process, as a camera would be: while it waits to connect, PyAV holds the GIL, and on a thread of the same process it slows the receiver's model loading many times over.</p>
 <p><code>send(path, url, speed=1.0, connect_timeout_s=120.0, format=None)</code> copies the picture without re-encoding, into MPEG-TS for H.264, HEVC and MPEG-2/4 and into Matroska for the rest (VP9, AV1); <code>format=</code> overrides. A codec this PyAV cannot write (Theora) is refused: re-encode it first. A file path is also a valid <code>source</code>: it is then read as fast as it decodes, which keeps exactly the frames <a href="pipeline.html"><code>video_rag</code></a> keeps with the uniform policy.</p>
@@ -195,10 +195,10 @@ for h in hits:
 </ul>
 <p>Ask a question whose answers are easy to check, then check them two ways:</p>
 <ul>
-  <li><b>Rules, exactly: one fixed-choice field per rule, with a way to say "cannot tell".</b> <code>row["structured"]["hard_hats"] == "a member of staff without one"</code>. Rules never go through similarity: embeddings handle negation badly, so "a worker without a hard hat" and "a worker wearing a hard hat" come out close. Without a "cannot tell" choice the model guesses: asked for a list of missing equipment, it reported missing safety glasses on 40 of 93 frames of a building site where nobody's eyes can be seen at that distance, and missing gloves on workers visibly wearing them. With one field per item and "cannot tell", it chose "cannot tell" 10 to 43 times per camera and the moments fell from 244 to 72. Ask only about what the camera can resolve (a hard hat, a vest), and say who counts: asked about "workers" in a shop, it counted the customers.</li>
-  <li><b>Everything else, by similarity to each listed hazard, not to the whole answer.</b> An answer is a paragraph about everything in shot, and one detail barely moves its vector: against whole answers, true ladder sightings scored at most 0.654 and a title card 0.653. Against each hazard on its own, true matches scored 0.83 to 0.91 ("worker on step ladder" 0.886, "wet floor sign" 0.911), and the closest false ones 0.75 to 0.81 ("stacked pallets" as a blocked exit, "scattered materials on floor" as a spill), hence 0.85 below. Measured with <code>LocalEmbedder</code>: a threshold belongs to an embedder and to footage, so measure your own.</li>
+  <li><b>Rules, exactly: one fixed-choice field per rule, with a way to say "cannot tell".</b> <code>row["structured"]["hard_hats"] == "a member of staff without one"</code>. Rules never go through similarity: embeddings handle negation badly, so "a worker without a hard hat" and "a worker wearing a hard hat" come out close. Without a "cannot tell" choice the model guesses: asked for a list of missing equipment, it reports items too small to see as missing, and misses ones that are plainly worn. One field per item with "cannot tell" removes most false flags. Ask only about what the camera can resolve (a hard hat, a vest), and say who counts, or "workers" in a shop includes the customers.</li>
+  <li><b>Everything else, by similarity to each listed hazard, not to the whole answer.</b> An answer is a paragraph about everything in shot, and one detail barely moves its vector, so against whole answers true and false matches score the same. Against each hazard on its own, true matches score clearly higher than near misses (stacked pallets as a blocked exit, scattered materials as a spill). The example uses 0.85 with <code>LocalEmbedder</code>; a threshold belongs to an embedder and to footage, so measure your own.</li>
 </ul>
-<p>The model's judgement is the limit: checked against the frames, a "without a hard hat" flag on a building site was right (two of three workers in soft caps), and an "everyone wears one" on a warehouse frame was wrong (the driver in the cab was bare-headed). Treat a moment as worth a look, not as a verdict.</p>
+<p>The model's judgement is the limit: flags are often right and sometimes wrong, for example missing someone half hidden in a vehicle. Treat a moment as worth a look, not as a verdict.</p>
 <!-- example live_moments.py -->
 <div class="file">docs/pages/examples/live_moments.py</div>
 <pre><code class="python">"""Log the moments a live stream shows that match ones you describe, as they

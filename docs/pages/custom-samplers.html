@@ -166,13 +166,13 @@ samplers.register(Bright)              # or @samplers.register above the class
 video_rag("x.mp4", "data/out", sampler="bright:overview,clip")
 samplers.build("bright", level=90, prompts=["overview"])   # an object, configured</code></pre>
 <p><code>samplers.register(cls)</code> lets spec strings name the class, in this process. A built-in's name (<code>samplers.BUILTIN</code>), a name a spec string cannot carry, or an abstract class is refused; registering a name again replaces the class. <code>samplers.class_of(name)</code> is the class a name builds and <code>samplers.available()</code> lists every name.</p>
-<p>A registered sampler named in a spec string gets the settings passed beside it, when its constructor takes them: <code>video.video(..., sampler="motion", threshold=0.2)</code> reaches the <a href="#example">motion</a> sampler's <code>threshold</code>. A setting no named sampler takes is refused.</p>
+<p>A registered sampler is configured like a built-in: <code>samplers.build("motion", threshold=0.2)</code> builds the <a href="#example">motion</a> sampler with that setting, and refuses a setting its constructor does not take. Named in a spec string, it is built with its defaults.</p>
 
 <h3 id="questions">Questions</h3>
 <p>A sampler named alone asks the question named after it, and yours has none. Give it <code>prompts=[...]</code>, pair it in a spec (<code>bright:overview</code>), or add a question with its name using <a href="questions.html#add">describe.add_question</a>. Otherwise the run is refused before anything decodes.</p>
 
 <h3 id="elsewhere">Reading its output elsewhere</h3>
-<p>Search and the aggregates read the files, so a run's output stays readable in a process that never registered the class, and answers to a custom question stay readable where the question is not defined (another data root, another machine): a record vouches for the samplers and questions its answers came from, with the fields they carry.</p>
+<p>Search and the aggregates read the files, not the class. A run's output stays readable in a process that never registered the sampler, and its answers stay readable where their question is not defined (another data root, another machine).</p>
 
 <h2 id="example">Complete example: motion</h2>
 <p>Keeps a frame when enough of the picture moved since the last kept frame: no model, a downscaled difference. For fixed cameras only; on a moving camera nearly every frame moves. It runs the sampler as an object and by name, on a file and live.</p>

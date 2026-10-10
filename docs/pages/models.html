@@ -155,7 +155,7 @@ vlm = Chat("gpt-5.4-mini", base_url="https://api.openai.com/v1", name="openai-ch
 <tr><td><code>batch</code></td><td>Texts per forward pass.</td></tr>
 <tr><td><code>query_prefix</code>, <code>document_prefix</code></td><td>As for <code>OpenAIEmbedder</code>; e5, nomic, bge and mxbai get theirs automatically.</td></tr>
 </table>
-<p>Needs <code>vidra[local]</code>. Key: <code>local:&lt;model&gt;:&lt;width&gt;</code>. The default matched <code>text-embedding-3-small</code> on our retrieval tests, at 0.05 s per query vs 0.6 s.</p>
+<p>Needs <code>vidra[local]</code>. Key: <code>local:&lt;model&gt;:&lt;width&gt;</code>. The default searches about as well as <code>text-embedding-3-small</code>, and a query takes milliseconds rather than a network round trip.</p>
 
 <h3 id="hash-embedder">HashEmbedder</h3>
 <p><code>HashEmbedder(dims=256)</code> hashes words into vectors: no model, no network. Exact words only, so for tests. Key: <code>hash:none:&lt;dims&gt;</code>.</p>
@@ -168,7 +168,7 @@ vlm = Chat("gpt-5.4-mini", base_url="https://api.openai.com/v1", name="openai-ch
 <tr><td><code>device</code></td><td>Default: cuda, then mps, then the CPU.</td></tr>
 <tr><td><code>batch</code></td><td>Images per forward pass.</td></tr>
 </table>
-<p>Needs <code>vidra[local]</code>. The model sees one image at a time, so a unit's frames and views are averaged into one vector; the key says so: <code>local:&lt;model&gt;:&lt;width&gt;:mean</code>. A query is cut at the text tower's length (77 tokens for CLIP, 64 for SigLIP). On Chernobyl's labelled queries SigLIP 2 base matched the described text and CLIP ViT-B/32 fell well short (<a href="stages.html#glance">glance</a>).</p>
+<p>Needs <code>vidra[local]</code>. The model sees one image at a time, so a unit's frames and views are averaged into one vector; the key says so: <code>local:&lt;model&gt;:&lt;width&gt;:mean</code>. A query is cut at the text tower's length (77 tokens for CLIP, 64 for SigLIP). SigLIP 2 searches frames far better than CLIP ViT-B/32 (<a href="stages.html#glance">glance</a>).</p>
 
 <h3 id="local-multimodal-embedder">LocalMultimodalEmbedder</h3>
 <div class="sig">LocalMultimodalEmbedder(model="google/embeddinggemma-2", dims=None, device=None, batch=8,

@@ -214,14 +214,14 @@ except vidra.VidraError as refused:       # the request itself
 <p>Logs go to the <code>vidra</code> logger, with no handlers configured. <code>logging.basicConfig(level=logging.INFO)</code> shows each stage; failed database writes are warnings.</p>
 
 <h2 id="hardware">Hardware</h2>
-<p>PyTorch models (CLIP, YOLO, local embedder, pyannote) use CUDA, then <code>mps</code>, then CPU. Whisper uses CUDA or CPU. GLiNER and sentiment run on the CPU. RTX 4060 laptop:</p>
+<p>PyTorch models (CLIP, YOLO, local embedder, pyannote) use CUDA, then <code>mps</code>, then CPU. Whisper uses CUDA or CPU. GLiNER and sentiment run on the CPU. Time per minute of video on a mid-range laptop GPU and on its CPU:</p>
 <table>
 <tr><th>Work</th><th>GPU</th><th>CPU</th></tr>
-<tr><td>Whisper <code>small</code> + pyannote, 205 s of narration</td><td>21 s</td><td>316 s</td></tr>
-<tr><td><code>clip</code>, <code>yolo</code> and <code>objects</code>, 60 s video</td><td>25 s</td><td>52 s</td></tr>
-<tr><td><code>text</code>, 60 s of slides</td><td>13 s</td><td>212 s</td></tr>
-<tr><td>describe, 18 calls of 6 frames, <code>gpt-5.4-mini</code></td><td colspan="2">13 s at concurrency 8; 76 s one at a time</td></tr>
+<tr><td>Whisper <code>small</code> + pyannote</td><td>~6 s</td><td>~1.5 min</td></tr>
+<tr><td><code>clip</code>, <code>yolo</code> and <code>objects</code></td><td>~25 s</td><td>~50 s</td></tr>
+<tr><td><code>text</code></td><td>~15 s</td><td>~3.5 min</td></tr>
 </table>
+<p>Describe calls run concurrently: at the default concurrency of 8, a run takes about as long as its slowest call, around 6 times faster than one call at a time.</p>
 <ul>
   <li><code>mps</code> is untested. If pyannote fails on a Mac, set <code>PYTORCH_ENABLE_MPS_FALLBACK=1</code> before starting Python. Intel Macs can't install the required PyTorch.</li>
   <li>Whisper on an NVIDIA GPU needs CUDA 12's cuBLAS and cuDNN (installed by <code>vidra[audio]</code>); without them it is refused before the run, or use <code>device="cpu"</code>.</li>

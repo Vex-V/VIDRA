@@ -300,17 +300,11 @@ index.units[0]["sampler_id"]      # "clip:image"
 index.units[0]["structured"]      # {"frames": [12, 15, 19]}
 
 search("a forklift by the door", "shop", models=Models(visual_embedder=seen), database=db)</code></pre>
-<p>One unit per chunk and sampler run, holding every frame the run kept there and every <a href="custom-samplers.html#views">view</a> it made, in order; its <code>sampler_id</code> is <code>&lt;run&gt;:image</code>, its <code>question</code> <code>image</code> (no describe question may take that name), its <code>content</code> empty. A unit holding more images than the model's <code>max_images</code> is refused before any image is read. The units are stored under the model's key plus <code>:images</code> (<code>glance.space_of(visual_embedder)</code>), so a model that also embeds text never replaces its own text rows, and a search ranks the two apart, then fuses them by rank (<a href="search.html#arguments">search</a>).</p>
+<p>One unit per chunk and sampler run: every frame the run kept there and every <a href="custom-samplers.html#views">view</a> it made, in order. Its <code>sampler_id</code> is <code>&lt;run&gt;:image</code>, its <code>question</code> is <code>image</code> (reserved: no describe question may use it) and its <code>content</code> is empty. A unit with more images than the model's <code>max_images</code> is refused before any image is read.</p>
+<p>Units are stored under the model's key plus <code>:images</code> (<code>glance.space_of(visual_embedder)</code>). A model that also embeds text never overwrites its text rows, and search ranks frames and text separately, then fuses them by rank (<a href="search.html#arguments">search</a>).</p>
 <p><code>glance.look(manifest, timeline, frames, visual_embedder=None, samplers=None, previous=None, batch=16, on_progress=None)</code> works in memory: <code>frames</code> is a <code>video.FrameStore</code>, <code>previous</code> an earlier document, and it returns the document.</p>
-<p>What it gives up, against <code>describe</code>: no fields to filter on, no text for the lexical half of search or for the aggregates, and image models are weak on actions, negation, counts and writing. Measured on Chernobyl's 10 labelled queries (MRR over 14 chunks, local bge for text):</p>
-<table>
-<tr><th>Searched</th><th>CLIP ViT-B/32</th><th>SigLIP 2 base</th><th>EmbeddingGemma 2</th></tr>
-<tr><td>described text</td><td colspan="3">0.550</td></tr>
-<tr><td>frames only</td><td>0.416</td><td>0.558</td><td>0.526</td></tr>
-<tr><td>transcript + described text</td><td colspan="3">0.586</td></tr>
-<tr><td>transcript + described text + frames</td><td>0.519</td><td>0.658</td><td>0.632</td></tr>
-</table>
-<p>Ten queries on one video is a direction, not a result. A weak image model fused with good text pulls the ranking down: rank fusion weighs both rankings alike.</p>
+<p>Against <code>describe</code>, it gives up fields to filter on, text for full-text search, and text for the aggregates. Image models handle appearance well and actions, negation, counts and on-screen writing poorly.</p>
+<p>The image model matters most. In our tests, SigLIP 2 searched frames about as well as described text, and CLIP ViT-B/32 clearly worse. Frames and text together beat either alone with a strong image model. With a weak one, fusion lowers the ranking, because it weighs every ranking equally.</p>
 
 <!-- ============================================================ embed -->
 <h2 id="embed">8. embed</h2>

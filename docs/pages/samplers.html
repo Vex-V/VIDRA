@@ -59,7 +59,7 @@
   <li>Samplers reset at each chunk boundary: "changed" means changed within the chunk.</li>
   <li>Kept frames go to <code>store/</code> (one file even if two samplers keep it) and are listed in <code>manifest.json</code>.</li>
 </ol>
-<p>Pass samplers to <code>video_rag(sampler=...)</code>, or to <a href="stages.html#video"><code>video.video</code></a> along with their settings.</p>
+<p>Pass samplers as the <code>sampler</code> argument of <code>video_rag</code>, <a href="stages.html#video"><code>video.video</code></a> or <code>video_rag_live</code>.</p>
 
 <h2 id="list">The samplers</h2>
 <table>
@@ -148,14 +148,8 @@ video_rag("x.mp4", "data/out",
 <p>With <code>"both"</code> the model sees "Frame 2 of 4", then "Frame 2, person 1 of 3 from the left, enlarged 3.1x", and so on; with <code>"crops"</code> only the second kind. <code>"both"</code> keeps where each person stands and what is around them, at the cost of showing everyone twice; <code>"crops"</code> is cheaper and loses that context. Each crop's box, class, confidence and scale are recorded in the manifest, and the crop is stored beside its frame. <code>yolo</code>'s <code>crop_pad</code> is a different setting: the padding of the crops CLIP compares to decide what to keep. A sampler of your own can show the model any images it makes: <a href="custom-samplers.html#views">views</a>.</p>
 
 <h3 id="thresholds">Choosing a threshold</h3>
-<p>Thresholds don't transfer between videos. <code>clip</code> at 0.96 on three similar shop videos:</p>
-<table>
-<tr><th>Video</th><th>Frames kept</th><th>Typical similarity, 1 s apart</th></tr>
-<tr><td>test.mp4</td><td>13.4%</td><td>0.9868</td></tr>
-<tr><td>test2.mp4</td><td>18.0%</td><td>0.9895</td></tr>
-<tr><td>test1.mp4</td><td>59.2%</td><td>0.9605</td></tr>
-</table>
-<p>Busier footage keeps more. <b>To control cost, use <code>min_interval_s</code> or <code>max_per_chunk</code></b>: they keep the most-changed frames and even out chunks. A lower threshold leaves busy chunks with many frames and quiet ones with one.</p>
+<p>Thresholds don't transfer between videos. The same <code>clip</code> threshold can keep under a fifth of the frames of a quiet camera and over half of a busy one, even in similar settings. Busier footage keeps more.</p>
+<p><b>To control cost, use <code>min_interval_s</code> or <code>max_per_chunk</code></b>: they keep the most-changed frames and even out chunks. A lower threshold leaves busy chunks with many frames and quiet ones with one.</p>
 
 <h2 id="specs">Sampler specs</h2>
 <p>The <code>sampler</code> argument names samplers and, optionally, their questions:</p>
@@ -180,12 +174,12 @@ video_rag("x.mp4", "data/out",
 
 
 <h2 id="cost">Cost and hardware</h2>
-<p>RTX 4060 laptop, one frame per second:</p>
+<p>Time per minute of video, one frame per second, on a mid-range laptop GPU and on its CPU:</p>
 <table>
-<tr><th>Samplers</th><th>Video</th><th>GPU</th><th>CPU</th></tr>
-<tr><td><code>uniform</code></td><td>any</td><td colspan="2">decode only: ~2 min for 3 hours of 720p</td></tr>
-<tr><td><code>clip</code>, <code>yolo</code>, <code>objects</code> together</td><td>60 s</td><td>25 s</td><td>52 s</td></tr>
-<tr><td><code>text</code></td><td>60 s of slides</td><td>13 s</td><td>212 s</td></tr>
+<tr><th>Samplers</th><th>GPU</th><th>CPU</th></tr>
+<tr><td><code>uniform</code></td><td colspan="2">decode only: about 2 minutes for 3 hours of 720p</td></tr>
+<tr><td><code>clip</code>, <code>yolo</code>, <code>objects</code> together</td><td>~25 s</td><td>~50 s</td></tr>
+<tr><td><code>text</code></td><td>~15 s</td><td>~3.5 min</td></tr>
 </table>
 <p>Models run on CUDA, then <code>mps</code>, then CPU. Weights download on first use to <code>weights/</code> (or <code>VIDRA_WEIGHTS</code>); CLIP uses Hugging Face's cache.</p>
 

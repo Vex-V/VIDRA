@@ -11,20 +11,17 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from vidra.shared.contracts.documents import (Embedded, Manifest, Produced,
                                            Timeline, fingerprint_of, same_video)
 from vidra.shared.contracts.units import IMAGE_QUESTION
-from vidra.shared.models.base import image, require, text
+from vidra.shared.models.base import VisualEmbedder, image, require, text
 from vidra.shared.reporting import logs, progress
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage.files import maybe, read, write
 from ...core.describe.frames import FrameSource, store_of
 from ...core.frames import FrameStore
-
-if TYPE_CHECKING:
-    from vidra.shared.models.base import VisualEmbedder
 
 #: Appended to a visual embedder's key to name the space its units are stored
 #: in, so a model that also embeds text never replaces its own text rows.
@@ -33,6 +30,9 @@ SUFFIX = ":images"
 
 def space_of(visual_embedder: "VisualEmbedder") -> str:
     """The key a visual embedder's units are stored and searched under."""
+    if not isinstance(visual_embedder, VisualEmbedder):
+        raise Refused(f"visual_embedder must be a VisualEmbedder, "
+                      f"not {type(visual_embedder).__name__}")
     return f"{visual_embedder.key}{SUFFIX}"
 
 
