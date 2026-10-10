@@ -20,8 +20,8 @@ from vidra.shared.storage import db
 
 #: Children before parents. A table a database does not have is skipped.
 TABLES = ("ag_mentions", "ag_embeddings", "ag_items", "ag_answers", "ag_sources",
-          "vr_embeddings", "vr_descriptions", "vr_chunk_samplers", "vr_manifests",
-          "vr_transcript_chunks", "vr_transcripts", "vr_chunks", "vr_timelines",
+          "vr_observations", "vr_embeddings", "vr_descriptions", "vr_chunk_samplers",
+          "vr_manifests", "vr_transcript_chunks", "vr_transcripts", "vr_chunks", "vr_timelines",
           "vr_videos", "vr_prompts", "ag_definitions")
 
 

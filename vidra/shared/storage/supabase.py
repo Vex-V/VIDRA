@@ -211,9 +211,9 @@ class Supabase(Database):
         live: dict[int, list[str]] = {}
         for u in units:
             live.setdefault(u["chunk_id"], []).append(u["sampler_id"])
-        stored = (api.table("vr_embeddings").select("chunk_id,sampler_id")
-                  .eq("video_id", video_id).eq("embedder", embedder)
-                  .execute().data or [])
+        stored = db.run(api.table("vr_embeddings").select("chunk_id,sampler_id")
+                        .eq("video_id", video_id).eq("embedder", embedder))
+        stored = stored.data or []
         for chunk_id in sorted({row["chunk_id"] for row in stored
                                 if row["sampler_id"] not in live.get(row["chunk_id"], [])}):
             db.delete_except("vr_embeddings", {"video_id": video_id, "embedder": embedder,
@@ -305,7 +305,7 @@ class Supabase(Database):
         rankings fused by RRF). `video_ids=None` searches every video.
         """
         try:
-            response = self.reader().rpc("vr_search", {
+            response = db.run(self.reader().rpc("vr_search", {
                 "p_query_vector": list(vector),
                 "p_query_text": query,
                 "p_video_ids": list(video_ids) if video_ids else None,
@@ -316,7 +316,7 @@ class Supabase(Database):
                 "p_chunk_ids": list(chunk_ids) if chunk_ids else None,
                 "p_structured": structured or None,
                 "p_limit": limit,
-            }).execute()
+            }))
         except Exception as exc:                             # noqa: BLE001
             raise db.DatabaseUnavailable(
                 f"vr_search failed ({exc}). The ranking lives in that "
@@ -342,12 +342,12 @@ class Supabase(Database):
         `ag_search` RPC.
         """
         try:
-            response = self.reader().rpc("ag_search", {
+            response = db.run(self.reader().rpc("ag_search", {
                 "p_embedder": embedder_key, "p_level": level,
                 "p_query_vector": list(vector), "p_query_text": query,
                 "p_source_ids": list(source_ids) if source_ids else None,
                 "p_limit": limit,
-            }).execute()
+            }))
         except Exception as exc:                             # noqa: BLE001
             raise db.DatabaseUnavailable(
                 f"ag_search failed ({exc}); if it is missing, run "
@@ -377,7 +377,7 @@ class Supabase(Database):
         vector and text rankings as `vr_search`, fused by RRF, one row per
         kept frame and question."""
         try:
-            response = self.reader().rpc("vr_search_observations", {
+            response = db.run(self.reader().rpc("vr_search_observations", {
                 "p_embedder": embedder_key,
                 "p_query_vector": list(vector), "p_query_text": query,
                 "p_video_ids": list(video_ids) if video_ids else None,
@@ -385,7 +385,7 @@ class Supabase(Database):
                 "p_strategy": strategy, "p_after": after, "p_before": before,
                 "p_since": since, "p_until": until,
                 "p_structured": structured or None, "p_limit": limit,
-            }).execute()
+            }))
         except Exception as exc:                             # noqa: BLE001
             raise db.DatabaseUnavailable(
                 f"vr_search_observations failed ({exc}); if it is missing, run "
@@ -403,15 +403,14 @@ class Supabase(Database):
 
     def spans(self, video_id: str) -> list[tuple[float, float]]:
         """One video's grid, from `vr_chunks`."""
-        rows = (self.reader().table("vr_chunks")
-                .select("chunk_id,start_ts,end_ts")
-                .eq("video_id", video_id).order("chunk_id").execute().data or [])
+        rows = db.run(self.reader().table("vr_chunks")
+                      .select("chunk_id,start_ts,end_ts")
+                      .eq("video_id", video_id).order("chunk_id")).data or []
         return [(float(r["start_ts"]), float(r["end_ts"])) for r in rows]
 
     def video_ids(self) -> list[str]:
         """Every video the database holds a grid for."""
-        rows = (self.reader().table("vr_timelines")
-                .select("video_id").execute().data or [])
+        rows = db.run(self.reader().table("vr_timelines").select("video_id")).data or []
         return [r["video_id"] for r in rows]
 
 
