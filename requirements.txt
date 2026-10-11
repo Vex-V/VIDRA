@@ -31,7 +31,7 @@ supabase
 
 # --- audio
 faster-whisper
-pyannote.audio
+pyannote.audio>=4.0        # 3.x reads torchaudio.AudioMetaData, gone in torchaudio 2.9
 # CTranslate2, under faster-whisper, loads CUDA 12's cuBLAS and cuDNN 9 by name
 # on a GPU; torch ships only its own CUDA's. Not on macOS, which has no CUDA.
 nvidia-cublas-cu12; sys_platform != 'darwin'
