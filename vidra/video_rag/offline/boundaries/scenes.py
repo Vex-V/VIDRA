@@ -1,7 +1,10 @@
 """Scene evidence: content scores over the picture, thresholded into cuts.
 
-Frames are decoded straight to the detection size. A `stride` scores every
-Nth frame; the threshold should rise with it. `cuts.json` keeps the per-frame
+Frames are decoded straight to the detection size. A frame's score is
+PySceneDetect's content value, computed with OpenCV: the mean absolute
+difference from the previous scored frame in hue, saturation and value,
+averaged over the three. A `stride` scores every Nth frame; the threshold
+should rise with it. `cuts.json` keeps the per-frame
 score series, which `rethreshold` reads without decoding; `detect` and
 `rethreshold` both go through `cuts_from_scores`.
 """
@@ -13,6 +16,7 @@ from fractions import Fraction
 from typing import Any, Optional, Sequence
 
 import av
+import numpy as np
 
 from vidra.shared.contracts.documents import Cuts, Media
 from vidra.shared.reporting.errors import VidraError
@@ -49,14 +53,7 @@ def score_frames(media: Media, stride: int = DEFAULT_STRIDE,
     if stride < 1:
         raise Refused("stride must be >= 1; it is a frame stride")
 
-    from scenedetect import ContentDetector, FrameTimecode
-    from scenedetect.stats_manager import StatsManager
-
-    stats_manager = StatsManager()
-    # Cuts come from thresholding the scores; the minimum chunk length is
-    # `grid.enforce`'s.
-    detector = ContentDetector(threshold=DEFAULT_THRESHOLD)
-    detector.stats_manager = stats_manager
+    import cv2
 
     container = av.open(media.path)
     try:
@@ -68,6 +65,7 @@ def score_frames(media: Media, stride: int = DEFAULT_STRIDE,
 
         scored: list[tuple[float, float]] = []
         read = converted = 0
+        previous: Optional[list[np.ndarray]] = None
         started = time.perf_counter()
 
         for frame in container.decode(video=0):
@@ -75,15 +73,14 @@ def score_frames(media: Media, stride: int = DEFAULT_STRIDE,
                 # Straight to the detection size.
                 small = frame.reformat(width=detect_width, height=height,
                                        format="bgr24").to_ndarray()
-                detector.process_frame(FrameTimecode(read, fps or 30.0), small)
-                value = stats_manager.get_metrics(
-                    read, [ContentDetector.FRAME_SCORE_KEY])[0]
-                if value is not None:
-                    # The first scored frame has no predecessor and scores None.
+                planes = cv2.split(cv2.cvtColor(small, cv2.COLOR_BGR2HSV))
+                # The first scored frame has no predecessor and no score.
+                if previous is not None:
                     media_ts = (float(frame.pts * time_base)
                                 if frame.pts is not None and time_base
                                 else read / (fps or 30.0))
-                    scored.append((media_ts, float(value)))
+                    scored.append((media_ts, content_value(planes, previous)))
+                previous = planes
                 converted += 1
             read += 1
     finally:
@@ -96,6 +93,16 @@ def score_frames(media: Media, stride: int = DEFAULT_STRIDE,
         "elapsed_s": round(elapsed, 3),
         "ms_per_frame": round(elapsed / max(read, 1) * 1000, 3),
     }
+
+
+def content_value(planes: Sequence[np.ndarray], previous: Sequence[np.ndarray]) -> float:
+    """PySceneDetect's `content_val` between two frames' H, S and V planes: each
+    plane's mean absolute difference, averaged, in its order of operations."""
+    import cv2
+
+    pixels = float(planes[0].shape[0] * planes[0].shape[1])
+    parts = [cv2.norm(a, b, cv2.NORM_L1) / pixels for a, b in zip(planes, previous)]
+    return sum(parts) / 3.0
 
 
 def cuts_from_scores(scored: Sequence[tuple[float, float]],
@@ -167,4 +174,4 @@ def sweep(cuts: Cuts, thresholds: Sequence[float]) -> list[dict[str, Any]]:
 
 
 __all__ = ["DETECT_WIDTH", "DEFAULT_THRESHOLD", "DEFAULT_STRIDE", "NoPicture",
-           "score_frames", "cuts_from_scores", "detect", "rethreshold", "sweep"]
+           "score_frames", "content_value", "cuts_from_scores", "detect", "rethreshold", "sweep"]

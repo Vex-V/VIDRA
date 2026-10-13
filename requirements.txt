@@ -1,24 +1,17 @@
-# Everything here is required. Heavy packages are imported where they are used,
-# so `import vidra` stays light -- but nothing falls back without them.
 
 # Core -- reading video and the uniform sampler.
 av==18.1.0                 # decode + exact PTS/time_base; OpenCV cannot expose either
-opencv-python==5.0.0.93    # colour conversion, resize, JPEG encode, container rotation
+opencv-python==5.0.0.93    # colour, resize, JPEG, rotation, scene scores, the text detector
 numpy==2.4.4
 python-dotenv              # .env
 jsonschema                 # schemas.validate(deep=True)
 
 # Model-backed samplers and the local models.
-torch==2.13.0              # clip, yolo, objects, text, the local embedder
+torch==2.13.0              # clip, yolo, objects, the local embedder
 transformers==5.15.0       # clip, yolo (CLIP image tower), sentiment
 ultralytics==8.4.120       # yolo, objects (YOLO / YOLO-World)
-easyocr==1.7.2             # text          (detector only; nothing is read)
 gliner                     # the ner aggregate
 sentence-transformers      # the `local` embedder
-
-# Scene chunking. Only the detector algorithm is used -- its SceneManager is
-# batch and pull-based, which would mean a second decode pass.
-scenedetect==0.7.1
 
 # --- models: describe, the llm aggregates, embed and retrieve
 # `openai` is the client for every OpenAI-compatible provider too -- Ollama,

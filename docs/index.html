@@ -69,8 +69,8 @@ cd FalCONvar
 pip install ".[all]"</code></pre>
 <table>
 <tr><th>Install</th><th>Adds</th><th>Needed for</th></tr>
-<tr><td><code>pip install .</code></td><td>PyAV, OpenCV, NumPy, PySceneDetect, the OpenAI and Supabase clients</td><td>the <code>uniform</code> sampler, every chunking policy but the speech ones, hosted models, <code>Stub</code> and <code>HashEmbedder</code>, Supabase and <code>Folder</code></td></tr>
-<tr><td><code>pip install ".[local]"</code></td><td>PyTorch, transformers, Ultralytics, EasyOCR, sentence-transformers, GLiNER</td><td>the <code>clip</code>, <code>yolo</code>, <code>objects</code> and <code>text</code> samplers, <code>LocalEmbedder</code>, <code>ner</code>, <code>sentiment</code></td></tr>
+<tr><td><code>pip install .</code></td><td>PyAV, OpenCV, NumPy, the OpenAI and Supabase clients</td><td>the <code>uniform</code> and <code>text</code> samplers, every chunking policy but the speech ones, hosted models, <code>Stub</code> and <code>HashEmbedder</code>, Supabase and <code>Folder</code></td></tr>
+<tr><td><code>pip install ".[local]"</code></td><td>PyTorch, transformers, Ultralytics, sentence-transformers, GLiNER</td><td>the <code>clip</code>, <code>yolo</code> and <code>objects</code> samplers, <code>LocalEmbedder</code>, <code>ner</code>, <code>sentiment</code></td></tr>
 <tr><td><code>pip install ".[audio]"</code></td><td>faster-whisper, pyannote.audio, CUDA 12 libraries</td><td>transcription and speaker diarization</td></tr>
 <tr><td><code>pip install ".[all]"</code></td><td>both</td><td>everything</td></tr>
 </table>

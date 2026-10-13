@@ -68,7 +68,7 @@
 <tr><td><code>clip</code></td><td>the whole picture has changed</td><td>CLIP</td><td><code>[local]</code></td><td>a scene description</td></tr>
 <tr><td><code>yolo</code></td><td>the people in view have changed</td><td>YOLO + CLIP</td><td><code>[local]</code></td><td>one entry per person</td></tr>
 <tr><td><code>objects</code></td><td>the objects you named have changed</td><td>YOLO-World</td><td><code>[local]</code></td><td>one entry per object</td></tr>
-<tr><td><code>text</code></td><td>the text on screen has changed</td><td>EasyOCR's detector</td><td><code>[local]</code></td><td>each piece of text, transcribed</td></tr>
+<tr><td><code>text</code></td><td>the text on screen has changed</td><td>OpenCV's DB text detector</td><td>core</td><td>each piece of text, transcribed</td></tr>
 </table>
 
 <h3 id="uniform">uniform</h3>
@@ -95,11 +95,10 @@
 </table>
 
 <h3 id="text">text</h3>
-<p>Locates text with EasyOCR's detector (nothing is read here) and keeps the frame when the text layout changes. Its question transcribes each piece of text with its context. For slides, screens and signs.</p>
-<p>The most expensive sampler: the detector is ~98% of its time. If text changes on a schedule, <code>uniform:text</code> gets the same result without it.</p>
+<p>Locates text with PP-OCRv3's DB detector on OpenCV (nothing is read here) and keeps the frame when the text layout changes. Its question transcribes each piece of text with its context. For slides, screens and signs. It needs no PyTorch: the 2.4 MB model runs on the CPU and is downloaded on first use.</p>
+<p>The detector runs on every offered frame, about 0.2 s each on a CPU at 720p. If text changes on a schedule, <code>uniform:text</code> gets the same result without it.</p>
 <table class="params">
 <tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
-<tr><td><code>languages</code></td><td><code>["en"]</code></td><td>EasyOCR language codes, e.g. <code>["en", "de"]</code>.</td></tr>
 <tr><td><code>threshold</code></td><td><code>0.92</code></td><td>Lower keeps fewer frames.</td></tr>
 </table>
 
@@ -116,7 +115,6 @@
 <tr><td><code>confidence</code></td><td><code>objects</code></td><td><code>0.30</code></td><td>How sure a detection must be.</td></tr>
 <tr><td><code>class_aware</code></td><td><code>objects</code></td><td><code>True</code></td><td>Match boxes only within a class.</td></tr>
 <tr><td><code>metric</code></td><td><code>objects</code></td><td><code>"proximity"</code></td><td>How boxes are matched: <code>"proximity"</code> or <code>"iou"</code>.</td></tr>
-<tr><td><code>languages</code></td><td><code>text</code></td><td><code>["en"]</code></td><td>EasyOCR's languages.</td></tr>
 <tr><td><code>grid</code></td><td><code>text</code></td><td><code>128</code></td><td>The size the text layout is compared at.</td></tr>
 <tr><td><code>send</code>, <code>crops</code>, <code>crop_size</code>, <code>crop_margin</code></td><td><code>yolo</code>, <code>objects</code></td><td><code>"frame"</code></td><td>What the model is shown (<a href="#crops">crops</a>).</td></tr>
 <tr><td><code>detector</code>, <code>embedder</code></td><td>the model-backed ones</td><td>built on first use</td><td>A detector or frame embedder to use instead of the default, e.g. one already loaded.</td></tr>

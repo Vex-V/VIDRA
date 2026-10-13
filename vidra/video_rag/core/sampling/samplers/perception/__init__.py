@@ -2,8 +2,8 @@
 comparable.
 
 A sampler decides what to keep; these find regions and describe them.
-Nothing here imports a sampler. Every model weight (YOLO, CLIP, EasyOCR) is
-loaded here, lazily.
+Nothing here imports a sampler. Every model weight (YOLO, CLIP, the text detector)
+is loaded here, lazily.
 """
 
 from .descriptors import (BoxGeometryDescriptor, CropEmbeddingDescriptor,

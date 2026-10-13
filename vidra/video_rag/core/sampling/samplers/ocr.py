@@ -13,9 +13,9 @@ if TYPE_CHECKING:
 class TextChangeSampler(DetectionChangeSampler):
     """Text, compared by where it is and what it looks like.
 
-    EasyOCR finds the regions; nothing is read. `TextLayoutDescriptor` masks the
-    frame to every text region and compares the result as a whole. Meant for
-    screens and slides.
+    OpenCV's DB detector finds the regions (`TextRegionDetector`); nothing is
+    read. `TextLayoutDescriptor` masks the frame to every text region and
+    compares the result as a whole. Meant for screens and slides.
     """
 
     name = "text"
@@ -25,7 +25,6 @@ class TextChangeSampler(DetectionChangeSampler):
         detector: Optional["ObjectDetector"] = None,
         threshold: float = 0.92,
         grid: int = 128,
-        languages: Sequence[str] = ("en",),
         min_interval_s: float = 0.0,
         max_per_chunk: Optional[int] = None,
         sampler_id: Optional[str] = None,
@@ -36,7 +35,7 @@ class TextChangeSampler(DetectionChangeSampler):
         if detector is None:
             from .perception.detectors import TextRegionDetector
 
-            detector = TextRegionDetector(languages=languages)
+            detector = TextRegionDetector()
         super().__init__(
             detector=detector,
             descriptor=TextLayoutDescriptor(grid=grid),

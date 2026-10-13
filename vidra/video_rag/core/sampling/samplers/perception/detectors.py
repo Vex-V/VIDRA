@@ -7,12 +7,14 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
 
 from vidra.shared.config import paths
 from vidra.shared.models.devices import default_device
+from vidra.shared.reporting.errors import ModelUnavailable, Refused
 
 # Weights live under the weights folder rather than wherever a command ran.
 # `weights/clip/ViT-B-32.pt` is the CLIP text encoder YOLO-World embeds its
@@ -208,72 +210,117 @@ class OpenVocabDetector(ObjectDetector):
 
 
 class TextRegionDetector(ObjectDetector):
-    """EasyOCR's detector only: where text is, not what it says. Every region is
-    weighted equally.
+    """Where text is, not what it says: PP-OCRv3's DB detector on OpenCV's dnn
+    module (`cv2.dnn.TextDetectionModel_DB`), on the CPU. The frame is scaled
+    so its longer side is `size`, the shorter rounded to a multiple of 32.
+    `binary_threshold` decides which pixels are text, `polygon_threshold`
+    which regions are kept, `unclip_ratio` how far a region is grown. Each
+    region is returned as its bounding box, every one weighted equally. The
+    model is OpenCV's model zoo English detector (2.4 MB), downloaded to the
+    weights folder on first use; it found Greek as well.
     """
+
+    #: Where the default model is fetched from on first use.
+    URL = ("https://huggingface.co/opencv/text_detection_ppocr/resolve/main/"
+           "text_detection_en_ppocrv3_2023may.onnx")
+    MODEL = "ocr/text_detection_en_ppocrv3_2023may.onnx"
 
     name = "text"
 
     def __init__(
         self,
-        languages: Sequence[str] = ("en",),
-        gpu: Optional[bool] = None,
+        model: str = MODEL,
+        size: int = 1280,
+        binary_threshold: float = 0.3,
+        polygon_threshold: float = 0.5,
+        unclip_ratio: float = 2.0,
+        max_candidates: int = 200,
         min_height: int = 0,
-        low_text: float = 0.4,
-        # Above EasyOCR's 0.7 default, so graphics are not taken for text.
-        text_threshold: float = 0.85,
-        link_threshold: float = 0.4,
-        canvas_size: int = 1280,
-        mag_ratio: float = 1.0,
     ) -> None:
-        import easyocr
+        import threading
 
-        self.languages = list(languages)
-        # EasyOCR picks cuda, then mps, itself when told there is a GPU.
-        self.gpu = default_device() != "cpu" if gpu is None else gpu
+        import cv2
+
+        if size < 32 or size % 32:
+            raise Refused(f"size must be a multiple of 32, not {size}")
+        for label, value in (("binary_threshold", binary_threshold),
+                             ("polygon_threshold", polygon_threshold)):
+            if not 0.0 < value < 1.0:
+                raise Refused(f"{label} must be in (0, 1), not {value}")
+        self.model_name = model
+        self.size = size
+        self.binary_threshold = binary_threshold
+        self.polygon_threshold = polygon_threshold
+        self.unclip_ratio = unclip_ratio
+        self.max_candidates = max_candidates
         self.min_height = min_height
-        self.low_text = low_text
-        self.text_threshold = text_threshold
-        self.link_threshold = link_threshold
-        self.canvas_size = canvas_size
-        self.mag_ratio = mag_ratio
-        self._reader = easyocr.Reader(self.languages, gpu=self.gpu, verbose=False)
+        path = _model_file(model, self.URL if model == self.MODEL else None)
+        try:
+            net = cv2.dnn.readNetFromONNX(str(path), cv2.dnn.ENGINE_NEW)
+        except cv2.error as exc:
+            raise ModelUnavailable(f"OpenCV could not load {path.name}: {exc}") from None
+        self._model = cv2.dnn.TextDetectionModel_DB(net)
+        self._model.setBinaryThreshold(binary_threshold)
+        self._model.setPolygonThreshold(polygon_threshold)
+        self._model.setUnclipRatio(unclip_ratio)
+        self._model.setMaxCandidates(max_candidates)
+        # A copied sampler shares this model, and a network keeps its input
+        # between calls.
+        self._lock = threading.Lock()
 
     def detect(self, image: np.ndarray) -> list[Detection]:
-        horizontal, free = self._reader.detect(
-            image,
-            low_text=self.low_text,
-            text_threshold=self.text_threshold,
-            link_threshold=self.link_threshold,
-            canvas_size=self.canvas_size,
-            mag_ratio=self.mag_ratio,
-        )
-        out: list[Detection] = []
-
-        def keep(det: Detection) -> None:
+        height, width = image.shape[:2]
+        scale = self.size / max(height, width)
+        shape = (max(32, round(width * scale / 32) * 32),
+                 max(32, round(height * scale / 32) * 32))
+        with self._lock:
+            self._model.setInputParams(1.0 / 255.0, shape,
+                                       (122.67891434, 116.66876762, 104.00698793))
+            quads, scores = self._model.detect(image)
+        out = []
+        for quad, score in zip(quads, scores):
+            pts = np.asarray(quad, dtype=np.float64)
+            det = Detection(float(max(0.0, pts[:, 0].min())), float(max(0.0, pts[:, 1].min())),
+                            float(min(width, pts[:, 0].max())), float(min(height, pts[:, 1].max())),
+                            float(score), "text")
             if det.height >= self.min_height and det.area > 0:
                 out.append(det)
-
-        # detect() returns a list-per-image; unwrap it.
-        for box in (horizontal[0] if horizontal else []):
-            x_min, x_max, y_min, y_max = box
-            keep(Detection(float(x_min), float(y_min), float(x_max), float(y_max), 1.0, "text"))
-        for quad in (free[0] if free else []):
-            pts = np.array(quad, dtype=np.float64)
-            keep(Detection(
-                float(pts[:, 0].min()), float(pts[:, 1].min()),
-                float(pts[:, 0].max()), float(pts[:, 1].max()), 1.0, "text",
-            ))
         return out
 
     def config(self) -> dict:
         return {
             "name": self.name,
-            "languages": self.languages,
-            "gpu": self.gpu,
+            "model": self.model_name,
+            "size": self.size,
+            "binary_threshold": self.binary_threshold,
+            "polygon_threshold": self.polygon_threshold,
+            "unclip_ratio": self.unclip_ratio,
+            "max_candidates": self.max_candidates,
             "min_height": self.min_height,
-            "low_text": self.low_text,
-            "text_threshold": self.text_threshold,
         }
+
+
+def _model_file(name: str, url: Optional[str]) -> Path:
+    """`name` as given when absolute, else under the weights folder; downloaded
+    from `url` when missing, through a partial file so an interrupted download
+    is never loaded as a model."""
+    path = Path(name)
+    if not path.is_absolute():
+        path = paths.weights_root() / path
+    if not path.exists() and url is not None:
+        import urllib.request
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(path.name + ".part")
+        try:
+            urllib.request.urlretrieve(url, partial)
+        except OSError as exc:
+            partial.unlink(missing_ok=True)
+            raise ModelUnavailable(f"could not download {url}: {exc}") from None
+        partial.replace(path)
+    if not path.exists():
+        raise ModelUnavailable(f"no model file at {path}: give the path to a DB "
+                               "text detector exported to ONNX")
+    return path
 
 

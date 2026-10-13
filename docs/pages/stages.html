@@ -118,7 +118,7 @@ made.video_id                         # the id actually used</code></pre>
 <tr><td><code>media</code></td><td></td><td>scene</td><td>Path to <code>media.json</code>.</td></tr>
 <tr><td><code>raw_transcript</code></td><td></td><td>vad, speaker</td><td>Path to <code>transcript.raw.json</code>.</td></tr>
 <tr><td><code>stride</code></td><td><code>5</code></td><td>scene</td><td>Score every Nth frame. Higher is faster but finds more false cuts.</td></tr>
-<tr><td><code>threshold</code></td><td><code>27.0</code></td><td>scene</td><td>Change score needed for a cut (PySceneDetect's scale). Lower finds more.</td></tr>
+<tr><td><code>threshold</code></td><td><code>27.0</code></td><td>scene</td><td>Change score needed for a cut (PySceneDetect's content score, computed with OpenCV). Lower finds more.</td></tr>
 <tr><td><code>detect_width</code></td><td><code>320</code></td><td>scene</td><td>Frames are scaled to this width before scoring.</td></tr>
 <tr><td><code>silence_s</code></td><td><code>0.65</code></td><td>vad</td><td>A pause at least this long is a cut.</td></tr>
 </table>
