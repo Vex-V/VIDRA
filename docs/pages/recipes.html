@@ -48,7 +48,7 @@
 </nav>
 <main>
 <h1>Recipes</h1>
-<p class="lede">Complete scripts, in <code>docs/pages/examples/</code>.</p>
+<p class="lede">Complete, runnable scripts. Each one is in <code>docs/pages/examples/</code>.</p>
 
 <table>
 <tr><th>Recipe</th><th>Shows</th><th>Needs</th></tr>
@@ -64,12 +64,12 @@
 <tr><td><a href="databases.html#example"><code>custom_database.py</code></a></td><td>your own database: SQLite, with search</td><td><code>[all]</code>, an OpenAI key</td></tr>
 <tr><td><a href="custom-samplers.html#example"><code>custom_sampler.py</code></a></td><td>your own sampler: keep frames where the picture moved</td><td><code>[local]</code>, an OpenAI key</td></tr>
 </table>
-<p>Scripts read keys from <code>.env</code> in the folder you run them from, and write under <code>data/</code> there.</p>
+<p>The scripts read keys from a <code>.env</code> file in the folder you run them from, and write their output to <code>data/</code> in that folder.</p>
 <pre><code>python docs/pages/examples/hosted.py shop.mp4
 python docs/pages/examples/aggregates_tour.py data/out/shop</code></pre>
 
 <h2 id="hosted">Hosted models, end to end</h2>
-<p>OpenAI describes and summarises, a local embedder makes the vectors, Supabase keeps a copy and serves search. Use <code>Folder("data/out")</code> instead of <code>Supabase()</code> to run without a server.</p>
+<p>OpenAI describes the frames and writes the summaries, a local embedder makes the vectors, and Supabase stores a copy and serves search. To run without a server, use <code>Folder("data/out")</code> instead of <code>Supabase()</code>.</p>
 <!-- example hosted.py -->
 <div class="file">docs/pages/examples/hosted.py</div>
 <pre><code class="python">"""The whole library with hosted models: OpenAI describes and summarises, a
@@ -86,19 +86,20 @@ import sys
 import vidra
 from vidra import LocalEmbedder, Models, OpenAI, Supabase, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip, Yolo
 
 vidra.configure(env_file=".env")     # keys from .env; nothing reads it otherwise
 source = sys.argv[1]
 
 models = Models(
-    vlm=OpenAI("gpt-5.4-mini"),      # describes the frames
-    llm=OpenAI("gpt-5.4-mini"),      # summary, chapters, events, entity accounts
+    vlm=OpenAI("gpt-6-luna"),      # describes the frames
+    llm=OpenAI("gpt-6-luna"),      # summary, chapters, events, entity accounts
     embedder=LocalEmbedder(),        # BAAI/bge-small-en-v1.5, on this machine
 )
 database = Supabase()                # or Folder("data/out") for no server
 
 # Chunk at picture cuts; keep frames when the scene or the people change.
-run = video_rag(source, "data/out", policy="scene", sampler="clip,yolo",
+run = video_rag(source, "data/out", policy="scene", sampler=[Clip(), Yolo()],
                 models=models, database=database)
 print(run.video_id, "-&gt;", run.folder)
 if run.problems:
@@ -135,7 +136,7 @@ for chapter in aggregates.load(done.artifacts["chapters"]).payload["chapters"]:
 <!-- /example -->
 
 <h2 id="stage-by-stage">Every stage on its own</h2>
-<p>What <code>video_rag()</code> does, with its defaults spelled out: Whisper's model and language, the scene threshold (calibrated, then retuned without decoding), chunk lengths, two samplers in one decode, progress reporting.</p>
+<p>Runs each stage of <code>video_rag()</code> separately, with its settings written out: Whisper's model and language, the scene threshold (calibrated, then changed without decoding again), chunk lengths, two samplers in one decode, and progress reporting.</p>
 <!-- example stage_by_stage.py -->
 <div class="file">docs/pages/examples/stage_by_stage.py</div>
 <pre><code class="python">"""Every video_rag stage called on its own, with its settings.
@@ -185,8 +186,8 @@ print("chunks:", len(boundaries.load(D / "timeline.json")))
 #    asked to read the screen; clip keeps a frame when the scene changes.
 video.video(D / "media.json", D / "timeline.json", D / "manifest.json",
             store=D / "store", per_second=1.0,
-            sampler=[samplers.build("uniform", every_n=5, max_per_chunk=6, prompts=["text"]),
-                     samplers.build("clip", threshold=0.95, max_per_chunk=6)])
+            sampler=[samplers.Uniform(every_n=5, max_per_chunk=6, prompts=["text"]),
+                     samplers.Clip(threshold=0.95, max_per_chunk=6)])
 
 # 6. cut: the transcript onto the grid.
 cut.cut(D / "timeline.json", D / "transcript.raw.json", D / "transcript.json")
@@ -197,7 +198,7 @@ def progress(event):
 
 describe.describe(D / "manifest.json", D / "timeline.json", D / "store",
                   D / "descriptions.json", previous=D / "descriptions.json",
-                  vlm=OpenAI("gpt-5.4-mini"), max_output_tokens=2000,
+                  vlm=OpenAI("gpt-6-luna"), max_output_tokens=8000,
                   on_progress=progress)
 
 # 8. embed: every answer and every chunk's transcript, as vectors.
@@ -213,11 +214,11 @@ for answer_id, answer in first.items():
 <!-- /example -->
 
 <h2 id="aggregates-tour">Every aggregator</h2>
-<p>On a folder written with <code>sampler="clip,yolo"</code>: each aggregator alone, then all together through <code>aggregate()</code>, which reuses what is still current.</p>
+<p>Runs each aggregator on its own, then all of them together through <code>aggregate()</code>, which reuses answers that are still current. It reads a folder written with <code>sampler=[Clip(), Yolo()]</code>.</p>
 <!-- example aggregates_tour.py -->
 <div class="file">docs/pages/examples/aggregates_tour.py</div>
 <pre><code class="python">"""Every aggregator, on a folder video_rag wrote: one at a time, then all at
-once. Run hosted.py (or video_rag with sampler="clip,yolo") first.
+once. Run hosted.py (or video_rag with sampler=[Clip(), Yolo()]) first.
 
     python aggregates_tour.py data/out/&lt;video_id&gt;
 """
@@ -230,7 +231,7 @@ from vidra import LocalEmbedder, Models, OpenAI, aggregates
 
 vidra.configure(env_file=".env")
 D = Path(sys.argv[1])
-models = Models(llm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+models = Models(llm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
 out = D / "answers"
 
 # A record: the documents, named by path. Only the timeline is required.
@@ -299,13 +300,14 @@ import sys
 import vidra
 from vidra import Folder, LocalEmbedder, Models, OpenAI, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
-models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=OpenAI("gpt-5.4-mini"),
+models = Models(vlm=OpenAI("gpt-6-luna"), llm=OpenAI("gpt-6-luna"),
                 embedder=LocalEmbedder())
 database = Folder("data/out")
 
-runs = [video_rag(path, "data/out", sampler="clip", models=models, database=database)
+runs = [video_rag(path, "data/out", sampler=Clip(), models=models, database=database)
         for path in sys.argv[1:]]
 ids = [run.video_id for run in runs]
 
@@ -327,7 +329,7 @@ print(aggregates.load("data/out/combined/summary.json").payload["summary"])</cod
 <!-- /example -->
 
 <h2 id="live">A live stream</h2>
-<p>A file sent to a port at the pace it was recorded stands in for a camera, from its own process. Each frame <code>clip</code> keeps is answered with the frame before it as soon as it arrives; after a minute the run stops, and its answers are searched frame by frame, by when they arrived, and chunk by chunk, as any video is. Point the run at <code>rtsp://...</code> to use a real camera. <a href="live.html">Live streams</a>.</p>
+<p>A file sent to a port in real time, from a separate process, stands in for a camera. Each frame <code>clip</code> keeps is described, together with the frame before it, as soon as it arrives. After a minute the run stops, and its answers are searched by frame, by arrival time and by chunk. To use a real camera, point the run at an <code>rtsp://</code> URL. See <a href="live.html">Live streams</a>.</p>
 <!-- example live_stream.py -->
 <div class="file">docs/pages/examples/live_stream.py</div>
 <pre><code class="python">"""A live run end to end: a file sent to a port at the pace it was recorded,
@@ -344,6 +346,7 @@ from datetime import datetime, timedelta, timezone
 import vidra
 from vidra import Folder, LocalEmbedder, Models, OpenAI
 from vidra.video_rag import live, search, search_observations, video_rag_live
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 
@@ -356,7 +359,7 @@ def show(o):
 
 if __name__ == "__main__":
     video = sys.argv[1]
-    models = Models(vlm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+    models = Models(vlm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
     db = Folder("data/out")             # reads observations.jsonl while it grows
 
     # The camera: its own process, sending to a port this run listens on.
@@ -364,7 +367,7 @@ if __name__ == "__main__":
                                      args=(video, "tcp://127.0.0.1:9000"))
     camera.start()
     run = video_rag_live("tcp://127.0.0.1:9000?listen=1", "data/out",
-                         video_id="camera-1", sampler="clip:overview",
+                         video_id="camera-1", sampler=Clip(prompts=["overview"]),
                          context=(1, 0),          # the frame before, for motion
                          stop_after_s=60,         # a minute of the stream
                          on_unit=show, models=models, database=db)

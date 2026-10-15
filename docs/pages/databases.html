@@ -57,7 +57,7 @@
 <tr><td><code>Folder(root)</code></td><td>nothing; reads the output folder in place</td><td>vectors only</td><td>nothing</td></tr>
 <tr><td>your own <code>Database</code> subclass</td><td>whatever its hooks keep</td><td>whatever its read hooks do</td><td>your code</td></tr>
 </table>
-<p>Pass it as <code>database=</code> to <code>video_rag</code>, <code>workflow</code>, <code>aggregates.aggregate</code>, <code>search</code> and <code>aggregates.search</code>, built: a name is refused. A search given none reads <code>Supabase()</code>. Build once and reuse. A <code>Database</code> is a context manager that calls <code>close()</code> on exit.</p>
+<p>Pass it as <code>database=</code> to <code>video_rag</code>, <code>workflow</code>, <code>aggregates.aggregate</code>, <code>search</code> and <code>aggregates.search</code>; a search given none uses <code>Supabase()</code>. A <code>Database</code> is a context manager that calls <code>close()</code> on exit.</p>
 
 <h2 id="supabase">Supabase</h2>
 <div class="sig">Supabase(url=None, key=None, read_key=None)</div>
@@ -67,28 +67,24 @@
 <tr><td><code>key</code></td><td><code>SUPABASE_SECRET_KEY</code></td><td>Secret key, for writes.</td></tr>
 <tr><td><code>read_key</code></td><td><code>SUPABASE_PUBLISHABLE_KEY</code></td><td>Publishable key, for searches.</td></tr>
 </table>
-<p>Connects on first use. Setup, once per project:</p>
+<p>The client connects on first use. To set up a Supabase project:</p>
 <ol>
   <li>In the SQL editor, run <code>db/supabase/video_rag.sql</code>, then <code>db/supabase/aggregates.sql</code>. This creates the <code>vidra</code> schema: <code>vr_</code> tables for moments, <code>ag_</code> tables for aggregates, and the search functions.</li>
   <li>Add <code>vidra</code> under <b>Settings → API → Exposed schemas</b>. Otherwise requests fail with <code>PGRST106</code>.</li>
   <li>Put the URL and keys in <code>.env</code>, or pass them in code.</li>
 </ol>
-<p>Search fuses vector similarity and Postgres full-text search. Re-cutting a grid never deletes descriptions, embeddings or answers. <code>db/supabase/reset.sql</code> drops everything; <code>db/wipe.py</code> deletes videos locally and in Supabase.</p>
+<p>Search combines vector similarity with Postgres full-text search. <code>db/supabase/reset.sql</code> drops every VIDRA table, and <code>db/wipe.py</code> deletes videos locally and in Supabase.</p>
 
 <h2 id="folder">Folder</h2>
 <div class="sig">Folder(root=None)</div>
-<p>Searches <code>&lt;root&gt;/&lt;video_id&gt;/</code> in place, by cosine similarity. <code>root</code> defaults to the data root's <code>out/</code>. Point it at the run's output folder and nothing is copied:</p>
+<p>Searches <code>&lt;root&gt;/&lt;video_id&gt;/</code> in place by cosine similarity; <code>root</code> defaults to the data root's <code>out/</code>. Pointed at the run's output folder, it copies nothing:</p>
 <pre><code class="python">db = Folder("data/out")
 run = video_rag("shop.mp4", "data/out", models=models, database=db)
 search("a customer paying", run.video_id, models=models, database=db)</code></pre>
-<p>Aggregate vectors are kept in <code>aggregate_units.json</code> in the source's folder. Suits one machine and a few hundred videos; no full-text search, so exact names and numbers rank worse than on Supabase.</p>
+<p>Aggregate vectors are stored in the source's <code>aggregate_units.json</code>. <code>Folder</code> suits one machine and a few hundred videos; without full-text search, exact names and numbers rank lower than on Supabase.</p>
 
 <h2 id="own">Writing your own</h2>
-<p>Subclass <code>Database</code> and fill in only the hooks you need:</p>
-<ul>
-  <li><b>Unfilled write hooks do nothing</b>; that artifact isn't read or copied.</li>
-  <li><b>Unfilled read hooks raise <code>Unsupported</code></b> (an <code>Unavailable</code> and <code>NotImplementedError</code>).</li>
-</ul>
+<p>Subclass <code>Database</code> and implement only the hooks you need. Write hooks you don't implement do nothing, and that artifact is not read or copied. Read hooks you don't implement raise <code>Unsupported</code>, which is both an <code>Unavailable</code> and a <code>NotImplementedError</code>.</p>
 <pre><code class="python">from vidra import Database
 
 class VectorsOnly(Database):
@@ -102,20 +98,20 @@ class VectorsOnly(Database):
                                       "embedder": document["embedder"]})
 
 video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code></pre>
-<p><code>name</code> labels your database in <code>run.problems</code>. A hook that raises is recorded in <code>run.problems</code> (or <code>stats["problems"]</code> for aggregates) and the run continues. <code>db.implements("write_embedded")</code> says whether a hook is filled in.</p>
+<p>A hook that raises is recorded, under your <code>name</code>, in <code>run.problems</code> (or <code>stats["problems"]</code> for aggregates), and the run continues. <code>db.implements("write_embedded")</code> says whether a hook is implemented.</p>
 
 <h3 id="when">When each hook is called</h3>
 <ol>
   <li><code>video_rag</code>, <code>workflow</code>: after each stage, <code>write_&lt;artifact&gt;(video_id, document)</code> per file written, with its JSON as a dict. After <code>describe</code>, also <code>write_prompts(rows)</code>.</li>
-  <li><code>aggregates.aggregate(database=...)</code>, <code>workflow</code>: <code>write_source</code> once (if it fails, nothing else runs), <code>write_answer</code> per answer, <code>write_definitions</code> once, then <code>write_aggregate_units</code> once, only if implemented, since it costs an embedding call.</li>
-  <li><code>search</code>: <code>search(...)</code>; <code>spans(video_id)</code> only for a time window or a <code>window</code> of neighbours (unless <code>grids=</code>), or for a hit that carries no <code>start_ts</code>/<code>end_ts</code>; <code>video_ids()</code> only for a window when no video is named.</li>
+  <li><code>aggregates.aggregate(database=...)</code>, <code>workflow</code>: <code>write_source</code> once (if it fails, nothing else is written), <code>write_answer</code> for each answer, <code>write_definitions</code> once, then <code>write_aggregate_units</code> once. Aggregate vectors are only computed when <code>write_aggregate_units</code> is implemented.</li>
+  <li><code>search</code>: <code>search(...)</code>. <code>spans(video_id)</code> is called only for a time filter or <code>window</code> (unless <code>grids=</code> is given), or for a hit without <code>start_ts</code>/<code>end_ts</code>. <code>video_ids()</code> is called only for a time filter when no video is named.</li>
   <li><code>aggregates.search</code>: <code>search_aggregates(...)</code>.</li>
-  <li><code>video_rag_live</code>: <code>write_media</code> when the stream opens (no duration yet); <code>write_observations(video_id, rows)</code> as answers arrive, through one writer (immediately when it keeps up, the backlog in one call when it does not); then the batch documents when the stream ends.</li>
+  <li><code>video_rag_live</code>: <code>write_media</code> when the stream opens, before the duration is known; <code>write_observations(video_id, rows)</code> as answers arrive, with any backlog sent in one call; and the other documents when the stream ends.</li>
   <li><code>search_observations</code>: <code>search_observations(...)</code>.</li>
 </ol>
 
 <h2 id="write-hooks">video_rag write hooks</h2>
-<p>Each receives the video id and the document as its JSON file holds it (fields: <a href="reference.html#documents">Reference</a>).</p>
+<p>Each hook receives the video id and the document as a dict, as in its JSON file (<a href="reference.html#documents">fields</a>).</p>
 <table>
 <tr><th>Hook</th><th>Receives</th></tr>
 <tr><td><code>write_media(video_id, document)</code></td><td><code>media.json</code>: <code>path</code>, <code>container_format</code>, <code>duration_s</code>, <code>video</code> and <code>audio</code> streams, <code>source</code> (a fingerprint of the file), <code>name</code>, <code>recorded_at</code></td></tr>
@@ -126,11 +122,11 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
 <tr><td><code>write_transcript(video_id, document)</code></td><td><code>transcript.json</code>: <code>chunks</code> (each <code>chunk_id</code>, <code>text</code>, <code>word_count</code>, <code>turns</code>, <code>structured.speakers</code>)</td></tr>
 <tr><td><code>write_descriptions(video_id, document)</code></td><td><code>descriptions.json</code>: <code>chunks</code> (each with <code>samplers</code>: <code>{answer_id: {sampler, question, description, structured, frame_indexes, ...}}</code>), <code>model</code></td></tr>
 <tr><td><code>write_embedded(video_id, document)</code></td><td><code>embedded.json</code>: <code>embedder</code> (the key) and <code>units</code>, each with <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>content</code>, <code>structured</code>, <code>text_hash</code>, <code>vector</code></td></tr>
-<tr><td><code>write_glances(video_id, document)</code></td><td><code>glances.json</code>, in <code>embedded.json</code>'s shape: <code>embedder</code> is the visual embedder's key plus <code>:images</code>, <code>content</code> is empty, <code>question</code> is <code>image</code>, <code>structured</code> holds the <code>frames</code>. <code>Supabase</code> writes it as <code>write_embedded</code> does; the key keeps the two sets of rows apart.</td></tr>
+<tr><td><code>write_glances(video_id, document)</code></td><td><code>glances.json</code>, in <code>embedded.json</code>'s shape: <code>embedder</code> is the visual embedder's key plus <code>:images</code>, <code>content</code> is empty, <code>question</code> is <code>image</code>, <code>structured</code> holds the <code>frames</code>. <code>Supabase</code> stores it like <code>write_embedded</code>; the different key keeps the two sets of rows apart.</td></tr>
 <tr><td><code>write_prompts(rows)</code></td><td>the questions a describe run asked: each <code>name</code>, <code>version</code> (the hash stored with its answers), <code>instruction</code>, <code>shape</code>, <code>summary</code>, <code>builtin</code>, <code>about</code></td></tr>
-<tr><td><code>write_observations(video_id, rows)</code></td><td>a <a href="live.html">live run</a>'s answers, called many times per run: each row one kept frame and question, with <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>content</code>, <code>text_hash</code>, <code>seen_at</code>, <code>answered_at</code>, <code>lag_s</code>, <code>gap_before</code>, <code>embedder</code>, <code>vector</code>. Key a row by <code>(video_id, sampler_id, frame_index, embedder)</code>.</td></tr>
+<tr><td><code>write_observations(video_id, rows)</code></td><td>a <a href="live.html">live run</a>'s answers, in batches, many times per run. Each row is one kept frame and question, with <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>content</code>, <code>text_hash</code>, <code>seen_at</code>, <code>answered_at</code>, <code>lag_s</code>, <code>gap_before</code>, <code>embedder</code>, <code>vector</code>. Key rows by <code>(video_id, sampler_id, frame_index, embedder)</code>.</td></tr>
 </table>
-<p>Search needs at least <code>write_timeline</code> and <code>write_embedded</code> (or <code>grids=</code> on <code>search</code> instead of the timeline).</p>
+<p>For search to work, implement at least <code>write_timeline</code> and <code>write_embedded</code>, or pass <code>grids=</code> to <code>search</code> instead of storing timelines.</p>
 
 <h2 id="aggregate-hooks">aggregates write hooks</h2>
 <p>A <b>source</b> is what answers are about: one video, or several <a href="aggregates.html#combine">combined</a>. <code>source_id</code> is the record's video id.</p>
@@ -139,18 +135,18 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
 <tr><td><code>write_source(source)</code></td><td><code>source_id</code>, <code>video_ids</code>, <code>members</code> (each <code>video_id</code>, <code>first_chunk</code>, <code>chunk_count</code>, <code>offset_s</code>: where it sits on the combined clock), <code>duration_s</code>, <code>chunk_count</code></td></tr>
 <tr><td><code>write_answer(source_id, answer, items, mentions)</code></td><td><code>answer</code>: <code>aggregate_id</code>, <code>aggregator</code>, <code>tier</code>, <code>payload</code> (whole), <code>inputs</code>, <code>model</code>, <code>version</code>, <code>inputs_fingerprint</code>.<br><code>items</code>: what the answer places in time (a chapter, an event, a name <code>ner</code> found, a linked entity), each <code>item_id</code>, <code>item_kind</code>, <code>label</code>, <code>text</code>, <code>chunk_ids</code>, <code>start_ts</code>, <code>end_ts</code>, <code>data</code>.<br><code>mentions</code>: for a linked entity, each sighting: <code>item_id</code>, <code>mention_key</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>entry</code>, <code>doubt</code>. Empty otherwise.</td></tr>
 <tr><td><code>write_definitions(rows)</code></td><td>each prompt or profile used: <code>name</code>, <code>version</code>, <code>kind</code>, <code>definition</code> (the entry as stored), <code>builtin</code></td></tr>
-<tr><td><code>write_aggregate_units(source_id, units, embedder_key)</code></td><td>the embedded summary, chapters and entity accounts, each <code>aggregate_id</code>, <code>item_id</code> (empty for a summary), <code>level</code> (<code>source</code>, <code>span</code> or <code>entity</code>), <code>content</code>, <code>start_ts</code>, <code>end_ts</code>, <code>text_hash</code>, <code>vector</code>. Defining this hook is what makes a run embed them.</td></tr>
+<tr><td><code>write_aggregate_units(source_id, units, embedder_key)</code></td><td>the embedded summary, chapters and entity accounts, each <code>aggregate_id</code>, <code>item_id</code> (empty for a summary), <code>level</code> (<code>source</code>, <code>span</code> or <code>entity</code>), <code>content</code>, <code>start_ts</code>, <code>end_ts</code>, <code>text_hash</code>, <code>vector</code>. These are only computed when this hook is implemented.</td></tr>
 </table>
-<p>Re-runs resend every answer, reused ones too: replace what you hold for that <code>source_id</code> and <code>aggregate_id</code>.</p>
+<p>Every run sends every answer again, including reused ones, so replace what you hold for that <code>source_id</code> and <code>aggregate_id</code>.</p>
 
 <h2 id="read-hooks">Read hooks</h2>
-<p>Needed only for search.</p>
+<p>Only search uses the read hooks.</p>
 
 <h3 id="hook-video-ids">video_ids()</h3>
-<p>Every video id held, as a list. Used when a search names no video.</p>
+<p>Return every stored video id, as a list. Used when a search names no video.</p>
 
 <h3 id="hook-spans">spans(video_id)</h3>
-<p>The grid: <code>[(start_ts, end_ts), ...]</code> in chunk order (index = chunk id). Resolves <code>after</code>/<code>before</code> and <code>window</code>, and times a moment whose hit carries no span of its own.</p>
+<p>Return the chunks as <code>[(start_ts, end_ts), ...]</code>, indexed by chunk id. Used for <code>after</code>/<code>before</code>, <code>window</code>, and hits without times.</p>
 
 <h3 id="hook-search">search(...)</h3>
 <div class="sig">search(vector, query, embedder_key, limit=20, video_ids=None, sampler=None,
@@ -168,20 +164,20 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
 <tr><td><code>chunk_ids</code></td><td>Only these chunks (time windows already resolved).</td></tr>
 <tr><td><code>structured</code></td><td>Only units whose fields equal each value, or whose list contains it.</td></tr>
 </table>
-<p>Return units best first, as dicts with <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>content</code>, <code>structured</code>, <code>score</code>, <code>dense_rank</code> (1 = best) and <code>text_rank</code> (or <code>None</code>). Only the order matters.</p>
+<p>Return units best first, as dicts with <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>content</code>, <code>structured</code>, <code>score</code>, <code>dense_rank</code> (1 = best) and <code>text_rank</code> (or <code>None</code>). Only the order is used, not the scores.</p>
 
 <h3 id="hook-search-aggregates">search_aggregates(...)</h3>
 <div class="sig">search_aggregates(vector, query, embedder_key, level, limit=5, source_ids=None) -&gt; list[dict]</div>
-<p>Rank one <code>level</code>'s units under <code>embedder_key</code>, optionally only <code>source_ids</code>. Return dicts with <code>source_id</code>, <code>video_ids</code>, <code>aggregate_id</code>, <code>item_id</code>, <code>level</code>, <code>content</code>, <code>start_ts</code>, <code>end_ts</code>, <code>score</code>, best first.</p>
+<p>Rank the units of one <code>level</code> stored under <code>embedder_key</code>, optionally only from <code>source_ids</code>. Return dicts with <code>source_id</code>, <code>video_ids</code>, <code>aggregate_id</code>, <code>item_id</code>, <code>level</code>, <code>content</code>, <code>start_ts</code>, <code>end_ts</code>, <code>score</code>, best first.</p>
 
 <h3 id="hook-search-observations">search_observations(...)</h3>
 <div class="sig">search_observations(vector, query, embedder_key, limit=20, video_ids=None,
                     sampler=None, question=None, strategy=None, after=None,
                     before=None, since=None, until=None, structured=None) -&gt; list[dict]</div>
-<p>Rank a live run's rows under <code>embedder_key</code>. The filters are those of <code>search</code>, plus <code>after</code>/<code>before</code> on <code>media_ts</code> and <code>since</code>/<code>until</code> on <code>seen_at</code> (ISO 8601 UTC strings). Return dicts with <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>seen_at</code>, <code>score</code>, <code>dense_rank</code>, <code>text_rank</code>, best first.</p>
+<p>Rank a live run's rows stored under <code>embedder_key</code>. The filters are those of <code>search</code>, plus <code>after</code>/<code>before</code> on <code>media_ts</code> and <code>since</code>/<code>until</code> on <code>seen_at</code> (ISO 8601 UTC strings). Return dicts with <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>seen_at</code>, <code>score</code>, <code>dense_rank</code>, <code>text_rank</code>, best first.</p>
 
 <h3 id="hook-close">close()</h3>
-<p>Release connections. Called by <code>with</code>; safe to call twice.</p>
+<p>Release connections. Called when a <code>with</code> block exits; safe to call more than once.</p>
 
 <h2 id="example">Complete example: SQLite</h2>
 <p>Grid, moment vectors and aggregate vectors in one SQLite file, searched by cosine similarity.</p>
@@ -204,6 +200,7 @@ import sys
 import vidra
 from vidra import Database, LocalEmbedder, Models, OpenAI, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 
@@ -327,11 +324,11 @@ class SQLite(Database):
         self.db.close()
 
 
-models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=OpenAI("gpt-5.4-mini"),
+models = Models(vlm=OpenAI("gpt-6-luna"), llm=OpenAI("gpt-6-luna"),
                 embedder=LocalEmbedder())
 
 with SQLite("data/vidra.sqlite") as database:
-    run = video_rag(sys.argv[1], "data/out", sampler="clip", models=models,
+    run = video_rag(sys.argv[1], "data/out", sampler=Clip(), models=models,
                     database=database)
     moments, notes = search("a person at a counter", run.video_id,
                             models=models, database=database)

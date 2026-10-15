@@ -1,5 +1,5 @@
 """Every aggregator, on a folder video_rag wrote: one at a time, then all at
-once. Run hosted.py (or video_rag with sampler="clip,yolo") first.
+once. Run hosted.py (or video_rag with sampler=[Clip(), Yolo()]) first.
 
     python aggregates_tour.py data/out/<video_id>
 """
@@ -12,7 +12,7 @@ from vidra import LocalEmbedder, Models, OpenAI, aggregates
 
 vidra.configure(env_file=".env")
 D = Path(sys.argv[1])
-models = Models(llm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+models = Models(llm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
 out = D / "answers"
 
 # A record: the documents, named by path. Only the timeline is required.

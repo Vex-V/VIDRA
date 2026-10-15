@@ -60,10 +60,10 @@
                                        │
                                        └──► aggregates ──► summary, chapters, people, ...</div>
 
-<p>Every result is a file in the video's folder. A database is an optional copy, and is what search reads. Models are objects you pass in: ready-made ones for OpenAI, Anthropic and local embedders, or your own class.</p>
+<p>Each stage writes a file in the video's folder; search reads from a database, which can be that folder. Models are objects you pass in: classes for OpenAI, Anthropic and local models are included, and you can write your own.</p>
 
 <h2 id="install">Install</h2>
-<p>Python 3.11 to 3.14. No system FFmpeg needed.</p>
+<p>VIDRA supports Python 3.11 to 3.14. FFmpeg comes bundled with PyAV.</p>
 <pre><code>git clone https://github.com/Vex-V/FalCONvar.git
 cd FalCONvar
 pip install ".[all]"</code></pre>
@@ -74,11 +74,11 @@ pip install ".[all]"</code></pre>
 <tr><td><code>pip install ".[audio]"</code></td><td>faster-whisper, pyannote.audio, CUDA 12 libraries</td><td>transcription and speaker diarization</td></tr>
 <tr><td><code>pip install ".[all]"</code></td><td>both</td><td>everything</td></tr>
 </table>
-<p><code>pip install -r requirements.txt</code> installs the exact tested versions, but not <code>vidra</code> itself; run scripts from the repository root.</p>
-<div class="note"><p><b>NVIDIA GPU:</b> pip's default PyTorch on Windows is CPU-only. Add <code>--extra-index-url https://download.pytorch.org/whl/cu130</code>. Everything also runs on the CPU, more slowly (<a href="pages/reference.html#hardware">Hardware</a>).</p></div>
+<p><code>pip install -r requirements.txt</code> installs the exact tested versions of the dependencies, but not <code>vidra</code> itself.</p>
+<div class="note"><p>On Windows, pip installs a CPU-only PyTorch by default. For an NVIDIA GPU, add <code>--extra-index-url https://download.pytorch.org/whl/cu130</code>. Without a GPU everything still runs, more slowly (see <a href="pages/reference.html#hardware">Hardware</a>).</p></div>
 
 <h2 id="keys">Keys and configuration</h2>
-<p>Keys are read from the environment. A <code>.env</code> file is read only if you load it, with <code>vidra.configure(env_file=".env")</code>; or pass keys in code: <code>OpenAI(api_key=...)</code>, <code>Supabase(url=..., key=...)</code>.</p>
+<p>API keys are read from environment variables. A <code>.env</code> file is read only if you call <code>vidra.configure(env_file=".env")</code>. You can also pass keys directly: <code>OpenAI(api_key=...)</code>, <code>Supabase(url=..., key=...)</code>.</p>
 <table>
 <tr><th>Variable</th><th>Read by</th></tr>
 <tr><td><code>OPENAI_API_KEY</code></td><td><code>OpenAI</code>, <code>OpenAIEmbedder</code> (also accepted as <code>OPENAI_API</code>)</td></tr>
@@ -88,11 +88,11 @@ pip install ".[all]"</code></pre>
 <tr><td><code>VIDRA_DATA</code></td><td>where output goes (default <code>data/</code> in the checkout, else <code>~/.vidra</code>)</td></tr>
 <tr><td><code>VIDRA_WEIGHTS</code></td><td>where checkpoints are cached (default <code>weights/</code>)</td></tr>
 </table>
-<p><code>.env.example</code> lists them all.</p>
+<p>The repository's <code>.env.example</code> lists all of them.</p>
 
 <h3 id="configure">configure()</h3>
 <div class="sig">vidra.configure(data_root=None, weights=None, env_file=None, hf_token=None)</div>
-<p>Call once, before anything runs. <code>None</code> changes nothing.</p>
+<p>Call <code>configure()</code> once, before running anything. Arguments left as <code>None</code> are not changed.</p>
 <table class="params">
 <tr><th>Argument</th><th>Meaning</th></tr>
 <tr><td><code>data_root</code></td><td>Where output, custom questions (<code>prompts.json</code>) and custom aggregates (<code>aggregates.json</code>) live. Outranks <code>VIDRA_DATA</code>.</td></tr>
@@ -110,13 +110,14 @@ print(vidra.__version__)</code></pre>
 <pre><code class="python">import vidra
 from vidra import Folder, LocalEmbedder, Models, OpenAI, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip, Yolo
 
 vidra.configure(env_file=".env")
-models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=OpenAI("gpt-5.4-mini"),
+models = Models(vlm=OpenAI("gpt-6-luna"), llm=OpenAI("gpt-6-luna"),
                 embedder=LocalEmbedder())
 db = Folder("data/out")                     # search the output folder; no server
 
-run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
+run = video_rag("shop.mp4", "data/out", policy="scene", sampler=[Clip(), Yolo()],
                 models=models, database=db)
 
 moments, notes = search("a customer paying in cash", run.video_id,
@@ -128,13 +129,14 @@ d = run.folder
 video = aggregates.record(timeline=d / "timeline.json", transcript=d / "transcript.json",
                           descriptions=d / "descriptions.json")
 told = video.excerpt(transcript=True, answers={"clip": ["summary"]})
-aggregates.summary(input=told, out=d / "answers" / "summary.json", models=models)
-aggregates.chapters(input=told, out=d / "answers" / "chapters.json", models=models)
+aggregates.summary(input=told, out=d / "answers" / "summary.json", llm=models.llm)
+aggregates.chapters(input=told, out=d / "answers" / "chapters.json",
+                    llm=models.llm, embedder=models.embedder)
 
 print(aggregates.load(d / "answers" / "summary.json").payload["summary"])
 for c in aggregates.load(d / "answers" / "chapters.json").payload["chapters"]:
     print(f"{c['start_ts']:.0f}s", c["title"])</code></pre>
-<p>Output is in <code>data/out/shop/</code>: one JSON file per stage, and the kept frames in <code>store/</code> (<a href="pages/concepts.html#folder">what each file holds</a>). More complete scripts are in <a href="pages/recipes.html">Recipes</a>.</p>
+<p>The output is in <code>data/out/shop/</code>: one JSON file per stage and the kept frames in <code>store/</code> (<a href="pages/concepts.html#folder">what each file holds</a>). <a href="pages/recipes.html">Recipes</a> has longer scripts.</p>
 <!-- pager -->
 <div class="pager">
 <a class="next" href="pages/concepts.html"><small>Next</small>Concepts</a>

@@ -62,7 +62,7 @@ for m in moments:
     print(m.video_id, m.chunk_id, m.start_ts, m.end_ts, round(m.score, 4))
     for hit in m.hits:                          # the answers that matched in this chunk
         print("   ", hit["sampler_id"], hit["content"][:80])</code></pre>
-<p>Search reads a database: the one the run exported to, or a <code>Folder</code> over the output. Use the embedder that built the index; other embedders' units are invisible.</p>
+<p>Search reads the database the run exported to, or a <code>Folder</code> over the output. Use the embedder that built the index; other embedders' vectors are ignored.</p>
 
 <h2 id="arguments">Arguments</h2>
 <div class="sig">search(query, video_id=None, moments=5, sampler=None, candidates=20,
@@ -99,32 +99,31 @@ search("a forklift reversing", ["monday", "tuesday"], moments=10,
        models=models, database=db)</code></pre>
 
 <h2 id="results">What comes back</h2>
-<p>A list of <code>Moment</code>, best first, and a list of notes.</p>
+<p><code>search</code> returns a list of <code>Moment</code> objects, best first, and a list of notes.</p>
 <table class="params">
 <tr><th><code>Moment</code></th><th>Is</th></tr>
 <tr><td><code>video_id</code></td><td>Which video.</td></tr>
 <tr><td><code>chunk_id</code></td><td>Which chunk of that video.</td></tr>
 <tr><td><code>start_ts</code>, <code>end_ts</code></td><td>The chunk's start and end, in seconds.</td></tr>
-<tr><td><code>score</code></td><td>A rank score for ordering, not a similarity (<a href="#ranking">below</a>).</td></tr>
+<tr><td><code>score</code></td><td>A score for ordering results. It is not a similarity (see <a href="#ranking">ranking</a>).</td></tr>
 <tr><td><code>hits</code></td><td>The matching answers in this chunk, best first.</td></tr>
 <tr><td><code>samplers</code></td><td>The answer ids of the hits.</td></tr>
 <tr><td><code>as_dict()</code></td><td>The moment as plain data.</td></tr>
 </table>
 <p>Each hit has <code>sampler_id</code> (the answer id), <code>sampler</code>, <code>question</code>, <code>content</code> (the embedded text), <code>structured</code> (the fields), <code>dense_rank</code> (vector rank) and <code>text_rank</code> (full-text rank, or <code>None</code>).</p>
-<p><b>Read the notes</b> when results look wrong or empty; they explain why. If nothing is indexed for this embedder at all, search raises <code>MissingArtifact</code> (a <code>FileNotFoundError</code>).</p>
+<p>If the results are empty or look wrong, check the notes; they report, for example, when filters removed most candidates. If nothing is indexed for this embedder, search raises <code>MissingArtifact</code>, a <code>FileNotFoundError</code>.</p>
 
 <h2 id="ranking">How ranking works</h2>
 <ol>
   <li>The query is embedded with the embedder's <code>embed_query</code>.</li>
-  <li>The database ranks <code>candidates</code> units under that embedder, after filters. <code>Supabase</code> fuses vector similarity and Postgres full-text search by reciprocal rank: full text catches exact words and names, vectors catch paraphrases. <code>Folder</code> uses vectors only.</li>
-  <li>Units are grouped by chunk. A chunk scores <code>1/(10 + best) + 0.5/(10 + second)</code>, so more answers alone don't win.</li>
+  <li>The database ranks <code>candidates</code> units under that embedder, after filters. <code>Supabase</code> fuses vector and Postgres full-text rankings by reciprocal rank; <code>Folder</code> uses vectors only.</li>
+  <li>Units are grouped by chunk, and a chunk scores <code>1/(10 + best) + 0.5/(10 + second)</code> from the ranks of its two best units.</li>
 </ol>
-<p>Filters leave fewer units per chunk, so scores drop; the notes say so.</p>
 
 <h2 id="tips">Getting better results</h2>
 <ul>
   <li>Describe the moment: "a man hands the cashier a banknote" beats "cash payment".</li>
-  <li>Several samplers give each chunk several accounts; agreement lifts the right chunk.</li>
+  <li>Running several samplers gives each chunk several descriptions, and a chunk that matches in more than one ranks higher.</li>
   <li>For exact filtering, add a question with a <code>one_of</code> field and use <code>structured=</code> (<a href="questions.html#fields">fields</a>).</li>
   <li>Use <code>Supabase</code> for names, numbers and exact phrases; <code>Folder</code> has no full-text search.</li>
 </ul>

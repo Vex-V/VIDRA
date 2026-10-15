@@ -1,97 +1,49 @@
-"""Sampling strategies, by name, and how to add one of your own.
+"""Sampling strategies: which frames to keep, as objects you build and pass in.
 
-A name is a strategy: which frames to keep. What is asked about them is a
-question, paired as `name:question`. Model-backed samplers are imported only
-when built.
+    from vidra.video_rag.samplers import Clip, Yolo
+    video_rag("x.mp4", "data/out", sampler=[Clip(threshold=0.93), Yolo()])
 
-    samplers.build("clip", threshold=0.93, prompts=["safety"])   # a configured object
-    samplers.register(Brightness)          # a class of your own, usable by name
-    samplers.available()                   # every name a spec may use
+Each class is one strategy. Its settings are its constructor's arguments, plus
+the base's `min_interval_s`, `max_per_chunk` and `prompts` (the questions asked
+about the frames it keeps; by default the one named after the strategy).
+Model-backed samplers are imported on first use, so `import vidra` stays light.
 
-A sampler of your own subclasses `Sampler` and fills in `propose`; pass an
-object of it in a spec (`sampler=[Brightness(step=12, prompts=["overview"])]`),
-or register the class to name it in a spec string.
+A sampler of your own subclasses `Sampler`, gives itself a `name` and fills in
+`propose`; pass an object of it like any other.
 """
 
 from __future__ import annotations
 
-import inspect
-import re
+import importlib
 from typing import Type
 
 from .base import Sampler, View
-from .uniform import UniformSampler
-from vidra.shared.config.lookup import imported
-from vidra.shared.reporting.errors import Refused, UnknownOption
+from .uniform import Uniform
 
-#: name -> "module:ClassName", imported on first use.
-_LAZY: dict[str, str] = {
-    "clip": "scene:ClipChangeSampler",
-    "yolo": "people:PersonChangeSampler",
-    "objects": "objects:ObjectChangeSampler",
-    "text": "ocr:TextChangeSampler",
+#: The shipped samplers: name -> (module, class), imported on first use.
+_BUILTIN: dict[str, tuple[str, str]] = {
+    "uniform": ("uniform", "Uniform"),
+    "clip": ("scene", "Clip"),
+    "yolo": ("people", "Yolo"),
+    "objects": ("objects", "Objects"),
+    "text": ("ocr", "Text"),
 }
-_REGISTRY: dict[str, Type[Sampler]] = {"uniform": UniformSampler}
+_CLASSES = {cls: module for module, cls in _BUILTIN.values()}
 
-#: The shipped samplers. Their names cannot be taken by a registered class.
-BUILTIN = frozenset({"uniform", *_LAZY})
-
-#: A sampler name: what a spec string can carry (`name:question` splits on the
-#: colon, `,` `+` `[` `]` are the spec's own syntax).
-NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+#: The shipped sampler names. A class of your own may not take one.
+BUILTIN = frozenset(_BUILTIN)
 
 
-def register(cls: Type[Sampler]) -> Type[Sampler]:
-    """Make a sampler class usable by name in a spec string. Usable as a class
-    decorator. Registering a name again replaces the class (a notebook cell run
-    twice); a built-in name is refused."""
-    if not (inspect.isclass(cls) and issubclass(cls, Sampler)):
-        raise Refused(f"register takes a Sampler subclass, not {cls!r}")
-    if inspect.isabstract(cls):
-        raise Refused(f"{cls.__name__} does not implement propose(frame, "
-                      f"chunk_local_index)")
-    name = getattr(cls, "name", "")
-    if not isinstance(name, str) or not NAME.match(name):
-        raise Refused(f"{cls.__name__}.name must be lowercase letters, digits, "
-                      f"'_' or '-', starting with a letter, not {name!r}: it is "
-                      f"written in spec strings as name:question")
-    if name in BUILTIN:
-        raise Refused(f"{name!r} is a built-in sampler and cannot be replaced; "
-                      f"give {cls.__name__} a name of its own")
-    _REGISTRY[name] = cls
-    return cls
+def builtin(name: str) -> Type[Sampler]:
+    """The shipped class behind a name, imported if it is not loaded yet."""
+    module, cls = _BUILTIN[name]
+    return getattr(importlib.import_module(f".{module}", __name__), cls)
 
 
-def class_of(name: str) -> Type[Sampler]:
-    """The class a name builds, imported if it is a built-in not yet loaded."""
-    if name in _REGISTRY:
-        return _REGISTRY[name]
-    if name not in _LAZY:
-        raise UnknownOption(f"unknown sampler {name!r}; known: {', '.join(available())}")
-    _REGISTRY[name] = imported(_LAZY[name], __package__)
-    return _REGISTRY[name]
+def __getattr__(name: str):
+    if name in _CLASSES:
+        return getattr(importlib.import_module(f".{_CLASSES[name]}", __name__), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def build(name: str, **settings) -> Sampler:
-    """A sampler object, by name, with its settings: what a spec string builds,
-    configured. Pass the object in a spec to use these settings in a run. A
-    setting the sampler does not take is refused, naming what it does take."""
-    cls = class_of(name)
-    parameters = inspect.signature(cls.__init__).parameters.values()
-    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters):
-        takes = [p.name for p in parameters if p.name not in ("self", "sampler_id")
-                 and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                                inspect.Parameter.KEYWORD_ONLY)]
-        unknown = sorted(set(settings) - set(takes))
-        if unknown:
-            raise Refused(f"{name} takes no {', '.join(unknown)}; it takes "
-                          f"{', '.join(takes)}")
-    return cls(**settings)
-
-
-def available() -> list[str]:
-    """Every name a spec may use: the built-ins and every registered class."""
-    return sorted(set(_REGISTRY) | set(_LAZY))
-
-
-__all__ = ["BUILTIN", "Sampler", "View", "available", "build", "class_of", "register"]
+__all__ = ["Clip", "Objects", "Sampler", "Text", "Uniform", "View", "Yolo"]

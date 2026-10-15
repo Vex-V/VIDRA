@@ -30,7 +30,7 @@ def vocabulary() -> dict[str, Any]:
             out[name] = list(nested) if nested else None
         return out
 
-    return {"samplers": _samplers.available(),
+    return {"samplers": sorted(_samplers.BUILTIN),
             "questions": {q: fields(q) for q in library.questions()}}
 
 

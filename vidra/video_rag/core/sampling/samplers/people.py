@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional, Sequence
 
+from .base import Deferred
 from .detection import DetectionChangeSampler
 
 if TYPE_CHECKING:
@@ -11,7 +12,7 @@ if TYPE_CHECKING:
     from .perception.embedders import FrameEmbedder
 
 
-class PersonChangeSampler(DetectionChangeSampler):
+class Yolo(DetectionChangeSampler):
     """People, compared by appearance.
 
     YOLO locates each person, CLIP embeds each person crop (upsampled to 224),
@@ -44,7 +45,7 @@ class PersonChangeSampler(DetectionChangeSampler):
         if detector is None:
             from .perception.detectors import YoloPersonDetector
 
-            detector = YoloPersonDetector()
+            detector = Deferred(YoloPersonDetector)
         super().__init__(
             detector=detector,
             descriptor=CropEmbeddingDescriptor(embedder=embedder, crop_pad=crop_pad),

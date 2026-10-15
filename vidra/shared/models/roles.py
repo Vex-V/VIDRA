@@ -1,6 +1,6 @@
 """Which model fills each role, chosen once and handed to every call.
 
-    models = Models(vlm=OpenAI("gpt-5.4-mini"),
+    models = Models(vlm=OpenAI("gpt-6-luna"),
                     llm=Anthropic("claude-haiku-4-5"),
                     embedder=LocalEmbedder())
 

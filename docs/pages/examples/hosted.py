@@ -12,19 +12,20 @@ import sys
 import vidra
 from vidra import LocalEmbedder, Models, OpenAI, Supabase, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip, Yolo
 
 vidra.configure(env_file=".env")     # keys from .env; nothing reads it otherwise
 source = sys.argv[1]
 
 models = Models(
-    vlm=OpenAI("gpt-5.4-mini"),      # describes the frames
-    llm=OpenAI("gpt-5.4-mini"),      # summary, chapters, events, entity accounts
+    vlm=OpenAI("gpt-6-luna"),      # describes the frames
+    llm=OpenAI("gpt-6-luna"),      # summary, chapters, events, entity accounts
     embedder=LocalEmbedder(),        # BAAI/bge-small-en-v1.5, on this machine
 )
 database = Supabase()                # or Folder("data/out") for no server
 
 # Chunk at picture cuts; keep frames when the scene or the people change.
-run = video_rag(source, "data/out", policy="scene", sampler="clip,yolo",
+run = video_rag(source, "data/out", policy="scene", sampler=[Clip(), Yolo()],
                 models=models, database=database)
 print(run.video_id, "->", run.folder)
 if run.problems:

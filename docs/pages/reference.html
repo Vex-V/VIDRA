@@ -51,7 +51,7 @@
 <p class="lede">File formats, errors, storage locations and hardware.</p>
 
 <h2 id="documents">Documents</h2>
-<p>Every document is a JSON object with <code>document</code> (its kind), <code>version</code> and <code>video_id</code>, and is what the matching <code>write_&lt;artifact&gt;</code> hook receives. Times are in seconds. Each stage's <code>load</code> reads one back, typed.</p>
+<p>Every document is a JSON object with <code>document</code> (its type), <code>version</code> and <code>video_id</code> fields, and is what the matching <code>write_&lt;artifact&gt;</code> database hook receives. Times are in seconds. Each stage's <code>load</code> function reads its document back as a typed object.</p>
 
 <h3 id="doc-media">media.json</h3>
 <table>
@@ -61,7 +61,7 @@
 <tr><td><code>duration_s</code></td><td>The container's duration.</td></tr>
 <tr><td><code>video</code></td><td>The picture stream, or <code>null</code>: <code>index</code>, <code>codec</code>, <code>rate</code> (frames per second), <code>time_base</code>, <code>width</code>, <code>height</code>, <code>frames</code>, <code>duration_s</code>.</td></tr>
 <tr><td><code>audio</code></td><td>The soundtrack, or <code>null</code>: <code>index</code>, <code>codec</code>, <code>rate</code> (samples per second), <code>channels</code>, <code>duration_s</code>.</td></tr>
-<tr><td><code>source</code></td><td>Content fingerprint, distinguishing a moved file from a different one.</td></tr>
+<tr><td><code>source</code></td><td>A fingerprint of the file's contents, which tells a moved file apart from a different one.</td></tr>
 <tr><td><code>name</code></td><td>Display name; the filename unless given.</td></tr>
 <tr><td><code>recorded_at</code></td><td>Recording time (ISO 8601) from tags unless given, or <code>null</code>.</td></tr>
 </table>
@@ -96,7 +96,7 @@
 <tr><td><code>policy</code></td><td><code>uniform</code>, <code>scene</code>, <code>vad</code> or <code>speaker</code>.</td></tr>
 <tr><td><code>derived_from</code></td><td><code>video</code>, <code>audio</code>, <code>grid</code> (arithmetic), or <code>combined</code>.</td></tr>
 <tr><td><code>params</code></td><td>Settings used (<code>min_s</code>, <code>max_s</code>, ...); for a combination, <code>combined</code> places each video.</td></tr>
-<tr><td><code>fingerprint</code></td><td>Grid hash, recorded by every later document to detect mismatched grids.</td></tr>
+<tr><td><code>fingerprint</code></td><td>A hash of the grid. Every later document records it, so mismatched grids can be detected.</td></tr>
 <tr><td><code>duration_s</code>, <code>chunk_count</code></td><td>The grid's length and size.</td></tr>
 </table>
 
@@ -107,7 +107,7 @@
 <tr><td><code>source</code></td><td>What was decoded: path, container, duration, stream properties. <code>video.recreate</code> checks against it.</td></tr>
 <tr><td><code>config</code></td><td>Decimator, sampler settings (with <code>prompts</code>) and frame store settings.</td></tr>
 <tr><td><code>stats</code></td><td><code>frames_decimated</code>, <code>frames_sampled</code> (picks), <code>stored_frames</code> (files), <code>stored_mb</code>, timing.</td></tr>
-<tr><td><code>timeline_fingerprint</code>, <code>manifest_fingerprint</code></td><td>Grid hash, and a hash of this sampling.</td></tr>
+<tr><td><code>timeline_fingerprint</code>, <code>manifest_fingerprint</code></td><td>Hashes of the grid and of this sampling run.</td></tr>
 </table>
 
 <h3 id="doc-transcript">transcript.json</h3>
@@ -162,11 +162,11 @@
 <p>JSON Schemas are in <code>db/json/</code>; <code>python -m vidra.shared.contracts.schemas --check</code> checks them.</p>
 
 <h2 id="errors">Errors</h2>
-<p>Every deliberate error is a <code>vidra.VidraError</code> with a builtin base, so <code>except ValueError</code> etc. still work.</p>
+<p>Every error VIDRA raises deliberately is a <code>vidra.VidraError</code>. Most also subclass a built-in exception, so <code>except ValueError</code> and similar clauses still work.</p>
 <table>
 <tr><th>Class</th><th>Also a</th><th>Raised when</th></tr>
 <tr><td><code>vidra.VidraError</code></td><td></td><td>the base of everything below</td></tr>
-<tr><td><code>vidra.Unavailable</code></td><td></td><td>this setup cannot do it: no package, weights, key or server. Retrying will not help</td></tr>
+<tr><td><code>vidra.Unavailable</code></td><td></td><td>something required is missing: a package, weights, a key or a server. Retrying will not help</td></tr>
 <tr><td><code>vidra.ModelUnavailable</code></td><td>Unavailable</td><td>a model reports a problem (no API key), or a local model will not load</td></tr>
 <tr><td><code>ModelFailed</code></td><td>Unavailable</td><td>a model call failed (<code>vidra.shared.models.base</code>)</td></tr>
 <tr><td><code>Refused</code></td><td><code>ValueError</code></td><td>the request is invalid as given (<code>vidra.shared.reporting.errors</code>)</td></tr>
@@ -210,29 +210,29 @@ except vidra.VidraError as refused:       # the request itself
 <tr><td>Detector and embedder checkpoints</td><td><code>weights/</code></td><td><code>configure(weights=)</code>, <code>VIDRA_WEIGHTS</code></td></tr>
 <tr><td>CLIP, pyannote, GLiNER, DistilBERT</td><td>Hugging Face's cache</td><td><code>HF_HOME</code></td></tr>
 </table>
-<p>The data root is <code>data/</code> in a checkout, else <code>~/.vidra</code>. Precedence: <code>configure()</code>, environment variables, defaults. <code>VIDRA_DATA</code> and <code>VIDRA_WEIGHTS</code> are not read from <code>.env</code>. Folders starting with <code>_</code> are never listed as videos.</p>
-<p>Logs go to the <code>vidra</code> logger, with no handlers configured. <code>logging.basicConfig(level=logging.INFO)</code> shows each stage; failed database writes are warnings.</p>
+<p>The data root is <code>data/</code> in a checkout of the repository, otherwise <code>~/.vidra</code>. <code>configure()</code> overrides environment variables, which override the defaults; <code>VIDRA_DATA</code> and <code>VIDRA_WEIGHTS</code> are not read from <code>.env</code>. Folders starting with <code>_</code> are not treated as videos.</p>
+<p>VIDRA logs to the <code>vidra</code> logger and configures no handlers. Call <code>logging.basicConfig(level=logging.INFO)</code> to see each stage; failed database writes are logged as warnings.</p>
 
 <h2 id="hardware">Hardware</h2>
-<p>PyTorch models (CLIP, YOLO, local embedder, pyannote) use CUDA, then <code>mps</code>, then CPU. Whisper uses CUDA or CPU. GLiNER and sentiment run on the CPU. Time per minute of video on a mid-range laptop GPU and on its CPU:</p>
+<p>PyTorch models (CLIP, YOLO, the local embedders and pyannote) use CUDA if available, then <code>mps</code>, then the CPU. Whisper uses CUDA or the CPU. GLiNER, the sentiment model and the text detector always run on the CPU. Approximate time per minute of video, on a mid-range laptop GPU and on its CPU:</p>
 <table>
 <tr><th>Work</th><th>GPU</th><th>CPU</th></tr>
 <tr><td>Whisper <code>small</code> + pyannote</td><td>~6 s</td><td>~1.5 min</td></tr>
 <tr><td><code>clip</code>, <code>yolo</code> and <code>objects</code></td><td>~25 s</td><td>~50 s</td></tr>
-<tr><td><code>text</code></td><td>~15 s</td><td>~3.5 min</td></tr>
+<tr><td><code>text</code></td><td colspan="2">~12 s (CPU only)</td></tr>
 </table>
-<p>Describe calls run concurrently: at the default concurrency of 8, a run takes about as long as its slowest call, around 6 times faster than one call at a time.</p>
+<p>Describe calls run concurrently, up to the model's <code>concurrency</code> (8 by default), so a run takes roughly as long as its slowest call.</p>
 <ul>
-  <li><code>mps</code> is untested. If pyannote fails on a Mac, set <code>PYTORCH_ENABLE_MPS_FALLBACK=1</code> before starting Python. Intel Macs can't install the required PyTorch.</li>
-  <li>Whisper on an NVIDIA GPU needs CUDA 12's cuBLAS and cuDNN (installed by <code>vidra[audio]</code>); without them it is refused before the run, or use <code>device="cpu"</code>.</li>
+  <li>The <code>mps</code> backend has not been tested. If pyannote fails on a Mac, set <code>PYTORCH_ENABLE_MPS_FALLBACK=1</code> before starting Python. Intel Macs can't install the required PyTorch version.</li>
+  <li>Whisper on an NVIDIA GPU needs CUDA 12's cuBLAS and cuDNN, which <code>vidra[audio]</code> installs. Without them the run is refused before it starts; pass <code>device="cpu"</code> to use the CPU instead.</li>
   <li>Decoding 3 hours of 720p at one frame per second takes about 2 minutes.</li>
 </ul>
 
 <h2 id="checks">Checking an install</h2>
 <ul>
-  <li><code>python -m vidra.shared.contracts.schemas --check</code>: schemas match the document types.</li>
-  <li><code>video.recreate(..., verify=store)</code>: rebuilds frames and compares them byte for byte (<a href="stages.html#recreate">recreate</a>).</li>
-  <li><code>python docs/pages/build.py --check</code>: docs cover every public function and parameter. <code>--run a.mp4 b.mp4</code> runs every example with free stand-in models.</li>
+  <li><code>python -m vidra.shared.contracts.schemas --check</code> checks that the JSON Schemas match the document types.</li>
+  <li><code>video.recreate(..., verify=store)</code> rebuilds the frames and compares them byte for byte with the store (see <a href="stages.html#recreate">recreate</a>).</li>
+  <li>In a checkout, <code>python docs/pages/build.py --check</code> checks that the docs cover every public function and parameter, and <code>--run a.mp4 b.mp4</code> runs every example with free stand-in models.</li>
 </ul>
 <!-- pager -->
 <div class="pager">

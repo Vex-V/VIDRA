@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional, Sequence
 
+from .base import Deferred
 from .detection import DetectionChangeSampler
 
 if TYPE_CHECKING:
     from .perception.detectors import ObjectDetector
 
 
-class TextChangeSampler(DetectionChangeSampler):
+class Text(DetectionChangeSampler):
     """Text, compared by where it is and what it looks like.
 
     OpenCV's DB detector finds the regions (`TextRegionDetector`); nothing is
@@ -35,7 +36,7 @@ class TextChangeSampler(DetectionChangeSampler):
         if detector is None:
             from .perception.detectors import TextRegionDetector
 
-            detector = TextRegionDetector()
+            detector = Deferred(TextRegionDetector)
         super().__init__(
             detector=detector,
             descriptor=TextLayoutDescriptor(grid=grid),

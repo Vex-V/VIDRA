@@ -53,61 +53,67 @@
 <h2 id="how">How sampling works</h2>
 <ol>
   <li>The video is decoded once, however many samplers run.</li>
-  <li>Frames are <b>offered</b> at <code>per_second</code> (default 1), by media time, so variable frame rates don't matter.</li>
-  <li>Each sampler keeps the offered frames its strategy picks. The first frame of each chunk is always kept.</li>
-  <li><code>min_interval_s</code> and <code>max_per_chunk</code> apply before the strategy, so a frame they rule out costs no model time.</li>
-  <li>Samplers reset at each chunk boundary: "changed" means changed within the chunk.</li>
-  <li>Kept frames go to <code>store/</code> (one file even if two samplers keep it) and are listed in <code>manifest.json</code>.</li>
+  <li>Frames are <b>offered</b> at <code>per_second</code> (default 1), by media time, so variable frame rates are handled.</li>
+  <li>Each sampler keeps the offered frames its rule selects, and always the first frame of each chunk.</li>
+  <li><code>min_interval_s</code> and <code>max_per_chunk</code> are checked first, so frames they exclude cost no model time.</li>
+  <li>Samplers reset at each chunk boundary.</li>
+  <li>Kept frames are saved once to <code>store/</code> and listed in <code>manifest.json</code>.</li>
 </ol>
-<p>Pass samplers as the <code>sampler</code> argument of <code>video_rag</code>, <a href="stages.html#video"><code>video.video</code></a> or <code>video_rag_live</code>.</p>
+<p>A sampler is an object. Pass one, or a list, as the <code>sampler</code> argument of <code>video_rag</code>, <a href="stages.html#video"><code>video.video</code></a> or <code>video_rag_live</code>; the default is <code>Uniform()</code>.</p>
+<pre><code class="python">from vidra.video_rag import video_rag
+from vidra.video_rag.samplers import Clip, Yolo
+
+video_rag("shop.mp4", "data/out", sampler=[Clip(), Yolo()])</code></pre>
 
 <h2 id="list">The samplers</h2>
 <table>
-<tr><th>Sampler</th><th>Keeps a frame when</th><th>Model</th><th>Install</th><th>Its question answers</th></tr>
-<tr><td><code>uniform</code></td><td>it is every <code>every_n</code>-th offered frame</td><td>none</td><td>core</td><td>a scene description</td></tr>
-<tr><td><code>clip</code></td><td>the whole picture has changed</td><td>CLIP</td><td><code>[local]</code></td><td>a scene description</td></tr>
-<tr><td><code>yolo</code></td><td>the people in view have changed</td><td>YOLO + CLIP</td><td><code>[local]</code></td><td>one entry per person</td></tr>
-<tr><td><code>objects</code></td><td>the objects you named have changed</td><td>YOLO-World</td><td><code>[local]</code></td><td>one entry per object</td></tr>
-<tr><td><code>text</code></td><td>the text on screen has changed</td><td>OpenCV's DB text detector</td><td>core</td><td>each piece of text, transcribed</td></tr>
+<tr><th>Class</th><th>Keeps a frame when</th><th>Model</th><th>Install</th><th>Its question answers</th></tr>
+<tr><td><code>Uniform</code></td><td>it is every <code>every_n</code>-th offered frame</td><td>none</td><td>core</td><td>a scene description</td></tr>
+<tr><td><code>Clip</code></td><td>the whole picture has changed</td><td>CLIP</td><td><code>[local]</code></td><td>a scene description</td></tr>
+<tr><td><code>Yolo</code></td><td>the people in view have changed</td><td>YOLO + CLIP</td><td><code>[local]</code></td><td>one entry per person</td></tr>
+<tr><td><code>Objects</code></td><td>the objects you named have changed</td><td>YOLO-World</td><td><code>[local]</code></td><td>one entry per object</td></tr>
+<tr><td><code>Text</code></td><td>the text on screen has changed</td><td>OpenCV's DB text detector</td><td>core</td><td>each piece of text, transcribed</td></tr>
 </table>
+<p>Each class has a lowercase name, which is what its answers are stored under: <code>uniform</code>, <code>clip</code>, <code>yolo</code>, <code>objects</code> and <code>text</code>. A model-backed sampler loads its model when a run first uses it, so making one is instant.</p>
 
-<h3 id="uniform">uniform</h3>
+<h3 id="uniform">Uniform</h3>
 <p>Keeps every <code>every_n</code>-th offered frame, counted from each chunk's start. No model. At <code>per_second=1</code>, <code>every_n=5</code> is one frame every 5 s; for a fixed interval in seconds use <code>min_interval_s</code>.</p>
-<p>For even coverage, or to ask something on a schedule: <code>uniform:text</code> reads the screen periodically with no OCR.</p>
+<p>Use it for even coverage, or to ask a question at regular intervals: <code>Uniform(every_n=5, prompts=["text"])</code> reads the screen every 5 s without running a text detector.</p>
 <table class="params"><tr><th>Setting</th><th>Default</th></tr><tr><td><code>every_n</code></td><td><code>1</code>: every offered frame</td></tr></table>
 
-<h3 id="clip">clip</h3>
-<p>Embeds each frame with CLIP (<code>openai/clip-vit-base-patch32</code>) and keeps it when its similarity to the <i>last kept</i> frame drops below <code>threshold</code>, so slow pans still trigger once they drift far enough. The general-purpose choice.</p>
+<h3 id="clip">Clip</h3>
+<p>Embeds each frame with CLIP (<code>openai/clip-vit-base-patch32</code>) and keeps it when its similarity to the <i>last kept</i> frame drops below <code>threshold</code>, so a slow pan triggers once it has moved far enough. A good default for most footage.</p>
 <table class="params"><tr><th>Setting</th><th>Default</th><th>Effect</th></tr><tr><td><code>threshold</code></td><td><code>0.96</code></td><td>Lower keeps fewer frames.</td></tr></table>
 
-<h3 id="yolo">yolo</h3>
-<p>Finds people with YOLO (<code>yolo11n.pt</code>), embeds each person's crop with CLIP, and keeps the frame when someone in view no longer matches anyone in the last kept frame. People leaving don't trigger it. Crowds trigger often; pair with <code>min_interval_s</code>.</p>
+<h3 id="yolo">Yolo</h3>
+<p>Finds people with YOLO (<code>yolo11n.pt</code>), embeds each person's crop with CLIP, and keeps the frame when someone in view no longer matches anyone in the last kept frame. People leaving don't trigger it. In crowded scenes it triggers often, so combine it with <code>min_interval_s</code>.</p>
 <p>Its question returns one entry per person: <code>appearance</code>, <code>clothing</code>, <code>role</code>, <code>action</code> and fixed-vocabulary attributes (gender, age group, hair, top and bottom colour and type, accessories). <code>entities:people</code> links these across chunks.</p>
 <table class="params"><tr><th>Setting</th><th>Default</th><th>Effect</th></tr><tr><td><code>threshold</code></td><td><code>0.83</code></td><td>Lower keeps fewer frames.</td></tr></table>
 
-<h3 id="objects">objects</h3>
+<h3 id="objects">Objects</h3>
 <p>Detects the objects in <code>vocabulary</code> with YOLO-World (<code>yolov8s-worldv2.pt</code>) and keeps the frame when detections no longer match the last kept frame's by class and position. Its question is told the vocabulary and returns one entry per object (<code>object</code>, <code>appearance</code>, <code>context</code>).</p>
 <table class="params">
 <tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
-<tr><td><code>vocabulary</code></td><td>shopping bag, plastic bag, shopping cart, shopping basket, cardboard box, bottle, grocery item, cash register</td><td>What to detect. <b>Set it for your footage</b>; a mismatched list finds half as much and mislabels.</td></tr>
+<tr><td><code>vocabulary</code></td><td>shopping bag, plastic bag, shopping cart, shopping basket, cardboard box, bottle, grocery item, cash register</td><td>What to detect. <b>Set this to match your footage</b>; a list that doesn't fit finds fewer objects and mislabels them.</td></tr>
 <tr><td><code>confidence</code></td><td><code>0.30</code></td><td>Minimum detection confidence.</td></tr>
 <tr><td><code>threshold</code></td><td><code>0.30</code></td><td>Lower keeps fewer frames.</td></tr>
 </table>
 
-<h3 id="text">text</h3>
-<p>Locates text with PP-OCRv3's DB detector on OpenCV (nothing is read here) and keeps the frame when the text layout changes. Its question transcribes each piece of text with its context. For slides, screens and signs. It needs no PyTorch: the 2.4 MB model runs on the CPU and is downloaded on first use.</p>
-<p>The detector runs on every offered frame, about 0.2 s each on a CPU at 720p. If text changes on a schedule, <code>uniform:text</code> gets the same result without it.</p>
+<h3 id="text">Text</h3>
+<p>Locates text with OpenCV's PP-OCRv3 detector and keeps a frame when the text layout changes; its question has the vision model transcribe the text. For slides, screen recordings and signs. It needs no PyTorch: the 2.4 MB model runs on the CPU, about 0.2 s per 720p frame, and is downloaded on first use.</p>
 <table class="params">
 <tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
 <tr><td><code>threshold</code></td><td><code>0.92</code></td><td>Lower keeps fewer frames.</td></tr>
 </table>
 
 <h2 id="settings">Settings</h2>
-<p>A setting is set on the sampler it belongs to, with <code>samplers.build</code>; a name in a spec string is built with its defaults. <code>threshold</code> is on four samplers and means something different on each scale, so one number never reaches two of them.</p>
+<p>Settings are the class's arguments: <code>Clip(threshold=0.93)</code>. <code>threshold</code> has a different scale on each sampler that takes it.</p>
 <table>
 <tr><th>Setting</th><th>Sampler</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>min_interval_s</code></td><td>all</td><td><code>0.0</code></td><td>At least this many seconds between kept frames.</td></tr>
 <tr><td><code>max_per_chunk</code></td><td>all</td><td>none</td><td>At most this many kept frames per chunk.</td></tr>
+<tr><td><code>prompts</code></td><td>all</td><td>its own question</td><td>The questions asked about the kept frames (<a href="#specs">answer ids</a>).</td></tr>
+<tr><td><code>sampler_id</code></td><td>all</td><td>the name</td><td>The run's key in the manifest. Rarely needed.</td></tr>
 <tr><td><code>every_n</code></td><td><code>uniform</code></td><td><code>1</code></td><td>Keep every Nth offered frame.</td></tr>
 <tr><td><code>threshold</code></td><td><code>clip</code>, <code>yolo</code>, <code>objects</code>, <code>text</code></td><td>each sampler's own</td><td>How much the frame must change; see each sampler.</td></tr>
 <tr><td><code>mode</code></td><td><code>clip</code></td><td><code>"reference"</code></td><td>Compare to the last kept frame, or with <code>"consecutive"</code> to the frame before.</td></tr>
@@ -119,21 +125,21 @@
 <tr><td><code>send</code>, <code>crops</code>, <code>crop_size</code>, <code>crop_margin</code></td><td><code>yolo</code>, <code>objects</code></td><td><code>"frame"</code></td><td>What the model is shown (<a href="#crops">crops</a>).</td></tr>
 <tr><td><code>detector</code>, <code>embedder</code></td><td>the model-backed ones</td><td>built on first use</td><td>A detector or frame embedder to use instead of the default, e.g. one already loaded.</td></tr>
 </table>
-<p>A setting the sampler does not take is refused, naming what it does take. How many frames are offered at all, <code>per_second</code>, belongs to the stage (<code>video.video</code>, <code>video_rag_live</code>), not to a sampler.</p>
+<p>A setting the class doesn't take raises <code>TypeError</code>. <code>per_second</code> is set on the stage (<code>video.video</code>, <code>video_rag_live</code>), not on a sampler.</p>
 
-<h3 id="per-call">Building a configured sampler</h3>
-<p>Build the sampler and put the object in the spec: it carries its own settings and questions, and a spec may mix objects and names. The same list works for <code>video.video</code>, <code>video_rag</code> and <code>video_rag_live</code>.</p>
-<pre><code class="python">from vidra.video_rag import samplers, video_rag
+<h3 id="per-call">Configuring samplers</h3>
+<p>Every class also takes <code>min_interval_s</code>, <code>max_per_chunk</code> and <code>prompts</code>. The same list works for <code>video.video</code>, <code>video_rag</code> and <code>video_rag_live</code>.</p>
+<pre><code class="python">from vidra.video_rag import video_rag
+from vidra.video_rag.samplers import Clip, Objects, Yolo
 
 video_rag("x.mp4", "data/out",
-          sampler=[samplers.build("clip", threshold=0.93, prompts=["safety"]),
-                   samplers.build("objects", vocabulary=["forklift", "pallet"],
-                                  confidence=0.4, prompts=["objects"]),
-                   "yolo"])</code></pre>
-<p><code>samplers.build(name, **settings)</code> takes the settings that sampler's class takes, plus <code>min_interval_s</code>, <code>max_per_chunk</code> and <code>prompts</code> (its questions; none means its own). <code>samplers.available()</code> lists every name. Each run uses its own copy of the object, so one object can serve several runs or cameras without their per-chunk state mixing. One sampler is one run: naming <code>clip</code> and passing a <code>clip</code> object in one spec is refused, so put every question on the object.</p>
+          sampler=[Clip(threshold=0.93, prompts=["safety"]),
+                   Objects(vocabulary=["forklift", "pallet"], confidence=0.4),
+                   Yolo(min_interval_s=2)])</code></pre>
+<p>Each run uses its own copy of the object, so one object can serve several runs, and a model it loaded is loaded once. A list may contain each sampler once; put all of a sampler's questions on its object.</p>
 
 <h3 id="crops">Crops</h3>
-<p><code>yolo</code> and <code>objects</code> can show the model each kept frame's largest detections, cut out and enlarged, beside the frame or instead of it. The detections are the ones the sampler already made to decide to keep the frame, so crops cost no extra detection; each crop is one more image in the model call. Enlarging adds no detail: it stops a person a few dozen pixels tall from shrinking further when the model's API scales the whole frame down.</p>
+<p><code>yolo</code> and <code>objects</code> can send the vision model enlarged crops of the largest detections in each kept frame, with the frame or instead of it. The crops reuse the sampler's detections, but each adds an image to the model call. Enlarging adds no detail; it keeps small subjects from shrinking further when the model's API downscales the image.</p>
 <table class="params">
 <tr><th>Setting</th><th>Default</th><th>Effect</th></tr>
 <tr><td><code>send</code></td><td><code>"frame"</code></td><td>What the model is shown for a kept frame: <code>"frame"</code> the frame alone, <code>"both"</code> the frame then its crops, <code>"crops"</code> the crops alone. A kept frame with nothing detected is shown as itself.</td></tr>
@@ -142,54 +148,42 @@ video_rag("x.mp4", "data/out",
 <tr><td><code>crop_margin</code></td><td><code>0.1</code></td><td>Context around each box, as a fraction of its width and height.</td></tr>
 </table>
 <pre><code class="python">video_rag("site.mp4", "data/out",
-          sampler=[samplers.build("yolo", send="both", crops=3, crop_size=512)])</code></pre>
-<p>With <code>"both"</code> the model sees "Frame 2 of 4", then "Frame 2, person 1 of 3 from the left, enlarged 3.1x", and so on; with <code>"crops"</code> only the second kind. <code>"both"</code> keeps where each person stands and what is around them, at the cost of showing everyone twice; <code>"crops"</code> is cheaper and loses that context. Each crop's box, class, confidence and scale are recorded in the manifest, and the crop is stored beside its frame. <code>yolo</code>'s <code>crop_pad</code> is a different setting: the padding of the crops CLIP compares to decide what to keep. A sampler of your own can show the model any images it makes: <a href="custom-samplers.html#views">views</a>.</p>
+          sampler=Yolo(send="both", crops=3, crop_size=512))</code></pre>
+<p>With <code>"both"</code>, each frame is followed by its crops, labelled like "Frame 2, person 1 of 3 from the left, enlarged 3.1x". <code>"crops"</code> is cheaper but loses each subject's surroundings. Each crop's box, class, confidence and scale are recorded in the manifest. (<code>yolo</code>'s <code>crop_pad</code> is unrelated: it pads the crops CLIP compares to decide what to keep.) Your own samplers can send any images they make; see <a href="custom-samplers.html#views">views</a>.</p>
 
 <h3 id="thresholds">Choosing a threshold</h3>
-<p>Thresholds don't transfer between videos. The same <code>clip</code> threshold can keep under a fifth of the frames of a quiet camera and over half of a busy one, even in similar settings. Busier footage keeps more.</p>
-<p><b>To control cost, use <code>min_interval_s</code> or <code>max_per_chunk</code></b>: they keep the most-changed frames and even out chunks. A lower threshold leaves busy chunks with many frames and quiet ones with one.</p>
+<p>The same threshold keeps very different numbers of frames on different videos: a <code>clip</code> threshold that keeps a fifth of a quiet camera's frames can keep over half of a busy one's. <b>To control cost, set <code>min_interval_s</code> or <code>max_per_chunk</code></b> rather than the threshold; they spread the kept frames evenly across chunks.</p>
 
-<h2 id="specs">Sampler specs</h2>
-<p>The <code>sampler</code> argument names samplers and, optionally, their questions:</p>
+<h2 id="specs">Questions and answer ids</h2>
+<p><code>prompts</code> lists the <a href="questions.html">questions</a> asked about the frames a sampler keeps. Without it, a sampler asks its own question, the one named after it. Each answer is stored under an id made of the sampler's name and the question:</p>
 <table>
-<tr><th>Spec</th><th>Means</th><th>Answer ids</th></tr>
-<tr><td><code>clip</code></td><td>clip's frames, clip's own question</td><td><code>clip</code></td></tr>
-<tr><td><code>uniform:text</code></td><td>every Nth frame, asked to read the screen</td><td><code>uniform:text</code></td></tr>
-<tr><td><code>yolo:overview</code></td><td>frames where people changed, as short prose</td><td><code>yolo:overview</code></td></tr>
-<tr><td><code>clip:[text,scene]</code></td><td>one pass, two questions</td><td><code>clip:text</code>, <code>clip:scene</code></td></tr>
-<tr><td><code>clip,yolo</code></td><td>two samplers, one decode</td><td><code>clip</code>, <code>yolo</code></td></tr>
-<tr><td><code>clip,clip:checkout</code></td><td>one clip pass, its own question and <code>checkout</code></td><td><code>clip</code>, <code>clip:checkout</code></td></tr>
+<tr><th>Sampler</th><th>Means</th><th>Answer ids</th></tr>
+<tr><td><code>Clip()</code></td><td>clip's frames, clip's own question</td><td><code>clip</code></td></tr>
+<tr><td><code>Uniform(prompts=["text"])</code></td><td>every Nth frame, asked to read the screen</td><td><code>uniform:text</code></td></tr>
+<tr><td><code>Yolo(prompts=["overview"])</code></td><td>frames where people changed, as short prose</td><td><code>yolo:overview</code></td></tr>
+<tr><td><code>Clip(prompts=["text", "scene"])</code></td><td>one pass, two questions</td><td><code>clip:text</code>, <code>clip:scene</code></td></tr>
+<tr><td><code>[Clip(), Yolo()]</code></td><td>two samplers, one decode</td><td><code>clip</code>, <code>yolo</code></td></tr>
+<tr><td><code>Clip(prompts=["clip", "checkout"])</code></td><td>one clip pass, its own question and <code>checkout</code></td><td><code>clip</code>, <code>clip:checkout</code></td></tr>
 </table>
 <ul>
-  <li>Specs naming the same sampler merge into one pass: <code>clip:text,clip:scene</code> is <code>clip:[text,scene]</code>. An extra question on the same frames costs one more call per chunk.</li>
-  <li>Questions must exist (built in or <a href="questions.html#add">added</a>); unknown ones are refused before decoding.</li>
-  <li>Question names can't contain <code>,</code> <code>:</code> <code>[</code> <code>]</code> <code>+</code>.</li>
-  <li>A list also works: <code>sampler=["clip", "uniform:text"]</code>.</li>
+  <li>Each question costs one model call per chunk.</li>
+  <li>Each question must be built in or <a href="questions.html#add">added</a>; unknown questions are refused before decoding starts.</li>
+  <li>Search filters and aggregate inputs use the answer ids: <code>search(..., sampler="clip:text")</code>.</li>
 </ul>
 
 <h2 id="own">Writing your own</h2>
-<p>Any rule for keeping frames can be a sampler: subclass <code>Sampler</code>, fill in <code>propose</code>, and pass an object of it in a spec, or register the class to name it. See <a href="custom-samplers.html">Custom samplers</a>, with a complete motion sampler.</p>
-
-
-<h2 id="cost">Cost and hardware</h2>
-<p>Time per minute of video, one frame per second, on a mid-range laptop GPU and on its CPU:</p>
-<table>
-<tr><th>Samplers</th><th>GPU</th><th>CPU</th></tr>
-<tr><td><code>uniform</code></td><td colspan="2">decode only: about 2 minutes for 3 hours of 720p</td></tr>
-<tr><td><code>clip</code>, <code>yolo</code>, <code>objects</code> together</td><td>~25 s</td><td>~50 s</td></tr>
-<tr><td><code>text</code></td><td>~15 s</td><td>~3.5 min</td></tr>
-</table>
-<p>Models run on CUDA, then <code>mps</code>, then CPU. Weights download on first use to <code>weights/</code> (or <code>VIDRA_WEIGHTS</code>); CLIP uses Hugging Face's cache.</p>
+<p>To use your own rule for keeping frames, subclass <code>Sampler</code> and implement <code>propose</code>. See <a href="custom-samplers.html">Custom samplers</a>.</p>
+<p>Processing times for each sampler, on a GPU and on the CPU, are in <a href="reference.html#hardware">Hardware</a>.</p>
 
 <h2 id="choosing">Which to use</h2>
 <table>
 <tr><th>Footage</th><th>Try</th></tr>
-<tr><td>General, unknown content</td><td><code>clip</code></td></tr>
-<tr><td>People matter (retail, security)</td><td><code>clip,yolo</code>, with <code>min_interval_s</code> for crowds</td></tr>
-<tr><td>Specific equipment or products</td><td><code>objects</code> with your <code>vocabulary</code></td></tr>
-<tr><td>Slides, screen recordings</td><td><code>text</code>, or <code>uniform:text</code> to skip OCR</td></tr>
-<tr><td>Cheapest, or no GPU</td><td><code>uniform</code> with <code>every_n</code> 5 to 10</td></tr>
-<tr><td>Short prose per chunk</td><td>any sampler with <code>:overview</code></td></tr>
+<tr><td>General, unknown content</td><td><code>Clip()</code></td></tr>
+<tr><td>People matter (retail, security)</td><td><code>[Clip(), Yolo()]</code>, with <code>min_interval_s</code> for crowds</td></tr>
+<tr><td>Specific equipment or products</td><td><code>Objects</code> with your <code>vocabulary</code></td></tr>
+<tr><td>Slides, screen recordings</td><td><code>Text()</code>, or <code>Uniform(prompts=["text"])</code> to skip the text detector</td></tr>
+<tr><td>Cheapest, or no GPU</td><td><code>Uniform</code> with <code>every_n</code> 5 to 10</td></tr>
+<tr><td>Short prose per chunk</td><td>any sampler with <code>prompts=["overview"]</code></td></tr>
 </table>
 <!-- pager -->
 <div class="pager">

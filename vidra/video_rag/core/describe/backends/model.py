@@ -14,8 +14,10 @@ from .. import prompts
 from ..base import DescriberUnavailable, Description
 from ..frames import LoadedFrame
 
-#: The default ceiling on one answer's output tokens.
-DEFAULT_MAX_TOKENS = 2000
+#: The default ceiling on one answer's output tokens. A reasoning model's
+#: reasoning counts against it: gpt-6-luna spent 896 of 2000 reasoning on a
+#: seven-person `yolo` chunk and was cut short, so the ceiling leaves room.
+DEFAULT_MAX_TOKENS = 8000
 
 
 class ModelDescriber:

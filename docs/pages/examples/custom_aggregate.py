@@ -12,7 +12,7 @@ from vidra import LocalEmbedder, Models, OpenAI, aggregates
 
 vidra.configure(env_file=".env")
 D = Path(sys.argv[1])
-models = Models(llm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+models = Models(llm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
 video = aggregates.record(timeline=D / "timeline.json",
                           transcript=D / "transcript.json",
                           descriptions=D / "descriptions.json")
@@ -50,7 +50,7 @@ report = aggregates.load(D / "answers" / "incident_report.json").payload
 print(report["severity"], "-", report["report"][:200])
 
 # Linking: the same object across chunks, from the `objects` field of the
-# `objects` sampler's answers (video_rag with sampler="objects").
+# `objects` sampler's answers (video_rag with sampler=Objects(...)).
 aggregates.add_profile(
     "tools", "objects",
     "These may be the same object, seen in different chunks. Say what it is "

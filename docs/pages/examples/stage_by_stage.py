@@ -45,8 +45,8 @@ print("chunks:", len(boundaries.load(D / "timeline.json")))
 #    asked to read the screen; clip keeps a frame when the scene changes.
 video.video(D / "media.json", D / "timeline.json", D / "manifest.json",
             store=D / "store", per_second=1.0,
-            sampler=[samplers.build("uniform", every_n=5, max_per_chunk=6, prompts=["text"]),
-                     samplers.build("clip", threshold=0.95, max_per_chunk=6)])
+            sampler=[samplers.Uniform(every_n=5, max_per_chunk=6, prompts=["text"]),
+                     samplers.Clip(threshold=0.95, max_per_chunk=6)])
 
 # 6. cut: the transcript onto the grid.
 cut.cut(D / "timeline.json", D / "transcript.raw.json", D / "transcript.json")
@@ -57,7 +57,7 @@ def progress(event):
 
 describe.describe(D / "manifest.json", D / "timeline.json", D / "store",
                   D / "descriptions.json", previous=D / "descriptions.json",
-                  vlm=OpenAI("gpt-5.4-mini"), max_output_tokens=2000,
+                  vlm=OpenAI("gpt-6-luna"), max_output_tokens=8000,
                   on_progress=progress)
 
 # 8. embed: every answer and every chunk's transcript, as vectors.

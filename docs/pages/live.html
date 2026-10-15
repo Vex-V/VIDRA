@@ -48,25 +48,25 @@
 </nav>
 <main>
 <h1>Live streams</h1>
-<p class="lede">Describe a stream while it plays: every frame a sampler keeps is answered as soon as it arrives, not when its chunk ends.</p>
+<p class="lede">Describe a live stream as it plays. Each frame a sampler keeps is sent to the vision model as soon as it arrives.</p>
 
 <h2 id="basics">Running one</h2>
 <pre><code class="python">from vidra import LocalEmbedder, Models, OpenAI
 from vidra.video_rag import video_rag_live
+from vidra.video_rag.samplers import Clip
 
 def check(o):                                   # every answer, as it is ready
     if o.structured.get("rule") == "no_hard_hat":
         print(f"{o.seen_at}  chunk {o.chunk_id}  t={o.media_ts:.1f}s  {o.description}")
 
 run = video_rag_live("tcp://0.0.0.0:9000?listen=1", "data/out", video_id="dock-3",
-                     sampler="clip:safety", on_unit=check,
+                     sampler=Clip(prompts=["safety"]), on_unit=check,
                      models=Models(vlm=OpenAI(), embedder=LocalEmbedder()))
 print(run.observations, "answers,", run.dropped, "dropped, lag", run.lag_s)</code></pre>
-<p>The call blocks until the stream ends. Detection belongs in your <code>on_unit</code>: the pipeline describes and embeds, your application decides what counts as an event. An exact match on a <code>one_of</code> field (<a href="questions.html#fields">fields</a>) is more reliable than comparing vectors: embeddings handle negation badly, so "wearing a hard hat" and "without a hard hat" sit close together.</p>
+<p>The call blocks until the stream ends. <code>on_unit</code> is called with each answer as soon as it is ready, and your code decides what counts as an event. To detect a condition, check a <a href="questions.html#fields"><code>one_of</code> field</a> rather than comparing vectors: embeddings handle negation poorly, so "wearing a hard hat" and "without a hard hat" end up close together.</p>
 
 <h2 id="testing">Testing with a file</h2>
-<p>A complete run, sender and both searches included, is the <a href="recipes.html#live">live recipe</a>.</p>
-<p><code>live.send</code> pushes a file to a port at the pace it was recorded. The receiver loads its samplers' models before it listens (about 20-35 s for <code>clip</code>, <code>yolo</code> and <code>objects</code>), so the sender retries for up to <code>connect_timeout_s</code>.</p>
+<p><code>live.send</code> streams a file to a port in real time, so you can test without a camera. The receiver loads its models before it starts listening, which can take half a minute, so the sender retries for up to <code>connect_timeout_s</code>.</p>
 <pre><code class="python">import multiprocessing
 from vidra.video_rag import live, video_rag_live
 
@@ -77,22 +77,23 @@ if __name__ == "__main__":
     sender.start()
     run = video_rag_live("tcp://127.0.0.1:9000?listen=1", "data/out", video_id="shop-live")
     sender.join()</code></pre>
-<p>Run the sender in its own process, as a camera would be: while it waits to connect, PyAV holds the GIL, and on a thread of the same process it slows the receiver's model loading many times over.</p>
-<p><code>send(path, url, speed=1.0, connect_timeout_s=120.0, format=None)</code> copies the picture without re-encoding, into MPEG-TS for H.264, HEVC and MPEG-2/4 and into Matroska for the rest (VP9, AV1); <code>format=</code> overrides. A codec this PyAV cannot write (Theora) is refused: re-encode it first. A file path is also a valid <code>source</code>: it is then read as fast as it decodes, which keeps exactly the frames <a href="pipeline.html"><code>video_rag</code></a> keeps with the uniform policy.</p>
-<p>Sources are anything PyAV opens: <code>tcp://host:port?listen=1</code>, <code>udp://</code>, <code>rtmp://</code>, an <code>rtsp://</code> camera. The PyAV wheels have no SRT.</p>
+<div class="note"><p>Run the sender in a separate process, as above. While it waits to connect, PyAV holds the GIL, so a sender on a thread in the same process slows the receiver down.</p></div>
+<p><code>send(path, url, speed=1.0, connect_timeout_s=120.0, format=None)</code> sends the video without re-encoding it: as MPEG-TS for H.264, HEVC and MPEG-2/4, and as Matroska for other codecs such as VP9 and AV1. Pass <code>format=</code> to choose the container. Codecs PyAV cannot write, such as Theora, are refused, so re-encode those files first. The <a href="recipes.html#live">live recipe</a> is a complete script.</p>
+<p>The <code>source</code> can be any URL PyAV opens (<code>tcp://host:port?listen=1</code>, <code>udp://</code>, <code>rtmp://</code>, <code>rtsp://</code>; not SRT), or a file, read as fast as it decodes, which keeps the frames <a href="pipeline.html"><code>video_rag</code></a> keeps under the uniform policy.</p>
 
 <h2 id="frames">Frames only</h2>
-<p>To run a model of your own on a stream, such as a person tracker, read its frames with the clock and rules <code>video_rag_live</code> uses, without samplers or a model call:</p>
+<p><code>live.frames</code> reads a stream's frames the same way <code>video_rag_live</code> does, but without samplers or model calls. Use it to run your own model, such as a person tracker, on a stream:</p>
 <div class="sig">live.frames(url, per_second=None, open_timeout_s=60.0, read_timeout_s=10.0, gap_s=2.0) -&gt; Iterator[tuple[Frame, Arrival]]</div>
 <pre><code class="python">from vidra.video_rag import live
 
 for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
     tracks = tracker.update(frame.image)       # BGR pixels
     log(arrival.seen_at, frame.media_ts, tracks)</code></pre>
-<p>Each frame is a <a href="stages.html#frames"><code>video.Frame</code></a>, with <code>media_ts</code> counted from the first frame. Each <code>live.Arrival</code> carries <code>seen</code> (<code>time.perf_counter()</code> at decode), <code>seen_at</code> (UTC, ISO 8601) and <code>gap_before</code> (the clock jumped more than <code>gap_s</code> just before this frame). A packet the decoder rejects is skipped. The stream opens when the first frame is asked for and closes when the loop ends, <code>break</code> included; it ends by itself when the sender stops or nothing arrives for <code>read_timeout_s</code>. A file is read as fast as it decodes.</p>
+<p>Each frame is a <a href="stages.html#frames"><code>video.Frame</code></a> whose <code>media_ts</code> counts from the first frame. Each <code>live.Arrival</code> has <code>seen</code> (<code>time.perf_counter()</code> at decode), <code>seen_at</code> (UTC, ISO 8601) and <code>gap_before</code>, which is true when the clock jumped by more than <code>gap_s</code> just before the frame. Packets the decoder rejects are skipped.</p>
+<p>The stream is opened when the first frame is requested and closed when the loop exits, including on <code>break</code>. Iteration stops when the sender disconnects or nothing arrives for <code>read_timeout_s</code>.</p>
 
 <h2 id="arguments">Arguments</h2>
-<div class="sig">video_rag_live(source, into, video_id=None, name=None, sampler="uniform",
+<div class="sig">video_rag_live(source, into, video_id=None, name=None, sampler=None,
                models=None, database=None, on_unit=None, on_step=None, chunk_s=20.0, per_second=1.0, context=(0, 0), queue=64,
                record=False, stop_after_s=None, stop=None, open_timeout_s=60.0,
                read_timeout_s=10.0) -&gt; LiveRun</div>
@@ -102,7 +103,7 @@ for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
 <tr><td><code>into</code></td><td>required</td><td>The folder that holds one folder per video.</td></tr>
 <tr><td><code>video_id</code></td><td>file stem, or <code>live-&lt;UTC time&gt;</code></td><td>The run's folder. A folder already in use gets <code>-2</code>, <code>-3</code>.</td></tr>
 <tr><td><code>name</code></td><td>the id</td><td>What to call the video in <code>media.json</code>.</td></tr>
-<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>The same spec as <code>video_rag</code>: names, or sampler objects with their own settings (<a href="samplers.html#per-call">samplers</a>).</td></tr>
+<tr><td><code>sampler</code></td><td><code>Uniform()</code></td><td>A sampler object or a list of them, as for <code>video_rag</code> (<a href="samplers.html">samplers</a>).</td></tr>
 <tr><td><code>models</code></td><td>OpenAI's</td><td>A <code>Models</code> with the <code>vlm</code> and the <code>embedder</code>, as in <code>video_rag</code>.</td></tr>
 <tr><td><code>database</code></td><td>none</td><td>Copy the documents here when the stream ends.</td></tr>
 <tr><td><code>on_unit</code></td><td>none</td><td>Called with each <code>Observation</code>. Raise <code>live.StopStream</code> to end the run.</td></tr>
@@ -116,7 +117,7 @@ for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
 <tr><td><code>stop</code></td><td>none</td><td>A <code>threading.Event</code>; set it from anywhere to end the run.</td></tr>
 <tr><td><code>open_timeout_s</code>, <code>read_timeout_s</code></td><td><code>60.0</code>, <code>10.0</code></td><td>How long to wait for a sender, and for the next packet.</td></tr>
 </table>
-<p>Everything is checked before the stream opens: an unknown sampler or question, a bad <code>context</code>, a model without a key. <code>live.validate(...)</code> takes the same arguments, less <code>on_unit</code> and <code>on_step</code>, and returns those problems as a list without opening anything.</p>
+<p>The arguments are checked before the stream is opened. <code>live.validate(...)</code> takes the same arguments, except <code>on_unit</code> and <code>on_step</code>, and returns the problems as a list without opening the stream.</p>
 
 <h2 id="observations">What each answer carries</h2>
 <table class="params">
@@ -129,16 +130,16 @@ for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
 <tr><td><code>seen_at</code>, <code>answered_at</code>, <code>lag_s</code></td><td>When the frame arrived and when its answer was ready (UTC), and the seconds between.</td></tr>
 <tr><td><code>gap_before</code></td><td>The stream's clock jumped just before this frame.</td></tr>
 </table>
-<p>Each one is also appended to <code>observations.jsonl</code> as it arrives.</p>
+<p>Each observation is also appended to <code>observations.jsonl</code> in the run's folder.</p>
 
 <h2 id="context">Context frames</h2>
-<p>One frame cannot show movement. <code>context=(1, 0)</code> sends the previous decimated frame too; <code>(0, 1)</code> the next one; <code>(1, 1)</code> both. A frame after the kept one delays its answer by one decimation interval (1 s at <code>per_second=1</code>); frames before cost nothing but tokens.</p>
+<p>A single frame can't show movement. <code>context=(1, 0)</code> sends the previous decimated frame too; <code>(0, 1)</code> the next one; <code>(1, 1)</code> both. A frame after the kept one delays its answer by one decimation interval (1 s at <code>per_second=1</code>); frames before cost nothing but tokens.</p>
 
 <h2 id="falling-behind">When the model falls behind</h2>
-<p>If frames are kept faster than the model answers, the oldest waiting frame is dropped and counted in <code>run.dropped</code>; the lag stays bounded instead of growing. To keep up, raise the model's <code>concurrency</code>, keep fewer frames (<code>min_interval_s</code>, <code>max_per_chunk</code> on the sampler), or lower <code>per_second</code>.</p>
+<p>If frames are kept faster than the model answers them, the oldest waiting frame is dropped and counted in <code>run.dropped</code>, so the lag does not keep growing. To keep up, raise the model's <code>concurrency</code>, keep fewer frames with the sampler's <code>min_interval_s</code> or <code>max_per_chunk</code>, or lower <code>per_second</code>.</p>
 
 <h2 id="results">When the stream ends</h2>
-<p>The run is written as <code>media.json</code>, <code>timeline.json</code>, <code>manifest.json</code>, <code>descriptions.json</code> and <code>embedded.json</code>, so <a href="search.html">search</a> and <a href="aggregates.html">aggregates</a> read it like any other video. A chunk's description there is its frames' answers joined in time order, and each answer is kept whole under <code>observations</code>.</p>
+<p>The run is written as <code>media.json</code>, <code>timeline.json</code>, <code>manifest.json</code>, <code>descriptions.json</code> and <code>embedded.json</code>, so <a href="search.html">search</a> and <a href="aggregates.html">aggregates</a> read it like any other video. In <code>descriptions.json</code>, each chunk's description joins its frames' answers in time order, and the individual answers are kept under <code>observations</code>.</p>
 <table class="params">
 <tr><th><code>LiveRun</code></th><th>Is</th></tr>
 <tr><td><code>ended</code></td><td><code>ended</code>, <code>stopped</code>, <code>stop_after_s</code> or <code>error</code>.</td></tr>
@@ -149,17 +150,18 @@ for frame, arrival in live.frames("rtsp://camera-2/stream", per_second=5):
 <tr><td><code>duration_s</code>, <code>chunks</code>, <code>frames_decimated</code>, <code>frames_sampled</code></td><td>How much was read.</td></tr>
 <tr><td><code>recording</code>, <code>steps</code>, <code>problems</code></td><td>The recording's path, the documents written, and what failed.</td></tr>
 </table>
-<p>An exception from <code>on_unit</code> (other than <code>StopStream</code>) stops the run, and is raised after the documents are written.</p>
+<p>An exception from <code>on_unit</code>, other than <code>StopStream</code>, stops the run and is re-raised after the documents are written.</p>
 
 <h2 id="database">Writing to a database as it runs</h2>
 <pre><code class="python">from datetime import datetime, timedelta, timezone
 from vidra import LocalEmbedder, Models, Supabase
 from vidra.video_rag import search_observations, video_rag_live
+from vidra.video_rag.samplers import Clip
 
 db = Supabase()
 models = Models(embedder=LocalEmbedder())
 run = video_rag_live("rtsp://dock-3.local/stream", "data/out", video_id="dock-3",
-                     sampler="clip:safety", models=models, database=db)
+                     sampler=Clip(prompts=["safety"]), models=models, database=db)
 
 # from anywhere, while it runs: the last ten minutes on dock-3
 hits = search_observations("liquid spilled on the floor", "dock-3",
@@ -167,12 +169,12 @@ hits = search_observations("liquid spilled on the floor", "dock-3",
                            models=models, database=db)
 for h in hits:
     print(h.seen_at, h.media_ts, h.frame_index, h.description)</code></pre>
-<p>With <code>database=</code>, every answer is sent as it arrives (<code>write_observations</code>): at once when the database keeps up, the backlog in one call when it does not. The video's row is written when the stream opens. A write that fails is counted in <code>run.unwritten</code> and the run goes on; every answer is still in <code>observations.jsonl</code>. When the stream ends, the batch documents follow, so <a href="search.html"><code>search</code></a> finds the run by chunk too.</p>
+<p>With <code>database=</code>, each answer is written as it arrives through <code>write_observations</code>, with any backlog sent in one call; the other documents follow when the stream ends, so <a href="search.html"><code>search</code></a> finds the run by chunk too. A failed write is counted in <code>run.unwritten</code>; every answer is still in <code>observations.jsonl</code>.</p>
 <div class="sig">search_observations(query, video_id=None, limit=10, sampler=None,
                     question=None, strategy=None, after=None, before=None, since=None,
                     until=None, structured=None, database=None,
                     models=None) -&gt; list[FrameHit]</div>
-<p>Ranks individual answers rather than chunks. A <code>Folder</code> reads each run's <code>observations.jsonl</code> in place, so it finds answers from a run still going.</p>
+<p><code>search_observations</code> ranks individual answers rather than chunks. With a <code>Folder</code>, it also finds answers from a run that is still in progress.</p>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>query</code></td><td>required</td><td>The text to find; empty is refused.</td></tr>
@@ -187,18 +189,14 @@ for h in hits:
 <p>Each <code>FrameHit</code> has <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>seen_at</code>, <code>score</code>, <code>dense_rank</code>, <code>text_rank</code>.</p>
 
 <h2 id="moments">Logging important moments</h2>
-<p>To catch moments close to ones you describe (a worker without a hard hat, a spill, a blocked exit) as they happen, subclass your database and look at each answer in <code>write_observations</code> before it is stored. Nothing else is needed: the live run already calls it with every answer moments after it exists.</p>
+<p>To flag moments as they happen, such as a worker without a hard hat or a spill, subclass your database and check each answer in <code>write_observations</code> before storing it.</p>
+<p>The hook runs on the writer thread, so slow checks don't delay answers. An exception in it is counted in <code>run.unwritten</code>, so catch your own errors, as the example does, to keep the answers stored. Runs sharing one database call the hook concurrently; guard shared state with a lock.</p>
+<p>The example checks answers in two ways:</p>
 <ul>
-  <li><b>It runs off the stream.</b> The hook is called from the run's writer thread, so slow matching never delays answers.</li>
-  <li><b>A bug in it does not stop the run.</b> An exception is counted in <code>run.unwritten</code>; catch your own errors, as below, so the answers are still stored.</li>
-  <li><b>One run calls it one batch at a time.</b> A database shared by several runs (several cameras) is called by each run's writer at once, so guard any state with a lock.</li>
+  <li><b>Rules</b> are exact matches on <code>one_of</code> fields, such as <code>row["structured"]["hard_hats"] == "a member of staff without one"</code>. Give each rule its own field and include a "cannot tell" option; without one, the model guesses. Only ask about what the camera can actually resolve.</li>
+  <li><b>Other hazards</b> are matched by similarity, comparing your description with each hazard the answer lists rather than with the whole answer. A whole answer describes everything in view, so a single detail barely changes its vector. The example uses a threshold of 0.85 with <code>LocalEmbedder</code>; measure your own for your embedder and footage.</li>
 </ul>
-<p>Ask a question whose answers are easy to check, then check them two ways:</p>
-<ul>
-  <li><b>Rules, exactly: one fixed-choice field per rule, with a way to say "cannot tell".</b> <code>row["structured"]["hard_hats"] == "a member of staff without one"</code>. Rules never go through similarity: embeddings handle negation badly, so "a worker without a hard hat" and "a worker wearing a hard hat" come out close. Without a "cannot tell" choice the model guesses: asked for a list of missing equipment, it reports items too small to see as missing, and misses ones that are plainly worn. One field per item with "cannot tell" removes most false flags. Ask only about what the camera can resolve (a hard hat, a vest), and say who counts, or "workers" in a shop includes the customers.</li>
-  <li><b>Everything else, by similarity to each listed hazard, not to the whole answer.</b> An answer is a paragraph about everything in shot, and one detail barely moves its vector, so against whole answers true and false matches score the same. Against each hazard on its own, true matches score clearly higher than near misses (stacked pallets as a blocked exit, scattered materials as a spill). The example uses 0.85 with <code>LocalEmbedder</code>; a threshold belongs to an embedder and to footage, so measure your own.</li>
-</ul>
-<p>The model's judgement is the limit: flags are often right and sometimes wrong, for example missing someone half hidden in a vehicle. Treat a moment as worth a look, not as a verdict.</p>
+<div class="note"><p>Flags are only as good as the vision model's judgement, and some will be wrong. Treat a flagged moment as something to review.</p></div>
 <!-- example live_moments.py -->
 <div class="file">docs/pages/examples/live_moments.py</div>
 <pre><code class="python">"""Log the moments a live stream shows that match ones you describe, as they
@@ -216,6 +214,7 @@ import numpy as np
 import vidra
 from vidra import LocalEmbedder, Models, OpenAI, Supabase
 from vidra.video_rag import describe, video_rag_live
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 
@@ -293,8 +292,8 @@ class Moments(Supabase):
 
 embedder = LocalEmbedder()
 database = Moments(TARGETS, embedder)
-run = video_rag_live(sys.argv[1], "data/out", sampler="clip:ppe", context=(1, 0),
-                     models=Models(vlm=OpenAI("gpt-5.4-mini"), embedder=embedder),
+run = video_rag_live(sys.argv[1], "data/out", sampler=Clip(prompts=["ppe"]), context=(1, 0),
+                     models=Models(vlm=OpenAI("gpt-6-luna"), embedder=embedder),
                      database=database)
 print(f"{run.observations} answers, {database.found} moments, "
       f"{run.written} stored as they arrived, lag {run.lag_s}")</code></pre>
@@ -308,14 +307,14 @@ print(f"{run.observations} answers, {database.found} moments, "
 <pre><code class="python">    def record(self, moments):
         if moments:
             self.writer().table("moments").upsert(moments).execute()</code></pre>
-<p>Subclass <code>Folder</code> or <code>Database</code> instead of <code>Supabase</code> to run without a server; send the moments anywhere (a webhook, a chat message, a queue) the same way.</p>
+<p>To run without a server, subclass <code>Folder</code> or <code>Database</code> instead of <code>Supabase</code>. Moments can be sent anywhere else, such as a webhook or a queue, in the same way.</p>
 
-<h2 id="differences">How it differs from <code>video_rag</code></h2>
+<h2 id="differences">Differences from <code>video_rag</code></h2>
 <ul>
-  <li><b>No audio.</b> Speakers can only be told apart over the whole recording. Record the stream and run <code>video_rag</code> on the recording afterwards for the transcript.</li>
-  <li><b>Uniform chunks only</b>, and a short last chunk is not merged into the one before.</li>
-  <li><b>Time starts at the first frame.</b> A jump forward of more than 2 s is a gap; a jump backward (a reconnect) continues the clock instead of going back.</li>
-  <li><b>Damaged packets are skipped</b> and counted in the manifest, not fatal.</li>
+  <li>The soundtrack is not transcribed, because speakers can only be identified from the whole recording. Set <code>record=True</code> and run <code>video_rag</code> on the recording afterwards.</li>
+  <li>Chunks are always uniform, and a short final chunk is not merged into the one before.</li>
+  <li>Time starts at the first frame. A jump forward of more than 2 s is recorded as a gap; after a jump backward, such as a reconnect, the clock continues from where it was.</li>
+  <li>Damaged packets are skipped and counted in the manifest instead of stopping the run.</li>
 </ul>
 <!-- pager -->
 <div class="pager">

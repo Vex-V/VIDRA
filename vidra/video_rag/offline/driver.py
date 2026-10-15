@@ -1,6 +1,7 @@
 """The video_rag pipeline: every component in order, over one folder of files.
 
-    video_rag("x.mp4", "data/out", policy="scene", sampler="clip:[text,scene]")
+    video_rag("x.mp4", "data/out", policy="scene",
+              sampler=[Clip(prompts=["text", "scene"])])
 
 `media` makes `<into>/<id>/` and every later path is composed inside it by
 `layout()`. The run order follows from the policy (`boundaries.POLICIES`):
@@ -10,8 +11,8 @@
     vad        audio runs first
     speaker    audio runs first
 
-Per-stage tuning (a scene threshold, a sampler's `confidence`) lives on the
-components; call them directly to set it. What `aggregates` asks of this tier,
+Per-stage tuning (a scene threshold) lives on the components; call them
+directly to set it. A sampler's settings are on its object. What `aggregates` asks of this tier,
 `vocabulary()`, is in `core`: it is the same for every pipeline.
 """
 
@@ -21,7 +22,7 @@ import inspect
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 from vidra.shared.config.lookup import bound, signature_without
 from vidra.shared.config.paths import layout
@@ -34,6 +35,9 @@ from ..core.export import export
 from . import audio, boundaries, cut, describe, embed, glance, media, video
 #: The conflict rules `media` accepts.
 from .media.driver import ON_CONFLICT
+
+if TYPE_CHECKING:
+    from ..core.sampling.samplers import Sampler
 
 
 @dataclass
@@ -54,8 +58,8 @@ class Options:
     policy: str = "uniform"                  # decides who runs first
     use_video: bool = True
     use_audio: bool = True
-    #: What to look at: a spec string, or a list of strings and Sampler objects.
-    sampler: str | Sequence[Any] = "uniform"
+    #: What to look at: a Sampler object or a list of them; None is Uniform().
+    sampler: Sampler | Sequence[Sampler] | None = None
     #: Who answers: the vlm, the embedder and the visual_embedder (frames ->
     #: vectors, `glance`). None, or a role left None, is that role's default.
     models: Optional[Models] = None
@@ -136,7 +140,7 @@ def problems_of(options: Options) -> list[str]:
     if options.use_video and models.visual_embedder is not None:
         roles["visual_embedder"] = models.visual_embedder
     problems += run_problems(options.into, options.database,
-                             options.sampler if options.use_video else None, roles)
+                             options.sampler, roles, picture=options.use_video)
     return problems
 
 
@@ -301,7 +305,7 @@ def video_rag(source: str | Path,
               policy: str = "uniform",
               use_video: bool = True,
               use_audio: bool = True,
-              sampler: str | Sequence[Any] = "uniform",
+              sampler: Sampler | Sequence[Sampler] | None = None,
               models: Optional[Models] = None,
               describe: bool = True,
               resume: bool = True,
@@ -311,7 +315,8 @@ def video_rag(source: str | Path,
 
     Everything lands under `<into>/<video_id>/`. `models` carries the vlm, the
     embedder and the visual_embedder (None is every default); `database` is a
-    built `Database`. `name` and `recorded_at` override the video's
+    built `Database`. `sampler` is a `Sampler` object or a list of them
+    (None is `Uniform()`). `name` and `recorded_at` override the video's
     filename and recording time. A `visual_embedder` also embeds the kept
     frames (`glance`); `describe=False` with one asks no vlm at all.
     """

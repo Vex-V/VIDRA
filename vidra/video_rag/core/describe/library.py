@@ -319,9 +319,9 @@ def add_question(name: str, instruction: str, *,
                 "exposed":  {"type": "list", "about": "who is at risk",
                              "of": {"who": "by appearance", "how": "how exposed"}},
             })
-        video_rag("x.mp4", "data/out", sampler="clip:hazards")
+        video_rag("x.mp4", "data/out", sampler=Clip(prompts=["hazards"]))
 
-    Pair it with any sampler as `sampler:name`. What it answers is one of:
+    Ask it with any sampler, in its `prompts`. What it answers is one of:
 
         fields=   its own fields: `type` is `text` or `list`; `about` (required)
                   is what the model is told to put there; `one_of` fixes the

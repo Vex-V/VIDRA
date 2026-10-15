@@ -54,14 +54,14 @@
 <div class="flow">files ──► record ──► input ──► aggregator ──► answer file
           (what exists)  (what to read)   (what to ask)</div>
 <ol>
-  <li>A <b>record</b> is a video's documents, by path.</li>
-  <li>An <b>input</b> is what one aggregator reads, built from the record. Nothing is read by default: you name the transcript, answers and fields.</li>
+  <li>A <b>record</b> is the set of a video's output files.</li>
+  <li>An <b>input</b> is the text one aggregator reads, built from the record. Nothing is included by default; you choose the transcript, answers and fields.</li>
   <li>An <b>aggregator</b> reads one input and writes one answer file.</li>
 </ol>
 <pre><code class="python">from pathlib import Path
 from vidra import LocalEmbedder, Models, OpenAI, aggregates
 
-models = Models(llm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+models = Models(llm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
 D = Path("data/out/shop")                                   # a folder video_rag wrote
 
 video = aggregates.record(timeline=D / "timeline.json", transcript=D / "transcript.json",
@@ -70,7 +70,7 @@ told = video.excerpt(transcript=True, answers={"clip": ["summary"]})
 aggregates.summary(input=told, out=D / "answers" / "summary.json", llm=models.llm)
 
 print(aggregates.load(D / "answers" / "summary.json").payload["summary"])</code></pre>
-<p>Aggregates never open the video or need a database. Full script: <a href="recipes.html#aggregates-tour">aggregates recipe</a>.</p>
+<p>Aggregates never open the video and don't need a database. The <a href="recipes.html#aggregates-tour">aggregates recipe</a> is a complete script.</p>
 
 <h2 id="record">Records</h2>
 <div class="sig">aggregates.record(*, timeline, transcript=None, descriptions=None, manifest=None) -&gt; Record</div>
@@ -81,32 +81,32 @@ print(aggregates.load(D / "answers" / "summary.json").payload["summary"])</code>
 <tr><td><code>descriptions</code></td><td><code>descriptions.json</code>, for anything that reads the answers.</td></tr>
 <tr><td><code>manifest</code></td><td><code>manifest.json</code>; only <code>stats</code> reads it (frames counted).</td></tr>
 </table>
-<p>Documents from another video or grid are refused (<code>aggregates.RecordError</code>). A <code>Record</code> has <code>.video_id</code>, <code>.timeline</code> and three methods:</p>
+<p>Files from different videos or grids are refused with <code>aggregates.RecordError</code>. A <code>Record</code> has <code>.video_id</code>, <code>.timeline</code> and three methods:</p>
 <pre><code class="python">video.answer_ids()       # ["clip", "clip:checkout", "yolo"]: the answers it holds</code></pre>
 
 <h3 id="excerpt">excerpt: text per chunk</h3>
 <div class="sig">Record.excerpt(*, transcript=False, answers=None, out=None) -&gt; Excerpt</div>
-<p>Text per chunk, for text aggregators: the transcript (if <code>transcript=True</code>) and the listed fields of each named answer. <code>"summary"</code> is the prose; other names are fields.</p>
+<p>Builds the per-chunk text that text aggregators read: the transcript if <code>transcript=True</code>, and the listed fields of each named answer. <code>"summary"</code> means the answer's prose; other names are fields.</p>
 <pre><code class="python">said = video.excerpt(transcript=True)
 seen = video.excerpt(answers={"clip": ["summary"],
                               "clip:checkout": ["summary", "payment", "items"]})
 both = video.excerpt(transcript=True, answers={"clip": ["summary", "actions"]})</code></pre>
-<p>Answer ids match exactly. An unknown answer or field is refused here, listing what exists. Chunks with nothing selected are left out.</p>
+<p>Answer ids must match exactly. An unknown answer or field is refused, and the error lists what the record holds. Chunks with no selected text are left out.</p>
 
 <h3 id="sightings">sightings: entries to link</h3>
 <div class="sig">Record.sightings(*, profile, answers=None, keys=None, out=None) -&gt; Sightings</div>
-<p>For linking profiles: every entry of the profile's list field in the named answers. For <code>people</code>, each person in each <code>yolo</code> answer is one sighting.</p>
+<p>Builds the input for a linking profile: every entry of the profile's list field in the named answers. For <code>people</code>, each person in each <code>yolo</code> answer is one sighting.</p>
 <pre><code class="python">people = video.sightings(profile="people", answers=["yolo"])
 by_clothes = video.sightings(profile="people", answers=["yolo"], keys=["clothing"])</code></pre>
-<p><code>keys</code> narrows the profile's identity keys; it can't add new ones.</p>
+<p><code>keys</code> limits linking to some of the profile's identity keys; it can't add new ones.</p>
 
 <h3 id="saved-inputs">Saving inputs</h3>
-<p><code>out=</code> also writes the input to a file. Aggregators accept that path in place of the object; <code>aggregates.load_input(path)</code> reads it back.</p>
+<p>With <code>out=</code>, the input is also written to a file. Aggregators accept that path in place of the object, and <code>aggregates.load_input(path)</code> reads it back.</p>
 <pre><code class="python">video.excerpt(transcript=True, out=D / "inputs" / "said.json")
 aggregates.summary(input=D / "inputs" / "said.json", out=D / "summary.json", llm=models.llm)</code></pre>
 
 <h2 id="aggregators">The aggregators</h2>
-<p>Tiers: free ones count, local ones run a small local model (<code>vidra[local]</code>), llm ones call the LLM.</p>
+<p>Tiers are costs: <code>free</code> aggregators count, <code>local</code> ones run a small local model (<code>vidra[local]</code>), and <code>llm</code> ones call the LLM.</p>
 <table>
 <tr><th>Aggregator</th><th>Tier</th><th>Reads</th><th>Answers</th></tr>
 <tr><td><code>stats</code></td><td>free</td><td>record</td><td>duration, chunk lengths, words, words per minute, frames and answers counted</td></tr>
@@ -120,7 +120,7 @@ aggregates.summary(input=D / "inputs" / "said.json", out=D / "summary.json", llm
 <tr><td><code>entities</code></td><td>llm</td><td>sightings</td><td>the same person, object or text linked across chunks, with an account of each</td></tr>
 <tr><td><code>custom</code></td><td>llm</td><td>excerpt</td><td>a prompt of your own (<a href="definitions.html">Custom prompts</a>)</td></tr>
 </table>
-<p>Each writes one answer to <code>out</code> and returns a receipt (<code>.artifacts</code>, <code>.stats</code>). All take <code>previous=</code>, an earlier answer reused if still current. LLM ones take <code>llm=</code>, and <code>embedder=</code> where they read one; None is the default. Only <a href="#aggregate"><code>aggregate()</code></a> takes a <code>Models</code>. Nothing to answer raises <code>aggregates.Inapplicable</code> with the reason.</p>
+<p>Each writes one answer to <code>out</code> and returns a receipt. All take <code>previous=</code>, an earlier answer reused if still current; LLM aggregators take <code>llm=</code>, and <code>embedder=</code> if they use one. Only <a href="#aggregate"><code>aggregate()</code></a> takes a <code>Models</code>. With nothing to answer, an aggregator raises <code>aggregates.Inapplicable</code>.</p>
 
 <h3 id="stats">stats, coverage, speakers</h3>
 <div class="sig">aggregates.stats(*, record, out, previous=None)
@@ -138,7 +138,7 @@ aggregates.speakers(*, record, out, previous=None)</div>
 <div class="sig">aggregates.ner(*, input, out, previous=None, labels=None, threshold=None, model=None)</div>
 <table class="params">
 <tr><th>Setting</th><th>Default</th><th>Meaning</th></tr>
-<tr><td><code>labels</code></td><td>person, organisation, location, product, event, date</td><td>What kinds of name to find. GLiNER takes any label: <code>["drug", "dosage"]</code> works.</td></tr>
+<tr><td><code>labels</code></td><td>person, organisation, location, product, event, date</td><td>The kinds of entity to find. GLiNER accepts any label, such as <code>["drug", "dosage"]</code>.</td></tr>
 <tr><td><code>threshold</code></td><td><code>0.5</code></td><td>How sure the model must be.</td></tr>
 <tr><td><code>model</code></td><td><code>urchade/gliner_small-v2.1</code></td><td>A GLiNER model on Hugging Face.</td></tr>
 </table>
@@ -150,29 +150,29 @@ aggregates.speakers(*, record, out, previous=None)</div>
 
 <h3 id="summary">summary</h3>
 <div class="sig">aggregates.summary(*, input, out, previous=None, llm=None)</div>
-<p>Summarises rows in groups, then the group summaries, until one is left, so any length fits. Payload: <code>summary</code> (at least 150 words, citing chunk ids like <code>[3]</code>), <code>topics</code>, <code>setting</code>, <code>notable</code>, <code>chunks_read</code>, <code>reduction_levels</code>, <code>layers</code> (each intermediate summary), <code>word_count</code>.</p>
+<p>Summarises the chunks in groups, then summarises those summaries until one remains, so it handles videos of any length. Payload: <code>summary</code> (at least 150 words, citing chunk ids like <code>[3]</code>), <code>topics</code>, <code>setting</code>, <code>notable</code>, <code>chunks_read</code>, <code>reduction_levels</code>, <code>layers</code> (each intermediate summary), <code>word_count</code>.</p>
 
 <h3 id="chapters">chapters</h3>
 <div class="sig">aggregates.chapters(*, input, out, previous=None, llm=None, embedder=None,
                     max_spans=None, min_span_s=None)</div>
-<p>The <b>embedder</b> places boundaries where neighbouring chunks are least alike; the LLM names each chapter. Times come from the grid.</p>
+<p>The <b>embedder</b> places chapter boundaries where neighbouring chunks are least similar, and the LLM names and summarises each chapter. Times come from the grid.</p>
 <table class="params">
 <tr><th>Setting</th><th>Default</th><th>Meaning</th></tr>
-<tr><td><code>max_spans</code></td><td>none</td><td>At most this many chapters: the two most alike neighbours merge until it fits.</td></tr>
-<tr><td><code>min_span_s</code></td><td><code>30</code></td><td>The shortest chapter, in seconds; shorter ones merge into the more alike neighbour. <code>0</code> turns it off.</td></tr>
+<tr><td><code>max_spans</code></td><td>none</td><td>The maximum number of chapters. The most similar neighbouring chapters are merged until the count fits.</td></tr>
+<tr><td><code>min_span_s</code></td><td><code>30</code></td><td>The minimum chapter length in seconds. Shorter chapters are merged into their more similar neighbour. <code>0</code> disables this.</td></tr>
 </table>
 <p>Payload: <code>chapters</code> (each <code>title</code>, <code>summary</code>, <code>chunk_ids</code>, <code>start_ts</code>, <code>end_ts</code>), <code>count</code>, <code>covers_all_chunks</code>, <code>uncovered</code>, <code>segmentation</code> (boundaries, their similarity and depth, and merges).</p>
 
 <h3 id="events">events</h3>
 <div class="sig">aggregates.events(*, input, out, previous=None, llm=None)</div>
-<p>Reads 100 chunks at a time. Each event cites a chunk; times come from the grid. Payload: <code>events</code> (each <code>what</code>, <code>kind</code> of <code>action</code>, <code>arrival</code>, <code>change</code> or <code>speech</code>, <code>chunk_id</code>, <code>start_ts</code>, <code>end_ts</code>), <code>count</code>, <code>windows</code>.</p>
+<p>Reads 100 chunks at a time. Each event cites a chunk, and its times come from the grid. Payload: <code>events</code> (each <code>what</code>, <code>kind</code> of <code>action</code>, <code>arrival</code>, <code>change</code> or <code>speech</code>, <code>chunk_id</code>, <code>start_ts</code>, <code>end_ts</code>), <code>count</code>, <code>windows</code>.</p>
 
 <h3 id="entities">entities</h3>
 <div class="sig">aggregates.entities(*, profile, input, out, previous=None, llm=None, embedder=None)</div>
 <pre><code class="python">people = video.sightings(profile="people", answers=["yolo"])
 aggregates.entities(profile="people", input=people, out=D / "answers" / "people.json",
                     llm=models.llm, embedder=models.embedder)</code></pre>
-<p>Linking uses embeddings and rules, not the model: identity fields are embedded, and since two entries in one answer are different people, their similarity sets this video's linking threshold. The LLM writes an account per entity and flags contradicting observations as <code>doubts</code> rather than dropping them.</p>
+<p>Entries are linked by the similarity of their identity fields' embeddings. Two entries in one answer are different subjects, so their similarity sets each video's threshold. The LLM then writes an account of each entity and marks contradicting observations as <code>doubts</code>.</p>
 <table>
 <tr><th>Built-in profile</th><th>Links entries of</th><th>Identity</th><th>From the answers of</th></tr>
 <tr><td><code>people</code></td><td><code>people</code></td><td><code>appearance</code>, <code>clothing</code>, plus the fixed attributes</td><td><code>yolo</code>, or any question with the <code>people</code> shape</td></tr>
@@ -182,13 +182,13 @@ aggregates.entities(profile="people", input=people, out=D / "answers" / "people.
 <p>Payload: <code>entities</code>, each with <code>entity_id</code>, <code>label</code>, <code>appearances</code>, <code>chunk_ids</code>, <code>start_ts</code>, <code>end_ts</code>, <code>observed_s</code>, <code>mentions</code> (each sighting), <code>account</code> (the profile's fields, e.g. <code>description</code>, <code>narrative</code>, <code>role</code>) and <code>doubts</code>; also <code>count</code>, <code>linked</code>, <code>narrated</code>, <code>together</code> (pairs seen in the same chunks), and <code>linking</code> (the threshold and how it was set). Stored as <code>entities.people.json</code>. Your own profiles: <a href="definitions.html#profiles">add_profile</a>.</p>
 
 <h3 id="link">link: entries you hold</h3>
-<p>The linking inside <code>entities</code>, on any list of entries, with no record, no file and no LLM: one description per tracked person, for instance, to find the same shopper across cameras.</p>
+<p>Runs the linking step of <code>entities</code> on any list of entries, with no record, files or LLM; for example, on one description per tracked person, to find the same shopper across cameras.</p>
 <div class="sig">aggregates.link(entries, *, profile="people", different=None, threshold=None, embedder=None) -&gt; Linked</div>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>entries</code></td><td>required</td><td>Dicts carrying the profile's identity fields: for <code>people</code>, <code>appearance</code> and <code>clothing</code>, and the fixed attributes when present. An entry with none of the identity fields is refused.</td></tr>
 <tr><td><code>profile</code></td><td><code>"people"</code></td><td>A link profile, built-in or from <code>add_profile</code>; its rules and measures apply.</td></tr>
-<tr><td><code>different</code></td><td>none</td><td>Pairs known to be different subjects: an N x N mask, or a function of two indexes. The threshold is read off these pairs, and no two of them end up in one group.</td></tr>
+<tr><td><code>different</code></td><td>none</td><td>Pairs known to be different subjects, as an N x N mask or a function of two indexes. The threshold is set from these pairs, and they are never placed in the same group.</td></tr>
 <tr><td><code>threshold</code></td><td>the profile's</td><td>A fixed bar instead. Needed when <code>different</code> is not given.</td></tr>
 <tr><td><code>embedder</code></td><td><code>OpenAIEmbedder()</code></td><td>The embedder identity is measured in.</td></tr>
 </table>
@@ -201,16 +201,16 @@ def overlap(i, j):                     # one person is not in two places at once
 linked = aggregates.link(entries, different=overlap, embedder=LocalEmbedder())
 for group in linked.groups:            # indexes into entries
     journey = sorted((tracks[i] for i in group), key=lambda t: t.start_ts)</code></pre>
-<p>It returns an <code>aggregates.Linked</code>: <code>groups</code>, <code>threshold</code> (the bar used), <code>calibration_pairs</code> (the known-different pairs it was read from) and <code>candidate_pairs</code> (the pairs above it). With <code>different</code> marking two entries of one answer, <code>link</code> gives exactly the groups <code>entities</code> does. The threshold is a z-score when the profile measures more than one cosine (as <code>people</code> does) and <code>different</code> marks a pair; otherwise a cosine.</p>
+<p>It returns an <code>aggregates.Linked</code> with <code>groups</code>, <code>threshold</code> (the threshold used), <code>calibration_pairs</code> (the known-different pairs it was set from) and <code>candidate_pairs</code> (the pairs above it). The threshold is a z-score when the profile combines several similarities, as <code>people</code> does, and <code>different</code> is given; otherwise it is a cosine similarity.</p>
 
 <h3 id="custom">custom</h3>
 <div class="sig">aggregates.custom(*, name, input, out, previous=None, llm=None, embedder=None, **settings)</div>
-<p>Runs a prompt aggregator by name: one from <code>add_prompt</code>, or a built-in (<code>custom(name="summary")</code> equals <code>summary()</code>). <code>spans</code> prompts also take <code>embedder</code>, <code>max_spans</code>, <code>min_span_s</code>. <a href="definitions.html">Custom prompts</a>.</p>
+<p>Runs a prompt aggregator by name, either one added with <code>add_prompt</code> or a built-in one; <code>custom(name="summary")</code> is the same as <code>summary()</code>. Prompts of kind <code>spans</code> also take <code>embedder</code>, <code>max_spans</code> and <code>min_span_s</code>. See <a href="definitions.html">Custom prompts</a>.</p>
 
 <h2 id="aggregate">Several at once: aggregate()</h2>
 <div class="sig">aggregates.aggregate(*, out, models=None, database=None, previous=None, settings=None,
                      **aggregators) -&gt; Produced</div>
-<p>Runs the aggregators given, cheapest first. Each keyword is an aggregator; its value is the input.</p>
+<p>Runs several aggregators, cheapest first. Each keyword argument names an aggregator, and its value is that aggregator's input.</p>
 <pre><code class="python">done = aggregates.aggregate(
     out=D / "aggregates",
     previous=D / "aggregates",                    # reuse answers that are still current
@@ -229,9 +229,9 @@ done.stats["skipped"]         # {"speakers": "needs a transcript ..."}
 done.stats["problems"]        # database writes that failed</code></pre>
 <table class="params">
 <tr><th>Argument</th><th>Meaning</th></tr>
-<tr><td><code>out</code></td><td>The folder for the answers. What each one read is saved in <code>out/inputs/</code>.</td></tr>
+<tr><td><code>out</code></td><td>The folder for the answers. Each aggregator's input is saved in <code>out/inputs/</code>.</td></tr>
 <tr><td><code>previous</code></td><td>A folder of earlier answers (usually <code>out</code>).</td></tr>
-<tr><td><code>models</code></td><td>Who answers: its <code>llm</code> and <code>embedder</code> (None is each one's default).</td></tr>
+<tr><td><code>models</code></td><td>The <code>llm</code> and <code>embedder</code> to use; <code>None</code> means the defaults.</td></tr>
 <tr><td><code>database</code></td><td>Also export the answers, and embed the summary, chapters and entity accounts for <a href="#search"><code>aggregates.search</code></a>.</td></tr>
 <tr><td><code>settings</code></td><td><code>{aggregator: {setting: value}}</code>.</td></tr>
 <tr><td><code>**aggregators</code></td><td>Each aggregator by name (<code>entities:people</code> as <code>entities_people</code>), with its input: a <code>Record</code>, an excerpt, sightings, a saved input's path, or a dict of labelled inputs for several answers from one aggregator.</td></tr>
@@ -243,13 +243,13 @@ done.stats["problems"]        # database writes that failed</code></pre>
 answer.aggregate_id          # "summary"
 answer.tier                  # "llm"
 answer.payload["summary"]
-answer.stats["model"]        # "openai:gpt-5.4-mini": who wrote it
+answer.stats["model"]        # "openai:gpt-6-luna": who wrote it
 answer.inputs_fingerprint    # a hash of the text it read
 
 aggregates.answers(D / "aggregates")      # ["chapters", "entities:people", "stats", ...]
 aggregates.load_all(D / "aggregates")     # {id: answer}; an absent folder is {}</code></pre>
-<p><code>load(path)</code> reads one answer; <code>answers(directory)</code> lists a folder's ids; <code>load_all(directory)</code> reads them all.</p>
-<p><code>aggregates.answer(name, data, answer_id=None, llm=None, embedder=None, previous=None, settings=None)</code> runs one aggregator in memory, writing nothing. <code>previous</code> is an answer to reuse; <code>answer_id</code> names it (<code>"sentiment~spoken"</code>).</p>
+<p><code>load(path)</code> reads one answer, <code>answers(directory)</code> lists the answer ids in a folder, and <code>load_all(directory)</code> reads them all.</p>
+<p><code>aggregates.answer(name, data, answer_id=None, llm=None, embedder=None, previous=None, settings=None)</code> runs one aggregator in memory and writes nothing. <code>previous</code> is an answer to reuse, and <code>answer_id</code> sets the answer's id, such as <code>"sentiment~spoken"</code>.</p>
 
 <h3 id="reuse">Reuse</h3>
 <p>An answer is reused when its input text, definition version and model key all match. Changing any of them, or a setting like <code>max_spans</code>, recomputes it. Reused answers are still written to <code>out</code>.</p>
@@ -264,14 +264,12 @@ tuesday = aggregates.record(timeline="data/out/tuesday/timeline.json",
 week = aggregates.combine(records=[monday, tuesday], out="data/out/week")
 aggregates.summary(input=week.excerpt(transcript=True),
                    out="data/out/week/summary.json", llm=models.llm)</code></pre>
-<p>Videos are laid end to end on one clock: chunks renumbered, times shifted, speakers prefixed with their video. The result is written to <code>out</code> and returned as a record any aggregator reads. Naming a video twice is refused.</p>
-<p><code>aggregates.merge(parts, video_id=None)</code> does it in memory; each part is a <code>combination.Part(timeline, descriptions=None, transcript=None, manifest=None)</code>.</p>
-<p>Linking over a combination links across videos too, lookalikes included.</p>
+<p>The videos are placed end to end on one timeline, with chunks renumbered, times shifted and speakers prefixed by video id. The result is written to <code>out</code> and returned as a record. Linking over it also links across videos, so lookalikes in different videos may be merged. <code>aggregates.merge(parts, video_id=None)</code> does it in memory; each part is a <code>combination.Part(timeline, descriptions=None, transcript=None, manifest=None)</code>.</p>
 
 <h2 id="search">Searching aggregates</h2>
 <div class="sig">aggregates.search(query, level="source", limit=5, source_ids=None, database=None,
                   models=None) -&gt; list[dict]</div>
-<p>With a database, <code>aggregate()</code> also embeds three kinds of text, each searched at its own level:</p>
+<p>When given a database, <code>aggregate()</code> also embeds three kinds of text, each searched at its own level:</p>
 <table>
 <tr><th><code>level</code></th><th>Finds</th><th>By</th></tr>
 <tr><td><code>"source"</code></td><td>which video</td><td>its summary</td></tr>
@@ -284,7 +282,7 @@ who = aggregates.search("a man in a red cap", level="entity", models=models, dat
 
 parts[0]["source_id"], parts[0]["aggregate_id"], parts[0]["item_id"]
 parts[0]["start_ts"], parts[0]["end_ts"], parts[0]["content"]</code></pre>
-<p>Returns the best <code>limit</code> units of that <code>level</code> for <code>query</code>, each with <code>source_id</code>, <code>video_ids</code>, <code>aggregate_id</code>, <code>item_id</code>, <code>level</code>, <code>content</code>, <code>start_ts</code>, <code>end_ts</code> and ranks. Levels are never mixed. <code>source_ids</code> limits the sources. Use the embedder the aggregates were exported with.</p>
+<p>It returns the best <code>limit</code> matches for <code>query</code> at that <code>level</code>, each a dict with <code>source_id</code>, <code>video_ids</code>, <code>aggregate_id</code>, <code>item_id</code>, <code>level</code>, <code>content</code>, <code>start_ts</code>, <code>end_ts</code> and ranks. Results from different levels are never mixed. <code>source_ids</code> limits the search to some sources. Use the same embedder the aggregates were exported with.</p>
 
 <h2 id="introspection">Looking up aggregators</h2>
 <pre><code class="python">aggregates.available()          # every aggregator id, built in and added
@@ -294,7 +292,7 @@ aggregates.kind_of("summary")   # "fold"; None for one written as code; "link" f
 aggregates.settings_of("ner")   # ["model", "labels", "threshold"]
 aggregates.uses_embedder("chapters")   # True
 aggregates.takes_inputs("stats")       # False: it reads a record</code></pre>
-<p>Lower level: <code>aggregates.build(name, llm=None, embedder=None, **settings)</code> constructs an aggregator; <code>aggregates.missing(aggregator, context)</code> says why one can't run on a <code>Context</code>; <code>aggregates.definition_rows(used)</code> gives the definition rows a database stores. <code>aggregates.REGISTRY</code> holds the free aggregators, <code>aggregates.RUNNERS</code> the class per prompt kind, <code>aggregates.TIERS</code> is <code>("free", "local", "llm")</code>.</p>
+<p>Lower-level functions: <code>aggregates.build(name, llm=None, embedder=None, **settings)</code> constructs an aggregator; <code>aggregates.missing(aggregator, context)</code> says why one can't run on a <code>Context</code>; <code>aggregates.definition_rows(used)</code> gives the definition rows a database stores. <code>aggregates.REGISTRY</code> holds the free aggregators, <code>aggregates.RUNNERS</code> the class per prompt kind, <code>aggregates.TIERS</code> is <code>("free", "local", "llm")</code>.</p>
 
 <h2 id="errors">Errors</h2>
 <table>

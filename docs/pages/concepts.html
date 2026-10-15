@@ -48,16 +48,16 @@
 </nav>
 <main>
 <h1>Concepts</h1>
-<p class="lede">Chunks, output files, answer ids, vectors and reuse.</p>
+<p class="lede">The terms the rest of these pages use.</p>
 
 <h2 id="tiers">Two tiers</h2>
-<p><b><code>video_rag</code></b> reads the video: eight stages, each reading files and writing one, ending with every chunk described and embedded. It also does search.</p>
-<p><b><code>aggregates</code></b> reads only the files <code>video_rag</code> wrote, never the video, and answers questions about the whole: counts, summaries, chapters, people.</p>
-<p><code>workflow</code> runs both in one call (<a href="pipeline.html#workflow">The pipeline</a>).</p>
+<p><b><code>video_rag</code></b> reads the video in eight stages, ending with every chunk described and embedded, and provides search.</p>
+<p><b><code>aggregates</code></b> reads the files <code>video_rag</code> wrote, never the video, and answers questions about the whole video: counts, summaries, chapters, people.</p>
+<p><a href="pipeline.html#workflow"><code>workflow</code></a> runs both in one call.</p>
 
 <h2 id="grid">The chunk grid</h2>
-<p>A video is cut into <b>chunks</b>: consecutive spans, typically 5 to 30 seconds, stored in <code>timeline.json</code>. Everything after is keyed by <code>chunk_id</code>: frames, transcript, descriptions, vectors. Chunk 7 is the same seconds in every file, and a search result is a chunk.</p>
-<p>The <b>policy</b> decides where boundaries fall:</p>
+<p>A video is cut into <b>chunks</b>: consecutive spans, typically 5 to 30 seconds, stored in <code>timeline.json</code>. Every later file, from frames to vectors, is keyed by <code>chunk_id</code>, so chunk 7 covers the same seconds in all of them. Search returns chunks.</p>
+<p>The <b>policy</b> decides where the boundaries fall:</p>
 <table>
 <tr><th>Policy</th><th>Cuts at</th><th>Needs</th></tr>
 <tr><td><code>uniform</code></td><td>every <code>chunk_s</code> seconds (default 20)</td><td>nothing</td></tr>
@@ -65,10 +65,10 @@
 <tr><td><code>vad</code></td><td>pauses in speech</td><td>the transcript</td></tr>
 <tr><td><code>speaker</code></td><td>changes of speaker</td><td>the transcript, with speakers</td></tr>
 </table>
-<p>Chunks are kept between <code>min_s</code> and <code>max_s</code>: short ones merge, long ones split evenly, and a short last chunk joins the one before (<a href="stages.html#boundaries">boundaries</a>).</p>
+<p>Chunks are kept between <code>min_s</code> and <code>max_s</code> long: short ones are merged and long ones split evenly (see <a href="stages.html#boundaries">boundaries</a>).</p>
 
 <h2 id="folder">The video's folder</h2>
-<p>Each video gets <code>&lt;into&gt;/&lt;video_id&gt;/</code>, with one file per stage:</p>
+<p>Each video gets its own folder, <code>&lt;into&gt;/&lt;video_id&gt;/</code>, with one file per stage:</p>
 <table>
 <tr><th>File</th><th>Written by</th><th>Holds</th></tr>
 <tr><td><code>media.json</code></td><td><code>media</code></td><td>container, streams, duration, a fingerprint of the file</td></tr>
@@ -82,54 +82,48 @@
 <tr><td><code>embedded.json</code></td><td><code>embed</code></td><td>every answer and transcript chunk as text, with its vector</td></tr>
 <tr><td><code>aggregates/</code></td><td><code>aggregates</code></td><td>one file per whole-video answer (any folder you name)</td></tr>
 </table>
-<p>Fields: <a href="reference.html#documents">Reference</a>.</p>
+<p>The fields of each file are listed in the <a href="reference.html#documents">Reference</a>.</p>
 
 <h2 id="video-id">Video ids</h2>
-<p>The id is the folder name: the filename stem (<code>shop.mp4</code> is <code>shop</code>) unless you pass <code>video_id=</code>. Allowed: ASCII letters, digits, <code>-</code>, <code>_</code>, <code>.</code>, not starting with <code>_</code>. A file like <code>My Video!.mp4</code> needs an explicit <code>video_id=</code>.</p>
-<p>The same file again reuses its folder. A <i>different</i> file with the same id gets a new one (<code>shop-2</code>), unless <code>on_conflict</code> is <code>"replace"</code> (deletes the old folder) or <code>"refuse"</code> (raises). Read the id from <code>run.video_id</code>.</p>
+<p>The video id is the folder name, by default the filename without its extension (<code>shop.mp4</code> becomes <code>shop</code>). It may contain ASCII letters, digits, <code>-</code>, <code>_</code> and <code>.</code>, and may not start with <code>_</code>; for other filenames, pass <code>video_id=</code>.</p>
+<p>Running the same file again reuses its folder. If a <i>different</i> file has the id, the run gets a new one such as <code>shop-2</code>, unless <code>on_conflict</code> is <code>"replace"</code> (delete the old folder) or <code>"refuse"</code> (raise). <code>run.video_id</code> holds the id used.</p>
 
 <h2 id="frames">Frames, samplers and questions</h2>
-<p>The video is decoded once and frames are offered at <code>per_second</code> (default 1). A <b>sampler</b> picks which to keep: every Nth (<code>uniform</code>), or when the scene, people, objects or on-screen text change (<code>clip</code>, <code>yolo</code>, <code>objects</code>, <code>text</code>). <a href="samplers.html">Samplers</a>.</p>
-<p>A <b>question</b> is what the vision model is asked about those frames, and the fields its answer fills. Each sampler has its own; any sampler pairs with any question as <code>sampler:question</code>. <a href="questions.html">Questions</a>.</p>
+<p>The video is decoded once and frames are offered at <code>per_second</code> (default 1). A <b>sampler</b> decides which to keep: <code>uniform</code> every Nth frame, and <code>clip</code>, <code>yolo</code>, <code>objects</code> and <code>text</code> a frame where the scene, people, objects or on-screen text change. See <a href="samplers.html">Samplers</a>.</p>
+<p>A <b>question</b> is what the vision model is asked about the kept frames, with the fields its answer must fill. Each sampler has a default question, and its <code>prompts</code> pair it with any other. See <a href="questions.html">Questions</a>.</p>
 
 <h2 id="answer-ids">Answer ids</h2>
-<p>Each answer is stored under an <b>answer id</b>, the sampler and the question:</p>
+<p>Each answer is stored under an <b>answer id</b> made from the sampler and the question:</p>
 <table>
-<tr><th>Sampler spec</th><th>Answer ids</th></tr>
-<tr><td><code>clip</code></td><td><code>clip</code> (its own question)</td></tr>
-<tr><td><code>uniform:text</code></td><td><code>uniform:text</code></td></tr>
-<tr><td><code>clip:[text,scene]</code></td><td><code>clip:text</code>, <code>clip:scene</code>, from one pass</td></tr>
-<tr><td><code>clip,clip:checkout</code></td><td><code>clip</code>, <code>clip:checkout</code>, from one pass</td></tr>
+<tr><th>Sampler</th><th>Answer ids</th></tr>
+<tr><td><code>Clip()</code></td><td><code>clip</code> (its own question)</td></tr>
+<tr><td><code>Uniform(prompts=["text"])</code></td><td><code>uniform:text</code></td></tr>
+<tr><td><code>Clip(prompts=["text", "scene"])</code></td><td><code>clip:text</code>, <code>clip:scene</code>, from one pass</td></tr>
+<tr><td><code>Clip(prompts=["clip", "checkout"])</code></td><td><code>clip</code>, <code>clip:checkout</code>, from one pass</td></tr>
 </table>
-<p>A chunk's transcript has the id <code>transcript</code>. Search filters and aggregate inputs use these ids.</p>
+<p>A chunk's transcript has the id <code>transcript</code>. Search filters and aggregate inputs refer to answers by these ids.</p>
 
 <h2 id="units">Units and vector spaces</h2>
-<p>A <b>unit</b> is one piece of embedded text: one answer for one chunk (its prose plus its fields), or one chunk's transcript. <code>embedded.json</code> holds every unit and its vector.</p>
-<p>Each vector is tagged with its embedder's key, e.g. <code>local:BAAI/bge-small-en-v1.5:384</code>. Vectors under different keys are never compared: <b>search with the embedder that built the index</b>.</p>
+<p>A <b>unit</b> is one embedded piece of text: one answer for one chunk, or one chunk's transcript. <code>embedded.json</code> holds every unit with its vector.</p>
+<p>Each vector is tagged with its embedder's key, such as <code>local:BAAI/bge-small-en-v1.5:384</code>, and vectors with different keys are never compared. <b>Search with the embedder that built the index.</b></p>
 
 <h2 id="reuse">Reuse</h2>
-<p>Expensive work is reused when nothing it depends on changed:</p>
+<p>Expensive work is reused while its inputs are unchanged:</p>
 <ul>
-  <li>A <b>description</b>: same frames, same vision model and settings, same question wording. Editing one question re-describes only its answers.</li>
-  <li>A <b>vector</b>: same text, same embedder key.</li>
-  <li>An <b>aggregate answer</b>: same text read, same definition, same model key.</li>
+  <li>a <b>description</b>: the frames, the vision model and its settings, and the question's wording;</li>
+  <li>a <b>vector</b>: its text and the embedder;</li>
+  <li>an <b>aggregate answer</b>: the text it reads, its definition and the model.</li>
 </ul>
-<p>The pipelines do this automatically. Stages and aggregators called directly take <code>previous=</code>, the earlier output (usually the file being overwritten).</p>
+<p>The pipelines do this automatically. When you call a stage or aggregator yourself, pass the earlier output as <code>previous=</code>.</p>
 
 <h2 id="keys">Model keys</h2>
-<p>Every model has a <code>key</code>, e.g. <code>openai:gpt-5.4-mini</code>, stored with each answer and vector and compared for reuse. In your own model class, <b>change the key when the model changes</b>, or old answers are reused as the new model's. <a href="models.html#keys">Models</a>.</p>
+<p>Every model has a <code>key</code>, such as <code>openai:gpt-6-luna</code>, which is stored with each answer and vector and decides reuse. In your own model class, <b>change the key whenever the model changes</b>, or the old model's answers are reused. See <a href="models.html#keys">Models</a>.</p>
 
-<h2 id="files-first">Files first, database second</h2>
-<p>Every stage writes a file. With a <code>database</code>, the pipeline also sends each new document to it. A failed database write goes into <code>run.problems</code> and the run continues; the files are complete either way.</p>
-<p>Search reads from a database. <code>Folder</code> reads the output folder in place, so search works without a server. <a href="databases.html">Databases</a>.</p>
+<h2 id="files-first">Files and databases</h2>
+<p>Every stage writes a file. With a <code>database</code>, the pipeline also sends each new document to it; a failed write is recorded in <code>run.problems</code> and the run continues. Search reads from a database, and <code>Folder</code> reads the output folder directly, so no server is needed. See <a href="databases.html">Databases</a>.</p>
 
 <h2 id="errors">Errors</h2>
-<p>Everything raised on purpose is a <code>vidra.VidraError</code>. Two branches worth catching:</p>
-<ul>
-  <li><code>vidra.Unavailable</code>: something is missing (a package, weights, a key, a server). Retrying won't help.</li>
-  <li><code>Refused</code>: the request is invalid, e.g. <code>min_s</code> above <code>max_s</code>. Also a <code>ValueError</code>.</li>
-</ul>
-<p>Most problems are caught before work starts: unknown questions, settings no sampler reads, missing keys. Full list: <a href="reference.html#errors">Reference</a>.</p>
+<p>Every error VIDRA raises deliberately is a <code>vidra.VidraError</code>. <code>vidra.Unavailable</code> means something is missing (a package, weights, a key or a server) and <code>Refused</code>, also a <code>ValueError</code>, means the request is invalid. Most are raised before any work starts. See the <a href="reference.html#errors">full list</a>.</p>
 <!-- pager -->
 <div class="pager">
 <a href="../index.html"><small>Previous</small>Start here</a>

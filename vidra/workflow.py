@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 from . import aggregates
 from vidra.shared.config import paths
@@ -27,6 +27,9 @@ from vidra.shared.reporting.errors import Refused
 from vidra.shared.config.lookup import bound, signature_without
 from vidra.shared.models.roles import Models, given
 from vidra.shared.storage.database import Database, as_database
+
+if TYPE_CHECKING:
+    from .video_rag.core.sampling.samplers import Sampler
 
 Run = video_rag.Run
 
@@ -45,7 +48,8 @@ class Options:
     policy: str = "uniform"                  # decides who runs first
     use_video: bool = True
     use_audio: bool = True
-    sampler: Any = "uniform"                 # a spec string, or strings and Sampler objects
+    #: A Sampler object or a list of them; None is Uniform().
+    sampler: Sampler | Sequence[Sampler] | None = None
     describe: bool = True                    # False: frames embedded, not described
     tier: str = "free"                       # a cost ceiling
     # Also copy every artifact to this database, built: `Supabase()`, `Folder(...)`.
@@ -127,7 +131,7 @@ def workflow(source: str | Path,
              policy: str = "uniform",
              use_video: bool = True,
              use_audio: bool = True,
-             sampler: Any = "uniform",
+             sampler: Sampler | Sequence[Sampler] | None = None,
              models: Optional[Models] = None,
              describe: bool = True,
              tier: str = "free",

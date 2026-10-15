@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional, Sequence
 
+from .base import Deferred
 from .detection import DetectionChangeSampler
 
 if TYPE_CHECKING:
     from .perception.detectors import ObjectDetector
 
 
-class ObjectChangeSampler(DetectionChangeSampler):
+class Objects(DetectionChangeSampler):
     """Objects, compared by presence and position; no embedder.
 
     Detection uses an open vocabulary (YOLO-World) set by `vocabulary`. Matching
@@ -42,7 +43,8 @@ class ObjectChangeSampler(DetectionChangeSampler):
         if detector is None:
             from .perception.detectors import OpenVocabDetector
 
-            detector = OpenVocabDetector(vocabulary=vocabulary, confidence=confidence)
+            detector = Deferred(lambda: OpenVocabDetector(vocabulary=vocabulary,
+                                                          confidence=confidence))
         super().__init__(
             detector=detector,
             descriptor=BoxGeometryDescriptor(class_aware=class_aware, metric=metric),

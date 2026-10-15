@@ -40,8 +40,8 @@ _LAZY = {"Models": "vidra.shared.models.roles",
          "Database": "vidra.shared.storage.database",
          "Supabase": "vidra.shared.storage.supabase",
          "Folder": "vidra.shared.storage.folder",
-         # The base of a sampler of your own; `vidra.video_rag.samplers` builds
-         # and registers them.
+         # The base of a sampler of your own; the built-in ones are in
+         # `vidra.video_rag.samplers`.
          "Sampler": "vidra.video_rag.core.sampling.samplers.base",
          "View": "vidra.video_rag.core.sampling.samplers.base"}
 

@@ -32,7 +32,7 @@ def answer(manifest: Manifest, timeline: Timeline, frames: FrameStore,
 
     `frames` is the store ingest wrote. `existing` is an earlier `Descriptions`:
     every pair still current is skipped. `vlm` is the model asked (None is
-    OpenAI's default). `max_output_tokens` caps one answer (None is 2000) and is
+    OpenAI's default). `max_output_tokens` caps one answer (None is 8000) and is
     part of the resume key. `max_images` refuses, before any call, a run whose
     frames and views would put more images than that in one call.
     """

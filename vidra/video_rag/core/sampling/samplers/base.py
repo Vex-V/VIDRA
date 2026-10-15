@@ -17,9 +17,10 @@ crops, enlargements, a marked copy -- each stored beside the frame.
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Optional, Sequence
+from typing import Any, Callable, ClassVar, Optional, Sequence
 
 from ..reader import Frame
 from vidra.shared.reporting.errors import Refused
@@ -43,6 +44,30 @@ class View:
 
 
 View.FRAME = View()
+
+
+class Deferred:
+    """A part a sampler builds on first use, so making a sampler loads no
+    model: `Deferred(CLIPEmbedder)`. Every attribute but `load` is the built
+    part's, so code using the part never knows. Copies of a sampler share it,
+    and it is built once."""
+
+    def __init__(self, build: Callable[[], Any]) -> None:
+        self._build = build
+        self._part: Any = None
+        self._lock = threading.Lock()
+
+    def load(self) -> Any:
+        """The part, built now if it was not."""
+        with self._lock:
+            if self._part is None:
+                self._part = self._build()
+        return self._part
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(self.load(), name)
 
 
 class Sampler(ABC):
@@ -148,4 +173,4 @@ class Sampler(ABC):
         return self._base_config()
 
 
-__all__ = ["Sampler", "View"]
+__all__ = ["Deferred", "Sampler", "View"]

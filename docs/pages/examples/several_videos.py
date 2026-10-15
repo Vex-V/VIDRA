@@ -9,13 +9,14 @@ import sys
 import vidra
 from vidra import Folder, LocalEmbedder, Models, OpenAI, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
-models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=OpenAI("gpt-5.4-mini"),
+models = Models(vlm=OpenAI("gpt-6-luna"), llm=OpenAI("gpt-6-luna"),
                 embedder=LocalEmbedder())
 database = Folder("data/out")
 
-runs = [video_rag(path, "data/out", sampler="clip", models=models, database=database)
+runs = [video_rag(path, "data/out", sampler=Clip(), models=models, database=database)
         for path in sys.argv[1:]]
 ids = [run.video_id for run in runs]
 

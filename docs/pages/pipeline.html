@@ -54,14 +54,15 @@
 <div class="sig">from vidra.video_rag import video_rag
 
 video_rag(source, into, video_id=None, on_conflict="new", name=None, recorded_at=None,
-          policy="uniform", use_video=True, use_audio=True, sampler="uniform",
+          policy="uniform", use_video=True, use_audio=True, sampler=None,
           models=None, describe=True, resume=True, database=None,
           on_step=None) -&gt; Run</div>
 <pre><code class="python">from vidra import LocalEmbedder, Models, OpenAI, Supabase
 from vidra.video_rag import video_rag
+from vidra.video_rag.samplers import Clip, Yolo
 
-models = Models(vlm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
-run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
+models = Models(vlm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
+run = video_rag("shop.mp4", "data/out", policy="scene", sampler=[Clip(), Yolo()],
                 models=models, database=Supabase())</code></pre>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
@@ -74,7 +75,7 @@ run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
 <tr><td><code>policy</code></td><td><code>"uniform"</code></td><td>Where chunks are cut: <code>uniform</code>, <code>scene</code>, <code>vad</code>, <code>speaker</code> (<a href="concepts.html#grid">the grid</a>).</td></tr>
 <tr><td><code>use_video</code></td><td><code>True</code></td><td>Read the picture (<code>video</code> and <code>describe</code>).</td></tr>
 <tr><td><code>use_audio</code></td><td><code>True</code></td><td>Read the soundtrack (<code>audio</code> and <code>cut</code>). Needs <code>vidra[audio]</code>.</td></tr>
-<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>Which frames to keep and what to ask, e.g. <code>"clip,yolo:overview"</code> (<a href="samplers.html#specs">specs</a>), or a list of names and sampler objects, to set a sampler's settings (<a href="samplers.html#per-call">per call</a>).</td></tr>
+<tr><td><code>sampler</code></td><td><code>Uniform()</code></td><td>Which frames to keep and what to ask: a sampler object or a list of them, e.g. <code>[Clip(), Yolo(prompts=["overview"])]</code>, each with its own settings (<a href="samplers.html">Samplers</a>).</td></tr>
 <tr><td><code>models</code></td><td>every default</td><td>A <a href="models.html#models"><code>Models</code></a>: the <code>vlm</code> (default <code>OpenAI()</code>), the <code>embedder</code> (default <code>OpenAIEmbedder()</code>; search must use the same one), and the <code>visual_embedder</code> (none: frames are not embedded; with one, the kept frames are embedded too, by <a href="stages.html#glance">glance</a>).</td></tr>
 <tr><td><code>resume</code></td><td><code>True</code></td><td>Reuse still-current descriptions and vectors. <code>False</code> redoes them.</td></tr>
 <tr><td><code>database</code></td><td>none</td><td>Where to copy every artifact: a built <code>Database</code>, e.g. <code>Supabase()</code> or <code>Folder("data/out")</code>.</td></tr>
@@ -83,13 +84,14 @@ run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
 </table>
 <pre><code class="python">from vidra import LocalVisualEmbedder, Models
 
-# frames to vectors, no vision model: cheaper, and weaker on actions and text
+# embed the frames directly, with no vision model: cheaper, but weaker on actions and text
 seen = Models(visual_embedder=LocalVisualEmbedder("google/siglip2-base-patch16-224"))
-video_rag("shop.mp4", "data/out", sampler="clip", use_audio=False, models=seen,
+video_rag("shop.mp4", "data/out", sampler=Clip(), use_audio=False, models=seen,
           describe=False)</code></pre>
-<p>The policy, samplers, questions, model keys and database are all checked before the first stage; every problem is raised together as one <code>Refused</code>.</p>
+<p>The policy, samplers, questions, models and database are checked before the first stage runs. All problems found are raised together as one <code>Refused</code>.</p>
 
-<h3 id="run">What it returns: Run</h3>
+<h3 id="run">Run</h3>
+<p><code>video_rag()</code> returns a <code>Run</code>:</p>
 <table class="params">
 <tr><th>Attribute</th><th>Is</th></tr>
 <tr><td><code>video_id</code></td><td>The id used, which may differ from the one asked for.</td></tr>
@@ -108,18 +110,17 @@ for step in run.steps:
     print(step.component, step.stats)</code></pre>
 
 <h3 id="order">What runs, in what order</h3>
-<p>The policy decides the order:</p>
+<p>The stages run in this order, depending on the policy:</p>
 <table>
 <tr><th>Policy</th><th>Order</th></tr>
 <tr><td><code>uniform</code></td><td>media, audio, boundaries, video, cut, describe, glance (with a <code>visual_embedder</code>), embed</td></tr>
 <tr><td><code>scene</code></td><td>media, audio, boundaries.evidence (decodes the picture), boundaries, video, cut, describe, embed</td></tr>
 <tr><td><code>vad</code>, <code>speaker</code></td><td>media, audio, boundaries.evidence (reads the transcript), boundaries, video, cut, describe, embed</td></tr>
 </table>
-<p>Stages that don't apply are skipped with a reason, e.g. <code>audio</code> on a silent file. A policy needing a stream the file lacks is refused.</p>
-<p>Each stage runs with its defaults: Whisper <code>small</code> and pyannote, scene threshold 27, chunks of 5 to 20 s, one frame per second. To change them, run the <a href="stages.html">stages</a> directly.</p>
+<p>A stage that doesn't apply, such as <code>audio</code> on a silent file, is skipped with the reason in <code>run.skipped</code>. Each stage runs with its defaults (Whisper <code>small</code>, scene threshold 27, 5 to 20 s chunks, one frame per second); to change them, call the <a href="stages.html">stages</a> directly.</p>
 
 <h3 id="progress">Progress: on_step</h3>
-<p><code>on_step(component, produced)</code> is called before each stage (with <code>None</code>) and after it (with its <code>Produced</code>). With a third parameter it also gets a <code>Progress</code> for each unit of work in <code>video</code>, <code>describe</code> and <code>embed</code>:</p>
+<p><code>on_step(component, produced)</code> is called before each stage with <code>None</code> and after it with its <code>Produced</code>. A callback with a third parameter also gets a <code>Progress</code> for each unit of work in <code>video</code>, <code>describe</code> and <code>embed</code>:</p>
 <pre><code class="python">def on_step(component, produced, progress=None):
     if progress is not None:
         print(f"  {component} {progress.completed}/{progress.total} "
@@ -129,19 +130,19 @@ for step in run.steps:
     else:
         print("done ", component, produced.stats)
 
-video_rag("shop.mp4", "data/out", sampler="clip", on_step=on_step)</code></pre>
-<p><code>Progress</code> has <code>component</code>, <code>total</code>, <code>completed</code>, <code>skipped</code>, <code>current</code> (e.g. <code>3:clip</code>) and <code>result</code>. Describe reports in completion order. Raising in the callback stops the run.</p>
+video_rag("shop.mp4", "data/out", sampler=Clip(), on_step=on_step)</code></pre>
+<p><code>Progress</code> has <code>component</code>, <code>total</code>, <code>completed</code>, <code>skipped</code>, <code>current</code> (for example <code>3:clip</code>) and <code>result</code>. <code>describe</code> reports calls as they finish. Raising in the callback stops the run.</p>
 
 <h3 id="validate">validate</h3>
-<p><code>validate</code> takes <code>video_rag()</code>'s arguments, less <code>on_step</code>, and returns every problem the run would be refused for, as a list; nothing runs.</p>
+<p><code>validate</code> takes the same arguments as <code>video_rag()</code>, except <code>on_step</code>, and returns a list of the problems the run would be refused for, without running anything.</p>
 <pre><code class="python">from vidra.video_rag import validate, video_rag
 
-problems = validate("shop.mp4", "data/out", policy="scene", sampler="clip", models=models)
+problems = validate("shop.mp4", "data/out", policy="scene", sampler=Clip(), models=models)
 if not problems:
-    run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip", models=models)</code></pre>
+    run = video_rag("shop.mp4", "data/out", policy="scene", sampler=Clip(), models=models)</code></pre>
 
 <h3 id="layout">layout()</h3>
-<p><code>layout(folder)</code> gives every artifact's path in a video's folder:</p>
+<p><code>layout(folder)</code> returns the path of every artifact in a video's folder:</p>
 <pre><code class="python">from vidra.video_rag import layout
 
 at = layout("data/out/shop")
@@ -149,10 +150,10 @@ at["timeline"]          # Path("data/out/shop/timeline.json")
 at["store"]             # Path("data/out/shop/store")</code></pre>
 
 <h2 id="workflow">workflow: both tiers</h2>
-<p><code>workflow.workflow</code> runs <code>video_rag</code>, then every aggregator up to a cost <b>tier</b>. Answers go to <code>&lt;folder&gt;/aggregates/</code> and are reused while current.</p>
+<p><code>workflow.workflow</code> runs <code>video_rag</code>, then every aggregator up to a cost <b>tier</b>. Answers are written to <code>&lt;folder&gt;/aggregates/</code> and reused while current.</p>
 <pre><code class="python">from vidra import LocalEmbedder, Models, OpenAI, Supabase, workflow
 
-run = workflow.workflow("shop.mp4", sampler="clip,yolo", policy="scene", tier="llm",
+run = workflow.workflow("shop.mp4", sampler=[Clip(), Yolo()], policy="scene", tier="llm",
                         models=Models(vlm=OpenAI(), llm=OpenAI(), embedder=LocalEmbedder()),
                         database=Supabase())
 
@@ -160,13 +161,13 @@ answers = run.steps[-1]                   # the aggregate step's receipt
 answers.artifacts                         # {"summary": ".../aggregates/summary.json", ...}
 answers.stats["skipped"]                  # {"speakers": "...", ...}</code></pre>
 <div class="sig">workflow.workflow(source, into=None, video_id=None, name=None, recorded_at=None,
-                  policy="uniform", use_video=True, use_audio=True, sampler="uniform",
+                  policy="uniform", use_video=True, use_audio=True, sampler=None,
                   models=None, describe=True, tier="free", database=None,
                   on_step=None) -&gt; Run</div>
-<p><code>video_rag()</code>'s arguments, plus:</p>
+<p>It takes the same arguments as <code>video_rag()</code>, with these differences:</p>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
-<tr><td><code>into</code></td><td>the data root's <code>out/</code></td><td>Optional here.</td></tr>
+<tr><td><code>into</code></td><td>the data root's <code>out/</code></td><td>The parent folder, as in <code>video_rag()</code>, but optional.</td></tr>
 <tr><td><code>models</code></td><td>every default</td><td>As in <code>video_rag()</code>, and its <code>llm</code> (default <code>OpenAI()</code>) answers the <code>llm</code> tier.</td></tr>
 <tr><td><code>tier</code></td><td><code>"free"</code></td><td>The costliest tier to run: <code>free</code>, <code>local</code> or <code>llm</code>.</td></tr>
 </table>
@@ -176,12 +177,7 @@ answers.stats["skipped"]                  # {"speakers": "...", ...}</code></pre
 <tr><td><code>local</code></td><td>the above, <code>ner</code>, <code>sentiment</code></td><td>the transcript and every answer's prose</td></tr>
 <tr><td><code>llm</code></td><td>the above, <code>summary</code>, <code>chapters</code>, <code>events</code>, every custom prompt, and every linking profile (<code>entities:people</code>, <code>entities:objects</code>, <code>entities:text</code>, custom ones)</td><td>prompts: the transcript and every answer's prose; profiles: every answer</td></tr>
 </table>
-<p>An aggregator with nothing to read (<code>speakers</code> on a silent video) is skipped with the reason. To choose inputs yourself, run the <a href="aggregates.html">aggregates</a> directly.</p>
-<ul>
-  <li><code>workflow.validate(...)</code> takes the same arguments, less <code>on_step</code>, and lists every problem either tier would raise, including a missing LLM key.</li>
-  <li><code>on_step</code> reports <code>"aggregate"</code> as a final step.</li>
-  <li><code>workflow.Run</code> is a <code>Run</code> with the aggregate step last in <code>steps</code>.</li>
-</ul>
+<p>An aggregator with nothing to read, such as <code>speakers</code> on a silent video, is skipped with the reason. To choose inputs yourself, call the <a href="aggregates.html">aggregates</a> directly. <code>workflow.validate(...)</code> works like <code>validate</code> and also checks the LLM key. <code>on_step</code> reports <code>"aggregate"</code> last, and <code>workflow.Run</code> is a <code>Run</code> whose last step is the aggregate step.</p>
 <!-- pager -->
 <div class="pager">
 <a href="recipes.html"><small>Previous</small>Recipes</a>

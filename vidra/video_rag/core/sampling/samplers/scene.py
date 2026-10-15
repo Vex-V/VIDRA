@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING, Optional, Sequence
 import numpy as np
 
 from ..reader import Frame
-from .base import Sampler
+from .base import Deferred, Sampler
 from vidra.shared.reporting.errors import Refused, UnknownOption
 
 if TYPE_CHECKING:
     from .perception.embedders import FrameEmbedder
 
 
-class ClipChangeSampler(Sampler):
+class Clip(Sampler):
     """Samples once the scene has changed enough to be worth describing.
 
     Each decimated frame is embedded with CLIP and kept when its cosine
@@ -48,7 +48,7 @@ class ClipChangeSampler(Sampler):
         if embedder is None:
             from .perception.embedders import CLIPEmbedder
 
-            embedder = CLIPEmbedder()
+            embedder = Deferred(CLIPEmbedder)
         self.embedder = embedder
         self.threshold = threshold
         self.mode = mode
@@ -65,7 +65,7 @@ class ClipChangeSampler(Sampler):
 
     def describe(self, frame: Frame) -> np.ndarray:
         if frame.image is None:
-            raise Refused("ClipChangeSampler needs pixels; frame.image is None")
+            raise Refused("Clip needs pixels; frame.image is None")
         return self.embedder.embed_one(frame.image)
 
     def compare(self, current: np.ndarray, reference: np.ndarray) -> float:

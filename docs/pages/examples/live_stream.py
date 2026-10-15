@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import vidra
 from vidra import Folder, LocalEmbedder, Models, OpenAI
 from vidra.video_rag import live, search, search_observations, video_rag_live
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 
@@ -24,7 +25,7 @@ def show(o):
 
 if __name__ == "__main__":
     video = sys.argv[1]
-    models = Models(vlm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+    models = Models(vlm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
     db = Folder("data/out")             # reads observations.jsonl while it grows
 
     # The camera: its own process, sending to a port this run listens on.
@@ -32,7 +33,7 @@ if __name__ == "__main__":
                                      args=(video, "tcp://127.0.0.1:9000"))
     camera.start()
     run = video_rag_live("tcp://127.0.0.1:9000?listen=1", "data/out",
-                         video_id="camera-1", sampler="clip:overview",
+                         video_id="camera-1", sampler=Clip(prompts=["overview"]),
                          context=(1, 0),          # the frame before, for motion
                          stop_after_s=60,         # a minute of the stream
                          on_unit=show, models=models, database=db)

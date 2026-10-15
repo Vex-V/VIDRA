@@ -48,16 +48,15 @@
 </nav>
 <main>
 <h1>Questions</h1>
-<p class="lede">The prompt the vision model gets for each chunk: an instruction and the fields to fill.</p>
+<p class="lede">What the vision model is asked about each chunk, and how to add your own questions.</p>
 
 <h2 id="what">What a question is</h2>
 <p>For each chunk, <code>describe</code> sends the kept frames with:</p>
 <ul>
-  <li><b>An instruction</b>, e.g. "These 4 frames span 0:20–0:40 and were kept because the people in shot changed..."</li>
-  <li><b>A shape</b>: the fields to fill, sent as a JSON Schema. Every answer also has a prose <code>summary</code>, the main text that gets embedded.</li>
+  <li>An <b>instruction</b>, such as "These 4 frames span 0:20–0:40 and were kept because the people in shot changed..."</li>
+  <li>A <b>shape</b>: the fields the answer must fill, sent as a JSON Schema. Every answer also includes a prose <code>summary</code>, which is the main text that gets embedded.</li>
 </ul>
-<p>Answers are stored under their <a href="concepts.html#answer-ids">answer id</a>: <code>description</code> is the prose, <code>structured</code> the fields. Both are embedded; search can filter on fields.</p>
-<p>A bare sampler (<code>clip</code>) asks its own question; <code>sampler:question</code> (<code>clip:checkout</code>) asks another (<a href="samplers.html#specs">specs</a>).</p>
+<p>Each answer is stored under its <a href="concepts.html#answer-ids">answer id</a>, with the prose in <code>description</code> and the fields in <code>structured</code>. Both are embedded, and search can filter on fields. <code>Clip()</code> asks clip's own question, stored as <code>clip</code>; <code>Clip(prompts=["checkout"])</code> asks <code>checkout</code>, stored as <code>clip:checkout</code> (<a href="samplers.html#specs">answer ids</a>).</p>
 
 <h2 id="builtin">Built-in questions</h2>
 <table>
@@ -80,7 +79,7 @@
 <tr><td><code>text</code></td><td><code>visible_text</code>: one object per piece of text, with <code>text</code>, <code>context</code></td></tr>
 <tr><td><code>prose</code></td><td>none: a 4 to 5 sentence summary</td></tr>
 </table>
-<p>Every shape but <code>prose</code> asks for a summary of at least 150 words. Structured answers run ~3x longer than prose, hence <code>max_output_tokens=2000</code>.</p>
+<p>Every shape except <code>prose</code> asks for a summary of at least 150 words. Structured answers are long, and a reasoning model's reasoning counts against <code>max_output_tokens</code>, which is why it defaults to 8000.</p>
 
 <h2 id="add">Adding a question</h2>
 <div class="sig">describe.add_question(name, instruction, *, fields=None, shape=None, summary=None, about="") -&gt; dict</div>
@@ -99,7 +98,7 @@ describe.add_question(
     about="safety hazards and who is exposed",
 )
 
-video_rag("site.mp4", "data/out", sampler="clip,clip:hazards", models=models)</code></pre>
+video_rag("site.mp4", "data/out", sampler=Clip(prompts=["clip", "hazards"]), models=models)</code></pre>
 <table class="params">
 <tr><th>Argument</th><th>Meaning</th></tr>
 <tr><td><code>name</code></td><td>Lowercase letters, digits, <code>_</code>, <code>-</code>; starts with a letter; up to 32 characters; not a built-in.</td></tr>
@@ -109,7 +108,7 @@ video_rag("site.mp4", "data/out", sampler="clip,clip:hazards", models=models)</c
 <tr><td><code>summary</code></td><td>With <code>fields</code>: prose length, <code>"standard"</code> (150+ words, default) or <code>"brief"</code> (4 to 5 sentences).</td></tr>
 <tr><td><code>about</code></td><td>One-line description.</td></tr>
 </table>
-<p>With neither <code>fields</code> nor <code>shape</code>, the answer is prose only. Re-adding a custom name replaces it. Returns <code>question(name)</code>.</p>
+<p>With neither <code>fields</code> nor <code>shape</code>, the answer is prose only. Adding a question under an existing custom name replaces it. The return value is <code>question(name)</code>.</p>
 
 <h3 id="fields">The fields</h3>
 <p>Each field is a dict:</p>
@@ -117,10 +116,10 @@ video_rag("site.mp4", "data/out", sampler="clip,clip:hazards", models=models)</c
 <tr><th>Key</th><th>Meaning</th></tr>
 <tr><td><code>type</code></td><td><code>"text"</code> (a string) or <code>"list"</code>.</td></tr>
 <tr><td><code>about</code></td><td>Required. What goes in the field.</td></tr>
-<tr><td><code>one_of</code></td><td>Allowed values. Use it for anything you'll filter on; free text varies (<code>cashier</code>, <code>cashier or customer</code>).</td></tr>
-<tr><td><code>of</code></td><td>For a list: make each entry an object, <code>{key: what goes there}</code>, keeping who-did-what together.</td></tr>
+<tr><td><code>one_of</code></td><td>The allowed values. Use it for any field you will filter on, because free text varies (<code>cashier</code>, <code>cashier or customer</code>).</td></tr>
+<tr><td><code>of</code></td><td>For a list, make each entry an object with these keys, <code>{key: what goes there}</code>, so related details stay together.</td></tr>
 </table>
-<p>Field names: lowercase letters, digits, <code>_</code>, starting with a letter. Limits: 12 fields, 8 keys per <code>of</code>, 24 values per <code>one_of</code>. Invalid questions are refused when added, not mid-run.</p>
+<p>Field names use lowercase letters, digits and <code>_</code>, starting with a letter. Limits: 12 fields, 8 keys per <code>of</code>, 24 values per <code>one_of</code>. Invalid questions are refused when added.</p>
 
 <h3 id="manage">Listing and removing</h3>
 <pre><code class="python">describe.questions()                # every question name, built in or added
@@ -128,9 +127,9 @@ describe.question("hazards")        # {"name", "instruction", "about", "builtin"
                                     #  "shape", "summary", "fields": {field: about}}
 describe.remove_question("hazards") # answers already stored are kept</code></pre>
 <ul>
-  <li>Saved in <code>prompts.json</code> under the data root. Hand edits work; a malformed entry is dropped with a warning.</li>
-  <li>A built-in's name raises <code>describe.ProtectedPrompt</code>; other problems raise <code>describe.PromptError</code>, listing each.</li>
-  <li>A run naming a removed question is refused.</li>
+  <li>Questions are saved in <code>prompts.json</code> under the data root. You can edit the file by hand; a malformed entry is skipped with a warning.</li>
+  <li>Changing a built-in question raises <code>describe.ProtectedPrompt</code>. Other problems raise <code>describe.PromptError</code>, which lists each one.</li>
+  <li>A run that names a removed question is refused.</li>
 </ul>
 
 <h2 id="search">Searching by a question</h2>
@@ -139,19 +138,19 @@ describe.remove_question("hazards") # answers already stored are kept</code></pr
 moments, notes = search("someone near the edge", "site", question="hazards",
                         structured={"severity": "high"}, models=models, database=db)
 moments[0].hits[0]["structured"]    # {"hazards": [...], "severity": "high", "exposed": [...]}</code></pre>
-<p><code>question=</code> keeps that question's answers from any sampler. <code>structured=</code> keeps answers whose field equals the value, or whose list contains it (<a href="search.html">Search</a>).</p>
+<p><code>question=</code> limits the search to that question's answers, from any sampler. <code>structured=</code> keeps answers whose field equals the value, or whose list field contains it. See <a href="search.html">Search</a>.</p>
 
 <h2 id="reuse">Editing a question</h2>
-<p>Each question's wording is hashed with its answers. Editing a question re-describes only its answers; adding one changes nothing stored. Changing the vision model or <code>max_output_tokens</code> re-describes everything.</p>
+<p>Editing a question re-describes only its answers, and adding one changes nothing stored. Changing the vision model or <code>max_output_tokens</code> re-describes everything.</p>
 
 <h2 id="vs-prompts">Questions and aggregate prompts</h2>
-<p>Both are an instruction plus fields:</p>
+<p>Both are an instruction and a set of fields, but they are answered differently:</p>
 <table>
 <tr><th></th><th><code>describe.add_question</code></th><th><code>aggregates.add_prompt</code></th></tr>
 <tr><td>Answered by</td><td>the VLM</td><td>the LLM</td></tr>
 <tr><td>Reads</td><td>one chunk's frames</td><td>text <code>video_rag</code> already extracted: transcript, answers</td></tr>
 <tr><td>Answers</td><td>once per chunk</td><td>once per video, or per chapter or item</td></tr>
-<tr><td>Run by</td><td>a sampler spec: <code>clip:hazards</code></td><td><code>aggregates.custom(name=...)</code>, or <code>aggregate(hazard_report=...)</code></td></tr>
+<tr><td>Run by</td><td>a sampler's <code>prompts</code>: <code>Clip(prompts=["hazards"])</code></td><td><code>aggregates.custom(name=...)</code>, or <code>aggregate(hazard_report=...)</code></td></tr>
 <tr><td>Saved in</td><td><code>prompts.json</code></td><td><code>aggregates.json</code></td></tr>
 </table>
 <p>See <a href="definitions.html">Custom prompts and profiles</a>.</p>
@@ -170,10 +169,11 @@ import sys
 import vidra
 from vidra import Folder, LocalEmbedder, Models, OpenAI
 from vidra.video_rag import describe, search, video_rag
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 source = sys.argv[1]
-models = Models(vlm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+models = Models(vlm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
 database = Folder("data/out")
 
 # Saved in data/prompts.json; adding it again replaces it.
@@ -193,7 +193,7 @@ describe.add_question(
 print(describe.question("checkout")["fields"])
 
 # clip's frames, asked clip's own question and ours, in one decode.
-run = video_rag(source, "data/out", policy="scene", sampler="clip,clip:checkout",
+run = video_rag(source, "data/out", policy="scene", sampler=Clip(prompts=["clip", "checkout"]),
                 models=models, database=database)
 
 # Only answers to our question, and only those that saw cash.

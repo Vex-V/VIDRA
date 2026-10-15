@@ -5,7 +5,7 @@ the frame store.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterator, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence
 
 from vidra.shared.reporting import logs, progress
 from vidra.shared.contracts.documents import (Manifest, Media, Produced,
@@ -14,13 +14,16 @@ from vidra.shared.storage.files import read, write
 from vidra.shared.contracts.documents import same_video
 from ...core.frames import FrameStore
 from ...core.sampling.reader import Frame
-from ...core.sampling.specs import build_samplers, split_specs
+from ...core.sampling.specs import build_samplers
 #: The pipeline's `ingest` takes built samplers; this module's takes a spec.
 from .pipeline import ingest as _pass
 
+if TYPE_CHECKING:
+    from ...core.sampling.samplers import Sampler
+
 
 def ingest(media: Media, timeline: Timeline,
-           sampler: str | Sequence[Any] = "uniform",
+           sampler: Sampler | Sequence[Sampler] | None = None,
            per_second: float = 1.0,
            frames: Optional[FrameStore] = None,
            store_scope: str = "sampled",
@@ -28,15 +31,15 @@ def ingest(media: Media, timeline: Timeline,
     """One decode pass over the picture, onto a given grid. Reads the file
     `media.path` names and writes no artifact.
 
-    `sampler` is a spec: names (built with their defaults) and sampler objects
-    (`samplers.build("clip", threshold=0.93)`), which carry their own settings.
+    `sampler` is a `Sampler` object or a list of them, each carrying its own
+    settings (`Clip(threshold=0.93)`); None is `Uniform()`.
     `frames` is where kept frames go (a `FrameStore`), or None to keep none.
     Questions are checked against the vocabulary before anything decodes.
     """
     from ...core.describe import prompts
 
     # Built before anything decodes.
-    built = build_samplers(split_specs(sampler), questions=prompts.questions())
+    built = build_samplers(sampler, questions=prompts.questions())
     # Progress is reported per chunk.
     total = len(timeline)
     seen = 0
@@ -54,7 +57,7 @@ def ingest(media: Media, timeline: Timeline,
 
 def video(media: str | Path, timeline: str | Path, out: str | Path,
           store: Optional[str | Path] = None,
-          sampler: str | Sequence[Any] = "uniform",
+          sampler: Sampler | Sequence[Sampler] | None = None,
           per_second: float = 1.0,
           store_scope: str = "sampled",
           prune_store: bool = False,

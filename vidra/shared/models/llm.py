@@ -1,6 +1,6 @@
 """The ready-made models: one class per wire format, each both a VLM and an LLM.
 
-    OpenAI("gpt-5.4-mini")                       the Responses API
+    OpenAI("gpt-6-luna")                       the Responses API
     Chat("gemma3:4b", base_url="http://localhost:11434/v1", name="ollama")
                                                  anything serving Chat Completions:
                                                  Ollama, LM Studio, llama.cpp, vLLM,
@@ -147,7 +147,7 @@ class OpenAI(_Remote):
     key_vars = ("OPENAI_API_KEY", "OPENAI_API")
     response_mode = "json_schema"
 
-    def __init__(self, model: str = "gpt-5.4-mini", api_key: Optional[str] = None,
+    def __init__(self, model: str = "gpt-6-luna", api_key: Optional[str] = None,
                  base_url: Optional[str] = None, concurrency: int = 8,
                  client: Any = None) -> None:
         super().__init__("openai", model, api_key, base_url, concurrency, client)

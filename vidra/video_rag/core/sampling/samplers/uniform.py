@@ -15,7 +15,7 @@ from .base import Sampler
 from vidra.shared.reporting.errors import Refused
 
 
-class UniformSampler(Sampler):
+class Uniform(Sampler):
     """Every ``every_n``th decimated frame."""
 
     name = "uniform"
@@ -39,4 +39,4 @@ class UniformSampler(Sampler):
         return {**self._base_config(), "every_n": self.every_n}
 
 
-__all__ = ["UniformSampler"]
+__all__ = ["Uniform"]

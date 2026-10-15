@@ -13,6 +13,7 @@ import numpy as np
 import vidra
 from vidra import LocalEmbedder, Models, OpenAI, Supabase
 from vidra.video_rag import describe, video_rag_live
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 
@@ -90,8 +91,8 @@ class Moments(Supabase):
 
 embedder = LocalEmbedder()
 database = Moments(TARGETS, embedder)
-run = video_rag_live(sys.argv[1], "data/out", sampler="clip:ppe", context=(1, 0),
-                     models=Models(vlm=OpenAI("gpt-5.4-mini"), embedder=embedder),
+run = video_rag_live(sys.argv[1], "data/out", sampler=Clip(prompts=["ppe"]), context=(1, 0),
+                     models=Models(vlm=OpenAI("gpt-6-luna"), embedder=embedder),
                      database=database)
 print(f"{run.observations} answers, {database.found} moments, "
       f"{run.written} stored as they arrived, lag {run.lag_s}")

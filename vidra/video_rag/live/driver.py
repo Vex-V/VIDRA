@@ -2,7 +2,7 @@
 the same documents as `offline` when the stream ends.
 
     video_rag_live("tcp://0.0.0.0:9000?listen=1", "data/out", video_id="dock-3",
-                   sampler="clip:safety", on_unit=check)
+                   sampler=Clip(prompts=["safety"]), on_unit=check)
 
 Two threads. The sampling thread decodes, decimates, finds the chunk and runs
 the samplers (`observe`). The event loop describes each kept frame as soon as
@@ -32,7 +32,7 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 from vidra.shared.config import paths
 from vidra.shared.contracts.documents import (Descriptions, Manifest, Media,
@@ -50,6 +50,9 @@ from ..core.frames import FrameStore
 from ..core.sampling.decimate import Decimator
 from .observe import Ask, Tally, observe
 from .source import Source, now
+
+if TYPE_CHECKING:
+    from ..core.sampling.samplers import Sampler
 
 #: The per-frame answers, one JSON object per line, appended as they arrive.
 OBSERVATIONS = paths.OBSERVATIONS
@@ -74,8 +77,8 @@ class Options:
     video_id: Optional[str] = None
     #: What to call the video; None is the id.
     name: Optional[str] = None
-    #: A spec string, or a list of strings and Sampler objects.
-    sampler: str | Sequence[Any] = "uniform"
+    #: A Sampler object or a list of them; None is Uniform().
+    sampler: Sampler | Sequence[Sampler] | None = None
     #: The vlm and the embedder; None, or a role left None, is its default.
     models: Optional[Models] = None
     database: Optional[Database] = None
@@ -238,10 +241,10 @@ def process(options: Options,
 
     from vidra.shared.models.base import require
     from ..core.describe import base as describe_base
-    from ..core.sampling.specs import build_samplers, split_specs
+    from ..core.sampling.specs import build_samplers
 
     # Everything that can fail is built before the stream is opened.
-    built = build_samplers(split_specs(options.sampler),
+    built = build_samplers(options.sampler,
                            questions=prompts.questions())
     models = given(options.models)
     describer = describe_base.build(models.vlm)
@@ -673,7 +676,7 @@ def video_rag_live(source: str | Path,
                    into: str | Path,
                    video_id: Optional[str] = None,
                    name: Optional[str] = None,
-                   sampler: str | Sequence[Any] = "uniform",
+                   sampler: Sampler | Sequence[Sampler] | None = None,
                    models: Optional[Models] = None,
                    database: Optional[Database] = None,
                    on_unit: Optional[Callable[[Observation], None]] = None,
@@ -692,7 +695,8 @@ def video_rag_live(source: str | Path,
     Blocks until the stream ends, `stop_after_s` is reached, `stop` is set or
     `on_unit` raises `StopStream`. `on_unit` is called on the event loop for
     every answer, so a slow one delays the answers behind it. Everything lands
-    under `<into>/<video_id>/`. `models` carries the vlm and the embedder
+    under `<into>/<video_id>/`. `sampler` is a `Sampler` object or a list of
+    them (None is `Uniform()`); `models` carries the vlm and the embedder
     (None is every default).
     """
     given = {k: v for k, v in locals().items() if k not in ("on_unit", "on_step")}

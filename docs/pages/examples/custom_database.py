@@ -15,6 +15,7 @@ import sys
 import vidra
 from vidra import Database, LocalEmbedder, Models, OpenAI, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 
@@ -138,11 +139,11 @@ class SQLite(Database):
         self.db.close()
 
 
-models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=OpenAI("gpt-5.4-mini"),
+models = Models(vlm=OpenAI("gpt-6-luna"), llm=OpenAI("gpt-6-luna"),
                 embedder=LocalEmbedder())
 
 with SQLite("data/vidra.sqlite") as database:
-    run = video_rag(sys.argv[1], "data/out", sampler="clip", models=models,
+    run = video_rag(sys.argv[1], "data/out", sampler=Clip(), models=models,
                     database=database)
     moments, notes = search("a person at a counter", run.video_id,
                             models=models, database=database)

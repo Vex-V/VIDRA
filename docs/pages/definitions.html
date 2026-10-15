@@ -49,7 +49,7 @@
 <main>
 <h1>Custom prompts and profiles</h1>
 <p class="lede">Your own aggregators: a <b>prompt</b> asks the LLM about the whole video; a <b>linking profile</b> follows one kind of thing across chunks.</p>
-<p>The built-in <code>summary</code>, <code>chapters</code>, <code>events</code> are prompts and <code>entities:people</code>, <code>entities:objects</code>, <code>entities:text</code> are profiles. Yours are saved in <code>aggregates.json</code> under the data root and run the same way.</p>
+<p>The built-in <code>summary</code>, <code>chapters</code> and <code>events</code> aggregators are prompts, and <code>entities:people</code>, <code>entities:objects</code> and <code>entities:text</code> are profiles. The ones you add are saved in <code>aggregates.json</code> under the data root and run in the same way.</p>
 
 <h2 id="prompts">Prompts</h2>
 <div class="sig">aggregates.add_prompt(name, instruction, fields, *, kind="fold", key=None,
@@ -72,19 +72,19 @@ aggregates.custom(name="incident_report", input=seen,
 <table class="params">
 <tr><th>Argument</th><th>Meaning</th></tr>
 <tr><td><code>name</code></td><td>Lowercase letters, digits, <code>_</code>, <code>-</code>, starting with a letter. Not a built-in, <code>stats</code>, <code>speakers</code>, <code>coverage</code>, <code>ner</code>, <code>sentiment</code> or <code>entities</code>.</td></tr>
-<tr><td><code>instruction</code></td><td>What the LLM is told; the chunks' text follows, tagged with chunk ids.</td></tr>
+<tr><td><code>instruction</code></td><td>What the LLM is told. The chunks' text follows it, each tagged with its chunk id.</td></tr>
 <tr><td><code>fields</code></td><td>The answer's fields, as for questions: <code>type</code>, <code>about</code>, <code>one_of</code>, <code>of</code> (<a href="questions.html#fields">fields</a>).</td></tr>
 <tr><td><code>kind</code></td><td><code>fold</code>, <code>spans</code> or <code>items</code> (<a href="#kinds">below</a>).</td></tr>
 <tr><td><code>key</code></td><td>For <code>spans</code> and <code>items</code>: the answer's list name (default: the kind).</td></tr>
 <tr><td><code>fold_instruction</code></td><td>For <code>fold</code>: the instruction for summarising each intermediate group.</td></tr>
 <tr><td><code>about</code></td><td>One-line description.</td></tr>
 </table>
-<p>Returns the stored definition. Re-adding a name replaces it.</p>
+<p>Returns the stored definition. Adding a prompt under an existing name replaces it.</p>
 
 <h3 id="kinds">The three kinds</h3>
 <table>
 <tr><th>Kind</th><th>Answers</th><th>How</th><th>Like</th></tr>
-<tr><td><code>fold</code></td><td>one answer for the whole video</td><td>Rows are summarised in groups, then the summaries, until one is left. Any length.</td><td><code>summary</code></td></tr>
+<tr><td><code>fold</code></td><td>one answer for the whole video</td><td>Chunks are summarised in groups, then the summaries are summarised, until one remains. Handles any length.</td><td><code>summary</code></td></tr>
 <tr><td><code>spans</code></td><td>a list of consecutive parts, each filling <code>fields</code>, with <code>chunk_ids</code>, <code>start_ts</code>, <code>end_ts</code></td><td>The embedder places boundaries; the LLM fills each part's fields. Takes <code>max_spans</code>, <code>min_span_s</code> and an embedder.</td><td><code>chapters</code></td></tr>
 <tr><td><code>items</code></td><td>a list of things, each filling <code>fields</code>, with <code>chunk_id</code>, <code>start_ts</code>, <code>end_ts</code></td><td>Read 100 chunks at a time; each item cites its chunk, and times come from the grid.</td><td><code>events</code></td></tr>
 </table>
@@ -107,14 +107,14 @@ aggregates.custom(name="acts", input=both, out=D / "answers" / "acts.json",
 
 <h3 id="running">Running a prompt</h3>
 <ul>
-  <li><code>aggregates.custom(name=..., input=..., out=..., models=...)</code> (<a href="aggregates.html#custom">custom</a>).</li>
-  <li>As a keyword of <code>aggregates.aggregate</code>: <code>aggregate(out=..., incident_report=seen)</code>.</li>
-  <li><code>workflow</code> at <code>tier="llm"</code> runs every added prompt.</li>
+  <li>Call <a href="aggregates.html#custom"><code>aggregates.custom(name=..., input=..., out=..., llm=...)</code></a>.</li>
+  <li>Pass it as a keyword argument to <code>aggregates.aggregate</code>: <code>aggregate(out=..., incident_report=seen)</code>.</li>
+  <li><code>workflow</code> with <code>tier="llm"</code> runs every added prompt.</li>
 </ul>
 <p>Editing a prompt recomputes its answers on the next run.</p>
 
 <h2 id="profiles">Linking profiles</h2>
-<p>Links the entries of one list field across chunks (each person in <code>people</code>) into entities, then the LLM writes an account of each. Linking uses embeddings and rules, not the LLM.</p>
+<p>A profile links the entries of one list field across chunks, such as each person in <code>people</code>, into entities, and the LLM then writes an account of each entity. The linking itself uses embeddings, not the LLM.</p>
 <div class="sig">aggregates.add_profile(name, field, instruction, fields, *, identity=None, story=None,
                        transcript=None, threshold=None, rule=None, mutual=None, check=None,
                        min_appearances=None, max_narratives=None, weights=None,
@@ -139,8 +139,8 @@ aggregates.entities(profile="tools", input=tools, out=D / "answers" / "tools.jso
 <tr><td><code>identity</code></td><td><code>[]</code></td><td>Keys that identify an entry (<code>["appearance", "clothing"]</code>). Without them the whole entry is compared and <code>threshold</code> is required.</td></tr>
 <tr><td><code>story</code></td><td><code>[]</code></td><td>Extra keys the account reads (<code>["role", "action"]</code>).</td></tr>
 <tr><td><code>transcript</code></td><td><code>False</code></td><td>Also give the account the transcript of the entity's chunks.</td></tr>
-<tr><td><code>threshold</code></td><td>read off the video</td><td>Fixed cosine similarity (0 to 1) to link above. Required without <code>identity</code>; refused with <code>weights</code> or <code>attributes</code>.</td></tr>
-<tr><td><code>rule</code></td><td><code>"max"</code></td><td>How the threshold is set from pairs known to differ (two entries in one answer): <code>"max"</code> above the most similar pair; <code>"q95"</code> above the 95th percentile (links more).</td></tr>
+<tr><td><code>threshold</code></td><td>read off the video</td><td>A fixed cosine similarity (0 to 1) above which entries are linked. Required without <code>identity</code>; not allowed with <code>weights</code> or <code>attributes</code>.</td></tr>
+<tr><td><code>rule</code></td><td><code>"max"</code></td><td>How the threshold is set from pairs known to be different (two entries in one answer). <code>"max"</code> sets it above the most similar such pair; <code>"q95"</code> sets it above the 95th percentile, which links more.</td></tr>
 <tr><td><code>mutual</code></td><td><code>True</code></td><td>Link only mutual best matches.</td></tr>
 <tr><td><code>check</code></td><td><code>"flag"</code></td><td><code>"flag"</code>: the LLM marks contradicting observations as <code>doubts</code>. <code>"off"</code>: no check.</td></tr>
 <tr><td><code>min_appearances</code></td><td><code>2</code></td><td>Minimum sightings for an account.</td></tr>
@@ -151,7 +151,7 @@ aggregates.entities(profile="tools", input=tools, out=D / "answers" / "tools.jso
 <tr><td><code>shared</code></td><td>none</td><td><code>{key: weight}</code>: credit for shared accessories or distinguishing words.</td></tr>
 <tr><td><code>about</code></td><td><code>""</code></td><td>One-line description.</td></tr>
 </table>
-<p>The built-in <code>people</code> profile uses <code>weights</code>, <code>attributes</code>, <code>near</code>, <code>shared</code> and <code>rule="q95"</code>; <code>objects</code> and <code>text</code> use one embedding and <code>rule="max"</code>. <code>aggregates.definition("entities:people")</code> shows one in full.</p>
+<p>The built-in <code>people</code> profile uses <code>weights</code>, <code>attributes</code>, <code>near</code>, <code>shared</code> and <code>rule="q95"</code>; <code>objects</code> and <code>text</code> use one embedding and <code>rule="max"</code>. <code>aggregates.definition("entities:people")</code> shows a profile's full definition.</p>
 <p>In <code>aggregate(...)</code>, write the colon as an underscore: <code>entities_tools=tools</code>.</p>
 
 <h2 id="manage">Listing and removing</h2>
@@ -179,7 +179,7 @@ from vidra import LocalEmbedder, Models, OpenAI, aggregates
 
 vidra.configure(env_file=".env")
 D = Path(sys.argv[1])
-models = Models(llm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+models = Models(llm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
 video = aggregates.record(timeline=D / "timeline.json",
                           transcript=D / "transcript.json",
                           descriptions=D / "descriptions.json")
@@ -217,7 +217,7 @@ report = aggregates.load(D / "answers" / "incident_report.json").payload
 print(report["severity"], "-", report["report"][:200])
 
 # Linking: the same object across chunks, from the `objects` field of the
-# `objects` sampler's answers (video_rag with sampler="objects").
+# `objects` sampler's answers (video_rag with sampler=Objects(...)).
 aggregates.add_profile(
     "tools", "objects",
     "These may be the same object, seen in different chunks. Say what it is "

@@ -9,10 +9,11 @@ import sys
 import vidra
 from vidra import Folder, LocalEmbedder, Models, OpenAI
 from vidra.video_rag import describe, search, video_rag
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 source = sys.argv[1]
-models = Models(vlm=OpenAI("gpt-5.4-mini"), embedder=LocalEmbedder())
+models = Models(vlm=OpenAI("gpt-6-luna"), embedder=LocalEmbedder())
 database = Folder("data/out")
 
 # Saved in data/prompts.json; adding it again replaces it.
@@ -32,7 +33,7 @@ describe.add_question(
 print(describe.question("checkout")["fields"])
 
 # clip's frames, asked clip's own question and ours, in one decode.
-run = video_rag(source, "data/out", policy="scene", sampler="clip,clip:checkout",
+run = video_rag(source, "data/out", policy="scene", sampler=Clip(prompts=["clip", "checkout"]),
                 models=models, database=database)
 
 # Only answers to our question, and only those that saw cash.

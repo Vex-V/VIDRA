@@ -53,24 +53,25 @@
 <h2 id="roles">Roles</h2>
 <table>
 <tr><th>Role</th><th>Base class</th><th>Used by</th><th>Default</th></tr>
-<tr><td><code>vlm</code></td><td><code>VLM</code></td><td><code>describe</code>: frames in, an answer out</td><td><code>OpenAI("gpt-5.4-mini")</code></td></tr>
-<tr><td><code>llm</code></td><td><code>LLM</code></td><td>the llm aggregators: summary, chapters, events, custom prompts, entity accounts</td><td><code>OpenAI("gpt-5.4-mini")</code></td></tr>
+<tr><td><code>vlm</code></td><td><code>VLM</code></td><td><code>describe</code>: frames in, an answer out</td><td><code>OpenAI("gpt-6-luna")</code></td></tr>
+<tr><td><code>llm</code></td><td><code>LLM</code></td><td>the llm aggregators: summary, chapters, events, custom prompts, entity accounts</td><td><code>OpenAI("gpt-6-luna")</code></td></tr>
 <tr><td><code>embedder</code></td><td><code>Embedder</code></td><td><code>embed</code>, <code>search</code>, chapter boundaries, entity linking</td><td><code>OpenAIEmbedder("text-embedding-3-small")</code></td></tr>
 <tr><td><code>visual_embedder</code></td><td><code>VisualEmbedder</code></td><td><a href="stages.html#glance"><code>glance</code></a>: frames in, a vector out, no answer; <code>search</code> over those vectors</td><td>none: frames are not embedded</td></tr>
 </table>
-<p>An unset role uses its default, except <code>visual_embedder</code>, which has none. VLM and LLM are separate, so they can be different models; so are <code>Embedder</code> and <code>VisualEmbedder</code>, since an image model's text side may read only a few dozen tokens. A model that does both subclasses both and fills either role.</p>
+<p>A role left unset uses its default, except <code>visual_embedder</code>, which has none. Each role has its own base class, so each can be a different model; a class that subclasses two of them, such as <code>VLM</code> and <code>LLM</code>, can fill either role.</p>
 
 <h2 id="models">Models</h2>
 <div class="sig">Models(vlm=None, llm=None, embedder=None, visual_embedder=None)</div>
 <pre><code class="python">from vidra import Anthropic, LocalEmbedder, Models, OpenAI
 
-models = Models(vlm=OpenAI("gpt-5.4-mini"), llm=Anthropic("claude-haiku-4-5"),
+models = Models(vlm=OpenAI("gpt-6-luna"), llm=Anthropic("claude-haiku-4-5"),
                 embedder=LocalEmbedder())
 
 video_rag("shop.mp4", "data/out", models=models)          # uses vlm and embedder
 aggregates.aggregate(out=..., models=models, summary=...)  # uses llm and embedder
 search("a customer paying", "shop", models=models)         # uses embedder</code></pre>
-<p>Build once and pass everywhere, so indexing and search use the same embedder. Models are checked at construction: right class, a <code>key</code>, and the model's own <code>problems()</code> (e.g. a missing API key). Pipelines and searches (<code>video_rag</code>, <code>video_rag_live</code>, <code>workflow</code>, <code>aggregates.aggregate</code>, <code>search</code>, <code>search_observations</code>, <code>aggregates.search</code>) take only <code>models=</code>; None is every default. A single stage takes the model it calls by its role's name: <code>describe(vlm=)</code>, <code>embed(embedder=)</code>, <code>glance(visual_embedder=)</code>, <code>aggregates.summary(llm=)</code>. <code>models.resolved()</code> shows each role with defaults filled in.</p>
+<p>Build one <code>Models</code> and pass it everywhere, so indexing and search use the same embedder. Each model is checked on construction for the right class, a <code>key</code>, and its own <code>problems()</code> such as a missing API key.</p>
+<p>Pipelines and searches (<code>video_rag</code>, <code>video_rag_live</code>, <code>workflow</code>, <code>aggregates.aggregate</code>, <code>search</code>, <code>search_observations</code>, <code>aggregates.search</code>) take <code>models=</code>. A single stage takes the one model it calls: <code>describe(vlm=)</code>, <code>embed(embedder=)</code>, <code>glance(visual_embedder=)</code>, <code>aggregates.summary(llm=)</code>. <code>models.resolved()</code> fills in the defaults.</p>
 
 <h2 id="ready-made">Ready-made models</h2>
 <table>
@@ -85,10 +86,9 @@ search("a customer paying", "shop", models=models)         # uses embedder</code
 <tr><td><code>LocalVisualEmbedder</code></td><td>visual_embedder</td><td>a CLIP or SigLIP model in this process</td></tr>
 <tr><td><code>LocalMultimodalEmbedder</code></td><td>embedder, visual_embedder</td><td>EmbeddingGemma 2 in this process: text and images in one space</td></tr>
 </table>
-<p>The VLM/LLM classes fill either role.</p>
 
 <h3 id="openai">OpenAI</h3>
-<div class="sig">OpenAI(model="gpt-5.4-mini", api_key=None, base_url=None, concurrency=8, client=None)</div>
+<div class="sig">OpenAI(model="gpt-6-luna", api_key=None, base_url=None, concurrency=8, client=None)</div>
 <table class="params">
 <tr><th>Argument</th><th>Meaning</th></tr>
 <tr><td><code>model</code></td><td>The model id. Its key is <code>openai:&lt;model&gt;</code>.</td></tr>
@@ -101,12 +101,12 @@ search("a customer paying", "shop", models=models)         # uses embedder</code
 <h3 id="anthropic">Anthropic</h3>
 <div class="sig">Anthropic(model="claude-haiku-4-5", api_key=None, base_url="https://api.anthropic.com",
           concurrency=8, client=None)</div>
-<p>As <code>OpenAI</code>, but <code>client</code> is an <code>httpx.AsyncClient</code>, the key defaults to <code>ANTHROPIC_API_KEY</code>, and the model key is <code>anthropic:&lt;model&gt;</code>. Retries rate limits and server errors twice. Tested against a mock server only.</p>
+<p>As <code>OpenAI</code>, except that <code>client</code> is an <code>httpx.AsyncClient</code>, <code>api_key</code> defaults to <code>ANTHROPIC_API_KEY</code> and the key is <code>anthropic:&lt;model&gt;</code>. Rate-limit and server errors are retried twice.</p>
 
 <h3 id="chat">Chat</h3>
 <div class="sig">Chat(model, base_url, name="chat", api_key=None, structured="json_schema",
      token_field="max_tokens", concurrency=8, client=None)</div>
-<p>Any server with OpenAI's Chat Completions API. Run against OpenAI's endpoint; other servers tested against a mock only.</p>
+<p>Works with any server that implements OpenAI's Chat Completions API, such as Ollama, LM Studio, vLLM or llama.cpp.</p>
 <table class="params">
 <tr><th>Argument</th><th>Meaning</th></tr>
 <tr><td><code>model</code></td><td>The model id the server knows.</td></tr>
@@ -114,18 +114,18 @@ search("a customer paying", "shop", models=models)         # uses embedder</code
 <tr><td><code>name</code></td><td>First part of the key (<code>&lt;name&gt;:&lt;model&gt;</code>), to tell servers apart.</td></tr>
 <tr><td><code>api_key</code></td><td>Optional for local servers.</td></tr>
 <tr><td><code>structured</code></td><td>How structure is enforced: <code>"json_schema"</code> (by the server), <code>"json_object"</code> (any JSON), or <code>"prompt"</code> (schema in the prompt). Use a weaker mode if the server rejects JSON Schema.</td></tr>
-<tr><td><code>token_field</code></td><td>The output-cap parameter, <code>max_tokens</code> or <code>max_completion_tokens</code>; retried with the other if refused.</td></tr>
+<tr><td><code>token_field</code></td><td>The name of the output-length parameter, <code>max_tokens</code> or <code>max_completion_tokens</code>. If the server rejects it, the call is retried with the other.</td></tr>
 <tr><td><code>concurrency</code></td><td>Calls in flight; <code>1</code> for single-request servers.</td></tr>
 <tr><td><code>client</code></td><td>A ready <code>openai.AsyncOpenAI</code>.</td></tr>
 </table>
 <pre><code class="python">import os
 from vidra import Chat
 
-vlm = Chat("gpt-5.4-mini", base_url="https://api.openai.com/v1", name="openai-chat",
+vlm = Chat("gpt-6-luna", base_url="https://api.openai.com/v1", name="openai-chat",
            api_key=os.environ["OPENAI_API_KEY"])</code></pre>
 
 <h3 id="stub">Stub</h3>
-<p><code>Stub()</code> returns placeholder answers in the requested shape, instantly. Key: <code>stub</code>. For running without a key.</p>
+<p><code>Stub()</code> returns placeholder answers in the requested shape, for tests or running without an API key. Its key is <code>stub</code>.</p>
 
 <h3 id="openai-embedder">OpenAIEmbedder</h3>
 <div class="sig">OpenAIEmbedder(model="text-embedding-3-small", api_key=None, base_url=None, name="openai",
@@ -142,7 +142,7 @@ vlm = Chat("gpt-5.4-mini", base_url="https://api.openai.com/v1", name="openai-ch
 <tr><td><code>query_prefix</code>, <code>document_prefix</code></td><td>Text before each query or passage. Known models get theirs automatically; setting one changes the key.</td></tr>
 <tr><td><code>client</code></td><td>A ready <code>openai.OpenAI</code>.</td></tr>
 </table>
-<p>The width is part of the key. OpenAI widths are known; other models are probed once per process.</p>
+<p>The vector width is part of the key; for non-OpenAI models it is found with one call per process.</p>
 
 <h3 id="local-embedder">LocalEmbedder</h3>
 <div class="sig">LocalEmbedder(model="BAAI/bge-small-en-v1.5", dims=None, device=None, batch=32,
@@ -155,10 +155,10 @@ vlm = Chat("gpt-5.4-mini", base_url="https://api.openai.com/v1", name="openai-ch
 <tr><td><code>batch</code></td><td>Texts per forward pass.</td></tr>
 <tr><td><code>query_prefix</code>, <code>document_prefix</code></td><td>As for <code>OpenAIEmbedder</code>; e5, nomic, bge and mxbai get theirs automatically.</td></tr>
 </table>
-<p>Needs <code>vidra[local]</code>. Key: <code>local:&lt;model&gt;:&lt;width&gt;</code>. The default searches about as well as <code>text-embedding-3-small</code>, and a query takes milliseconds rather than a network round trip.</p>
+<p>Requires <code>vidra[local]</code>. Its key is <code>local:&lt;model&gt;:&lt;width&gt;</code>. The default model searches about as well as <code>text-embedding-3-small</code> and embeds a query in milliseconds.</p>
 
 <h3 id="hash-embedder">HashEmbedder</h3>
-<p><code>HashEmbedder(dims=256)</code> hashes words into vectors: no model, no network. Exact words only, so for tests. Key: <code>hash:none:&lt;dims&gt;</code>.</p>
+<p><code>HashEmbedder(dims=256)</code> hashes words into vectors, with no model or network; it matches exact words only, so use it for tests. Its key is <code>hash:none:&lt;dims&gt;</code>.</p>
 
 <h3 id="local-visual-embedder">LocalVisualEmbedder</h3>
 <div class="sig">LocalVisualEmbedder(model="openai/clip-vit-base-patch32", device=None, batch=32)</div>
@@ -168,7 +168,7 @@ vlm = Chat("gpt-5.4-mini", base_url="https://api.openai.com/v1", name="openai-ch
 <tr><td><code>device</code></td><td>Default: cuda, then mps, then the CPU.</td></tr>
 <tr><td><code>batch</code></td><td>Images per forward pass.</td></tr>
 </table>
-<p>Needs <code>vidra[local]</code>. The model sees one image at a time, so a unit's frames and views are averaged into one vector; the key says so: <code>local:&lt;model&gt;:&lt;width&gt;:mean</code>. A query is cut at the text tower's length (77 tokens for CLIP, 64 for SigLIP). SigLIP 2 searches frames far better than CLIP ViT-B/32 (<a href="stages.html#glance">glance</a>).</p>
+<p>Requires <code>vidra[local]</code>. A unit's images are embedded one at a time and averaged, so the key is <code>local:&lt;model&gt;:&lt;width&gt;:mean</code>. Queries are truncated to 77 tokens for CLIP and 64 for SigLIP. SigLIP 2 gives much better results than CLIP ViT-B/32.</p>
 
 <h3 id="local-multimodal-embedder">LocalMultimodalEmbedder</h3>
 <div class="sig">LocalMultimodalEmbedder(model="google/embeddinggemma-2", dims=None, device=None, batch=8,
@@ -185,10 +185,10 @@ vlm = Chat("gpt-5.4-mini", base_url="https://api.openai.com/v1", name="openai-ch
 
 gemma = LocalMultimodalEmbedder()
 models = Models(vlm=OpenAI(), embedder=gemma, visual_embedder=gemma)</code></pre>
-<p>A unit's frames and views go in as one input, each view's label before its image, and the model makes one vector of them; up to 29 images (<code>max_images</code>). Fills either role, or both: the frames are stored under the key plus <code>:images</code>, so they never replace the text's rows and are ranked apart. Needs <code>sentence-transformers&gt;=6.1</code> and <code>transformers&gt;=5.18</code>, newer than <code>vidra[local]</code> asks for.</p>
+<p>Embeds a unit's frames and labelled views as one input, up to 29 images (<code>max_images</code>). It can fill either role or both; image vectors are stored under the key plus <code>:images</code>, apart from text vectors. Requires <code>sentence-transformers&gt;=6.1</code> and <code>transformers&gt;=5.18</code>, newer than <code>vidra[local]</code> installs.</p>
 
 <h2 id="own">Writing your own</h2>
-<p>Subclass a base, set <code>key</code>, fill in one method (<code>async def</code> or plain <code>def</code>).</p>
+<p>Subclass a role's base class, set <code>key</code>, and implement its method, either as an <code>async def</code> or a plain <code>def</code>.</p>
 <pre><code class="python">from vidra import Embedder, LLM, VLM, VisualEmbedder
 
 class MyVLM(VLM):
@@ -237,41 +237,41 @@ class MyVisualEmbedder(VisualEmbedder):
 
 <h3 id="llm-method">LLM.complete</h3>
 <div class="sig">complete(prompt, schema=None, system=None, max_output_tokens=4000)</div>
-<p><code>prompt</code> is a string; otherwise as <code>generate</code>.</p>
+<p><code>prompt</code> is a string; everything else is as for <code>generate</code>.</p>
 
 <h3 id="embedder-method">Embedder.embed and embed_query</h3>
 <div class="sig">embed(texts) -&gt; list[list[float]]
 embed_query(text) -&gt; list[float]</div>
-<p><code>embed(texts)</code> returns one vector per text, all one width. <code>embed_query(text)</code> embeds search queries; it defaults to <code>embed([text])[0]</code>.</p>
+<p><code>embed(texts)</code> returns one vector per text, all of the same width. <code>embed_query(text)</code> embeds a search query; by default it returns <code>embed([text])[0]</code>.</p>
 
 <h3 id="visual-method">VisualEmbedder.embed_images and embed_query</h3>
 <div class="sig">embed_images(groups) -&gt; list[list[float]]
 embed_query(text) -&gt; list[float]</div>
-<p><code>embed_images(groups)</code> returns one vector per group. A group is one unit's images as request parts, in order, the shape <code>VLM.generate</code> is sent: an <code>{"type": "image", "data": bytes, ...}</code> part per frame or view, each view's preceded by a <code>{"type": "text", "text": label}</code> part. A model that takes one image pools the group itself. <code>embed_query(text)</code> embeds a search into the same space; it has no default. <code>max_images</code> (default none) is the most images one group may hold, checked before any image is read.</p>
+<p><code>embed_images(groups)</code> returns one vector per group. A group is one unit's images as parts in <code>VLM.generate</code>'s format: an <code>{"type": "image", "data": bytes, ...}</code> part per frame or view, each view preceded by a <code>{"type": "text", "text": label}</code> part. A one-image model must combine a group itself, for example by averaging. <code>embed_query(text)</code> embeds a query in the same space and has no default. <code>max_images</code> (default <code>None</code>) caps the images per group, checked before any is read.</p>
 
 <h3 id="attributes">Attributes and checks</h3>
 <table class="params">
 <tr><th>Member</th><th>Meaning</th></tr>
-<tr><td><code>key</code></td><td>Required identity (<a href="#keys">below</a>). May be a lazy property.</td></tr>
-<tr><td><code>concurrency</code></td><td>Calls in flight at once. Default 8.</td></tr>
-<tr><td><code>problems()</code></td><td>Reasons it can't run (e.g. no key), checked before work; the first raises <code>ModelUnavailable</code>.</td></tr>
-<tr><td><code>name</code>, <code>model</code></td><td>The parts of <code>key</code> before and after the first colon. Read-only: keep your own client or weights under another attribute (<code>self.client</code>, <code>self.encoder</code>).</td></tr>
+<tr><td><code>key</code></td><td>Required. Identifies the model (see <a href="#keys">Keys</a>). May be a property.</td></tr>
+<tr><td><code>concurrency</code></td><td>The number of calls in flight at once. Default 8.</td></tr>
+<tr><td><code>problems()</code></td><td>A list of reasons the model can't run, such as a missing key. Checked before any work starts; the first is raised as <code>ModelUnavailable</code>.</td></tr>
+<tr><td><code>name</code>, <code>model</code></td><td>Read-only. The parts of <code>key</code> before and after the first colon. Store your own client or weights under other names, such as <code>self.client</code>.</td></tr>
 </table>
 
 <h3 id="keys">Keys</h3>
-<p>The key is stored with every answer and vector and decides reuse:</p>
+<p>The key is stored with every answer and vector, and determines what is reused:</p>
 <ul>
-  <li><b>Change it when the model changes</b>, or old answers are reused.</li>
-  <li>For an embedder it names the vector space; include the width (<code>mylab:embed-v1:768</code>).</li>
-  <li>Keep it stable for the same model, or everything is recomputed.</li>
+  <li><b>Change the key when the model changes</b>; otherwise the old model's answers are reused.</li>
+  <li>For an embedder, the key identifies the vector space, so include the width (<code>mylab:embed-v1:768</code>).</li>
+  <li>Keep the key the same while the model is unchanged; otherwise everything is recomputed.</li>
 </ul>
 
-<h3 id="calls">What the library does around your method</h3>
+<h3 id="calls">How your method is called</h3>
 <ul>
-  <li>At most <code>concurrency</code> calls run at once per instance.</li>
-  <li>A plain <code>def</code> runs in a thread.</li>
-  <li>JSON strings are parsed when a schema was asked; non-object answers are refused.</li>
-  <li>Exceptions become <code>ModelFailed</code>, naming the key. Retry inside the method if needed.</li>
+  <li>At most <code>concurrency</code> calls run at once on each instance.</li>
+  <li>A plain <code>def</code> method is run in a thread.</li>
+  <li>When a schema was requested, a JSON string answer is parsed, and an answer that is not an object is refused.</li>
+  <li>Exceptions are re-raised as <code>ModelFailed</code> with the model's key. Implement retries in your method if you need them.</li>
 </ul>
 
 <h2 id="errors">Errors</h2>
@@ -302,6 +302,7 @@ import sys
 import vidra
 from vidra import LLM, VLM, Embedder, Folder, Models, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 
@@ -317,7 +318,7 @@ def json_format(schema):
 class MyVLM(VLM):
     """Describes frames. `generate` may be async, as here, or a plain def."""
 
-    key = "mine:gpt-5.4-mini"       # the identity stored with every answer
+    key = "mine:gpt-6-luna"       # the identity stored with every answer
     concurrency = 4                 # calls in flight at once
 
     def __init__(self):
@@ -342,7 +343,7 @@ class MyVLM(VLM):
         messages = ([{"role": "system", "content": system}] if system else [])
         messages.append({"role": "user", "content": content})
         response = await self.client.chat.completions.create(
-            model="gpt-5.4-mini", messages=messages,
+            model="gpt-6-luna", messages=messages,
             max_completion_tokens=max_output_tokens, **json_format(schema))
         return response.choices[0].message.content    # JSON text is parsed for you
 
@@ -351,7 +352,7 @@ class MyLLM(LLM):
     """Writes summaries, chapters, events and entity accounts. A plain def runs
     in a thread."""
 
-    key = "mine:gpt-5.4-mini"
+    key = "mine:gpt-6-luna"
 
     def __init__(self):
         from openai import OpenAI
@@ -361,7 +362,7 @@ class MyLLM(LLM):
         messages = ([{"role": "system", "content": system}] if system else [])
         messages.append({"role": "user", "content": prompt})
         response = self.client.chat.completions.create(
-            model="gpt-5.4-mini", messages=messages,
+            model="gpt-6-luna", messages=messages,
             max_completion_tokens=max_output_tokens, **json_format(schema))
         return response.choices[0].message.content
 
@@ -384,7 +385,7 @@ class MyEmbedder(Embedder):
 models = Models(vlm=MyVLM(), llm=MyLLM(), embedder=MyEmbedder())
 database = Folder("data/out")
 
-run = video_rag(sys.argv[1], "data/out", sampler="clip", use_audio=False,
+run = video_rag(sys.argv[1], "data/out", sampler=Clip(), use_audio=False,
                 models=models, database=database)
 moments, _ = search("people at a counter", run.video_id, models=models, database=database)
 print([(m.chunk_id, round(m.start_ts, 1)) for m in moments])
@@ -393,7 +394,7 @@ d = run.folder
 video = aggregates.record(timeline=d / "timeline.json", descriptions=d / "descriptions.json")
 aggregates.summary(input=video.excerpt(answers={"clip": ["summary"]}),
                    out=d / "answers" / "summary.json", llm=models.llm)
-print(aggregates.load(d / "answers" / "summary.json").stats["model"])   # mine:gpt-5.4-mini</code></pre>
+print(aggregates.load(d / "answers" / "summary.json").stats["model"])   # mine:gpt-6-luna</code></pre>
 <!-- /example -->
 <!-- pager -->
 <div class="pager">

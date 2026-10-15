@@ -58,8 +58,8 @@ _LAZY: dict[str, tuple[str, Optional[str]]] = {
         "media", "audio", "boundaries", "video", "cut", "describe", "glance",
         "embed")},
     "retrieve": ("core.retrieve", None),
-    # Build a configured sampler, register one of your own, list them.
-    "samplers": ("core.sampling.samplers", None),
+    # The sampler classes: Uniform, Clip, Yolo, Objects, Text, and Sampler.
+    "samplers": ("samplers", None),
 }
 
 

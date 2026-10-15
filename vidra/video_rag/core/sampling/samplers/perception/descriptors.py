@@ -16,6 +16,7 @@ from typing import Any, Sequence
 import cv2
 import numpy as np
 
+from ..base import Deferred
 from .detectors import Detection
 from vidra.shared.reporting.errors import UnknownOption
 
@@ -49,7 +50,7 @@ class CropEmbeddingDescriptor(RegionDescriptor):
         if embedder is None:
             from .embedders import CLIPEmbedder
 
-            embedder = CLIPEmbedder()
+            embedder = Deferred(CLIPEmbedder)
         self.embedder = embedder
         self.crop_pad = crop_pad
 

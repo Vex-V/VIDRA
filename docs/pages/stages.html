@@ -48,7 +48,7 @@
 </nav>
 <main>
 <h1>Stages</h1>
-<p class="lede">The steps <code>video_rag()</code> runs, each callable on its own with all its settings.</p>
+<p class="lede">The steps <code>video_rag()</code> runs, and how to call each one on its own with all of its settings.</p>
 
 <p>Each stage is a module under <code>vidra.video_rag</code> with three kinds of function:</p>
 <table>
@@ -57,8 +57,7 @@
 <tr><td>a verb: <code>split</code>, <code>listen</code>, <code>detect</code>, <code>timeline</code>, <code>ingest</code>, <code>apply</code>, <code>answer</code>, <code>look</code>, <code>encode</code></td><td>documents already in memory</td><td>the same work, returning the document; reads and writes no file</td></tr>
 <tr><td><code>load</code></td><td>a path</td><td>reads the stage's output back, typed</td></tr>
 </table>
-<p>The file function is the verb plus a read and a write, so both run the same checks. A receipt has <code>.video_id</code>, <code>.component</code>, <code>.artifacts</code> (<code>{name: path}</code>), <code>.stats</code> and <code>.skipped</code>.</p>
-<p>Full script: <a href="recipes.html#stage-by-stage">stage-by-stage recipe</a>. Below, <code>D</code> is a video's folder.</p>
+<p>The file function is the verb with a read before and a write after, so both run the same checks. Its receipt has <code>.video_id</code>, <code>.component</code>, <code>.artifacts</code> (<code>{name: path}</code>), <code>.stats</code> and <code>.skipped</code>. Below, <code>D</code> is a video's folder; the <a href="recipes.html#stage-by-stage">stage-by-stage recipe</a> runs every stage.</p>
 <pre><code class="python">from pathlib import Path
 from vidra.video_rag import audio, boundaries, cut, describe, embed, glance, media, video</code></pre>
 
@@ -77,11 +76,11 @@ from vidra.video_rag import audio, boundaries, cut, describe, embed, glance, med
 <pre><code class="python">made = media.media("shop.mp4", "data/out")
 D = Path(made.stats["folder"])        # data/out/shop
 made.video_id                         # the id actually used</code></pre>
-<p><code>media.split(path, video_id=None, name=None, recorded_at=None)</code> returns the <code>Media</code> without writing; <code>media.load(path)</code> reads <code>media.json</code>. A file with no video or audio stream raises <code>media.UnusableMedia</code>; <code>on_conflict="refuse"</code> raises <code>media.VideoIdTaken</code>.</p>
+<p><code>media.split(path, video_id=None, name=None, recorded_at=None)</code> returns the <code>Media</code> without writing, and <code>media.load(path)</code> reads <code>media.json</code>. A file with no video or audio stream raises <code>media.UnusableMedia</code>; a taken id with <code>on_conflict="refuse"</code> raises <code>media.VideoIdTaken</code>.</p>
 
 <!-- ============================================================ audio -->
 <h2 id="audio">2. audio</h2>
-<p>Transcribes and diarizes the whole soundtrack in one pass. Writes <code>transcript.raw.json</code>: words, segments and speaker turns with times, not yet chunked. Needs <code>vidra[audio]</code>.</p>
+<p>Transcribes the whole soundtrack and identifies the speakers. Writes <code>transcript.raw.json</code>: words, segments and speaker turns with their times, before chunking. Requires <code>vidra[audio]</code>.</p>
 <div class="sig">audio.audio(media, out, transcriber="whisper", diarizer="pyannote", model=None, language=None,
             vad_filter=None, compute_type=None, device=None, diarizer_model=None,
             exclusive=None) -&gt; Produced</div>
@@ -93,7 +92,7 @@ made.video_id                         # the id actually used</code></pre>
 <tr><td><code>diarizer</code></td><td><code>"pyannote"</code></td><td><code>pyannote</code>, or <code>none</code>: every segment keeps <code>speaker: null</code>.</td></tr>
 <tr><td><code>model</code></td><td><code>"small"</code></td><td>Whisper's model: <code>tiny</code>, <code>base</code>, <code>small</code>, <code>medium</code>, <code>large-v3</code>, ...</td></tr>
 <tr><td><code>language</code></td><td>detected</td><td>Spoken language, e.g. <code>"en"</code>; detected if not given.</td></tr>
-<tr><td><code>vad_filter</code></td><td><code>True</code></td><td>Skip stretches without speech. Off, Whisper can invent text over silence.</td></tr>
+<tr><td><code>vad_filter</code></td><td><code>True</code></td><td>Skip stretches without speech. Without it, Whisper can produce text for silent passages.</td></tr>
 <tr><td><code>compute_type</code></td><td><code>float16</code> on a GPU, <code>int8</code> on the CPU</td><td>Whisper's precision.</td></tr>
 <tr><td><code>device</code></td><td>cuda, else the CPU</td><td>For both models. Whisper has no <code>mps</code>.</td></tr>
 <tr><td><code>diarizer_model</code></td><td><code>"pyannote/speaker-diarization-3.1"</code></td><td>pyannote's pipeline. Gated: the first download needs <code>HF_TOKEN</code> from an account that accepted its terms.</td></tr>
@@ -101,12 +100,12 @@ made.video_id                         # the id actually used</code></pre>
 </table>
 <pre><code class="python">audio.audio(D / "media.json", D / "transcript.raw.json",
             model="medium", language="en", diarizer="pyannote")</code></pre>
-<p>A setting the chosen backends don't take is refused, e.g. <code>language</code> with <code>transcriber="stub"</code>. A near-silent soundtrack is recorded as silent without running a model.</p>
+<p>A setting the chosen backends don't use is refused, for example <code>language</code> with <code>transcriber="stub"</code>. A near-silent soundtrack is recorded as silent without loading a model.</p>
 <p><code>audio.listen(media, ...)</code> takes a <code>Media</code> and returns the <code>RawTranscript</code>. <code>audio.load(path)</code> reads one back.</p>
 
 <!-- ======================================================= boundaries -->
 <h2 id="boundaries">3–4. boundaries</h2>
-<p>Two steps: <b>evidence</b> finds where content changes (<code>scene</code>, <code>vad</code>, <code>speaker</code> only) and writes <code>cuts.json</code>; <b>boundaries</b> turns it into chunks and writes <code>timeline.json</code>.</p>
+<p>Two steps: <b>evidence</b> finds where the content changes and writes <code>cuts.json</code> (except under <code>uniform</code>), and <b>boundaries</b> turns the changes into chunks and writes <code>timeline.json</code>.</p>
 
 <h3 id="evidence">evidence</h3>
 <div class="sig">boundaries.evidence(out, policy, media=None, raw_transcript=None, stride=5, threshold=27.0,
@@ -118,11 +117,11 @@ made.video_id                         # the id actually used</code></pre>
 <tr><td><code>media</code></td><td></td><td>scene</td><td>Path to <code>media.json</code>.</td></tr>
 <tr><td><code>raw_transcript</code></td><td></td><td>vad, speaker</td><td>Path to <code>transcript.raw.json</code>.</td></tr>
 <tr><td><code>stride</code></td><td><code>5</code></td><td>scene</td><td>Score every Nth frame. Higher is faster but finds more false cuts.</td></tr>
-<tr><td><code>threshold</code></td><td><code>27.0</code></td><td>scene</td><td>Change score needed for a cut (PySceneDetect's content score, computed with OpenCV). Lower finds more.</td></tr>
+<tr><td><code>threshold</code></td><td><code>27.0</code></td><td>scene</td><td>The change score needed for a cut, on PySceneDetect's content scale. Lower finds more cuts.</td></tr>
 <tr><td><code>detect_width</code></td><td><code>320</code></td><td>scene</td><td>Frames are scaled to this width before scoring.</td></tr>
 <tr><td><code>silence_s</code></td><td><code>0.65</code></td><td>vad</td><td>A pause at least this long is a cut.</td></tr>
 </table>
-<p>A setting the policy doesn't read is refused (<code>boundaries.EVIDENCE_SETTINGS</code> maps settings to policies). Scene scores are cached in <code>cuts.json</code>, so trying a new threshold needs no decode:</p>
+<p>A setting the policy doesn't use is refused (<code>boundaries.EVIDENCE_SETTINGS</code> lists them). Scene scores are saved in <code>cuts.json</code>, so a new threshold needs no second decode:</p>
 <pre><code class="python">boundaries.evidence(D / "cuts.json", "scene", media=D / "media.json", stride=5)
 
 for row in boundaries.calibrate(D / "cuts.json"):          # nothing is decoded
@@ -130,8 +129,8 @@ for row in boundaries.calibrate(D / "cuts.json"):          # nothing is decoded
 
 boundaries.retune(D / "cuts.json", D / "cuts.json", threshold=35.0)   # rewrite the cuts</code></pre>
 <ul>
-  <li><code>calibrate(cuts, thresholds=None)</code>: how many cuts each threshold gives, as rows of <code>threshold</code>, <code>cuts</code>, <code>rate</code> (cuts per scored frame) and <code>median_gap_s</code>. <code>cuts</code> is a path or a <code>Cuts</code>; <code>thresholds</code> defaults to a spread on the detector's scale.</li>
-  <li><code>retune(cuts, out, threshold)</code>: rewrites the cuts at a new threshold.</li>
+  <li><code>calibrate(cuts, thresholds=None)</code> returns how many cuts each threshold would give, as rows of <code>threshold</code>, <code>cuts</code>, <code>rate</code> (cuts per scored frame) and <code>median_gap_s</code>. <code>cuts</code> is a path or a <code>Cuts</code>; <code>thresholds</code> defaults to a range suited to the detector.</li>
+  <li><code>retune(cuts, out, threshold)</code> rewrites the cuts at a new threshold.</li>
 </ul>
 
 <h3 id="grid">boundaries</h3>
@@ -145,14 +144,14 @@ boundaries.retune(D / "cuts.json", D / "cuts.json", threshold=35.0)   # rewrite 
 <tr><td><code>cuts</code></td><td>none</td><td>Path to <code>cuts.json</code>; required by every policy but <code>uniform</code>.</td></tr>
 <tr><td><code>chunk_s</code></td><td><code>20.0</code></td><td>The chunk length for <code>uniform</code>, and the default ceiling.</td></tr>
 <tr><td><code>min_s</code></td><td><code>5.0</code></td><td>Shorter chunks merge into a neighbour.</td></tr>
-<tr><td><code>max_s</code></td><td><code>chunk_s</code></td><td>Longer chunks split evenly (a 62 s span at 30 s becomes three of 20.8 s, not 30 + 30 + 2).</td></tr>
+<tr><td><code>max_s</code></td><td><code>chunk_s</code></td><td>Longer chunks are split into equal parts.</td></tr>
 </table>
 <pre><code class="python">boundaries.boundaries(D / "media.json", D / "timeline.json", policy="scene",
                       cuts=D / "cuts.json", min_s=10, max_s=40)
 grid = boundaries.load(D / "timeline.json")
 len(grid), grid.spans[0]            # 12, (0.0, 19.93)</code></pre>
-<p>A last chunk under a quarter of the chunk length joins the one before. <code>min_s</code> above the ceiling is refused. With no cuts, chunks are still capped at <code>max_s</code>.</p>
-<p>Verbs: <code>detect(policy, media=None, transcript=None, stride=5, threshold=27.0, detect_width=320, silence_s=0.65)</code> returns <code>Cuts</code> (<code>None</code> for <code>uniform</code>); <code>timeline(media, policy="uniform", cuts=None, chunk_s=20.0, min_s=5.0, max_s=None)</code> returns the <code>Timeline</code>.</p>
+<p>A final chunk shorter than a quarter of <code>chunk_s</code> is merged into the one before it. A <code>min_s</code> greater than <code>max_s</code> is refused.</p>
+<p>To work in memory, <code>detect(policy, media=None, transcript=None, stride=5, threshold=27.0, detect_width=320, silence_s=0.65)</code> returns the <code>Cuts</code> (<code>None</code> for <code>uniform</code>), and <code>timeline(media, policy="uniform", cuts=None, chunk_s=20.0, min_s=5.0, max_s=None)</code> returns the <code>Timeline</code>:</p>
 <pre><code class="python">m = media.split("shop.mp4")
 grid = boundaries.timeline(m, "scene", cuts=boundaries.detect("scene", media=m))</code></pre>
 <p><code>boundaries.POLICIES</code> maps each policy to what its evidence reads: <code>None</code>, <code>"video"</code> or <code>"audio"</code>.</p>
@@ -160,43 +159,43 @@ grid = boundaries.timeline(m, "scene", cuts=boundaries.detect("scene", media=m))
 <!-- ============================================================ video -->
 <h2 id="video">5. video</h2>
 <p>Decodes the picture once, offers frames to each sampler and stores the ones kept. Writes <code>manifest.json</code> and the JPEGs in <code>store/</code>. See <a href="samplers.html">Samplers</a>.</p>
-<div class="sig">video.video(media, timeline, out, store=None, sampler="uniform", per_second=1.0,
+<div class="sig">video.video(media, timeline, out, store=None, sampler=None, per_second=1.0,
             store_scope="sampled", prune_store=False, on_progress=None) -&gt; Produced</div>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>media</code>, <code>timeline</code></td><td>required</td><td>Paths to <code>media.json</code> and <code>timeline.json</code>.</td></tr>
 <tr><td><code>out</code></td><td>required</td><td>Where to write <code>manifest.json</code>.</td></tr>
-<tr><td><code>store</code></td><td>none</td><td>Frame folder. Without it no frames are kept and <code>describe</code> has nothing to read.</td></tr>
-<tr><td><code>sampler</code></td><td><code>"uniform"</code></td><td>A <a href="samplers.html#specs">sampler spec</a>: <code>"clip,yolo:overview"</code>, or a list of specs and sampler objects, each with its own <a href="samplers.html#settings">settings</a>.</td></tr>
+<tr><td><code>store</code></td><td>none</td><td>The folder for the kept frames. Without it, no frames are saved and <code>describe</code> has nothing to read.</td></tr>
+<tr><td><code>sampler</code></td><td><code>Uniform()</code></td><td>A <a href="samplers.html">sampler</a> object or a list of them, each with its own <a href="samplers.html#settings">settings</a>.</td></tr>
 <tr><td><code>per_second</code></td><td><code>1.0</code></td><td>Frames offered to the samplers per second of video.</td></tr>
 <tr><td><code>store_scope</code></td><td><code>"sampled"</code></td><td><code>"sampled"</code> stores kept frames; <code>"decimated"</code> stores every offered frame.</td></tr>
 <tr><td><code>prune_store</code></td><td><code>False</code></td><td>Delete frames this manifest doesn't use; otherwise the store keeps growing across runs.</td></tr>
 <tr><td><code>on_progress</code></td><td>none</td><td>Called with a <code>Progress</code> after each chunk.</td></tr>
 </table>
-<pre><code class="python">from vidra.video_rag import samplers
+<pre><code class="python">from vidra.video_rag.samplers import Clip, Objects
 
 video.video(D / "media.json", D / "timeline.json", D / "manifest.json", store=D / "store",
-            sampler=[samplers.build("objects", vocabulary=["cart", "basket"],
-                                    confidence=0.4, max_per_chunk=4), "clip"])</code></pre>
-<p>Samplers and questions are checked before decoding. No readable video stream raises <code>video.UnreadableSource</code>.</p>
-<p><code>video.ingest(media, timeline, sampler="uniform", per_second=1.0, frames=None, store_scope="sampled", on_progress=None)</code> takes a <code>Media</code> and <code>Timeline</code>, writes frames into <code>frames</code> (a <code>FrameStore</code>, or <code>None</code>), and returns the <code>Manifest</code>. <code>video.load(path)</code> reads one back.</p>
+            sampler=[Objects(vocabulary=["cart", "basket"], confidence=0.4,
+                             max_per_chunk=4), Clip()])</code></pre>
+<p>Samplers and questions are checked before decoding starts. A file without a readable video stream raises <code>video.UnreadableSource</code>.</p>
+<p><code>video.ingest(media, timeline, sampler=None, per_second=1.0, frames=None, store_scope="sampled", on_progress=None)</code> takes a <code>Media</code> and <code>Timeline</code>, writes frames into <code>frames</code> (a <code>FrameStore</code>, or <code>None</code>), and returns the <code>Manifest</code>. <code>video.load(path)</code> reads one back.</p>
 
 <h3 id="frames">frames</h3>
-<p>The same decode on its own, for a model of your own: a file's frames in order, turned upright. With <code>per_second</code> it keeps the first frame in each slice of that length, as the pipeline does; a frame it skips is never converted to pixels.</p>
+<p><code>video.frames</code> decodes a file as the <code>video</code> stage does, for your own model: the frames in order, rotated upright. With <code>per_second</code>, it yields only the first frame of each <code>1/per_second</code> interval.</p>
 <div class="sig">video.frames(path, per_second=None) -&gt; Iterator[Frame]</div>
 <pre><code class="python">for frame in video.frames("shop.mp4", per_second=2):
     boxes = detector(frame.image)          # your own model, on BGR pixels
     print(f"{frame.media_ts:.1f}s", len(boxes))</code></pre>
-<p>Each <code>video.Frame</code> carries <code>index</code> (its position among all decoded frames), <code>media_ts</code> (seconds), <code>pts</code> and <code>image</code>. For a stream, <a href="live.html#frames"><code>live.frames</code></a>.</p>
+<p>Each <code>video.Frame</code> has <code>index</code> (its position among all decoded frames), <code>media_ts</code> (seconds), <code>pts</code> and <code>image</code>. For a live stream, use <a href="live.html#frames"><code>live.frames</code></a>.</p>
 
 <h3 id="frame-store">The frame store</h3>
-<p><code>video.FrameStore(root, quality=95, fmt="jpg")</code> writes one JPEG per kept frame into <code>root</code>, named by decode position; a frame kept twice is one file. <code>quality</code> is the JPEG quality. Images a sampler made from a frame (<a href="custom-samplers.html#views">views</a>, such as <a href="samplers.html#crops">crops</a>) are stored beside it as <code>&lt;index&gt;.&lt;sampler&gt;.&lt;n&gt;.jpg</code>, and <code>prune_store</code> keeps the ones the manifest names.</p>
+<p><code>video.FrameStore(root, quality=95, fmt="jpg")</code> writes each kept frame once into <code>root</code> as a JPEG named by its position in the video. <a href="custom-samplers.html#views">Views</a> such as <a href="samplers.html#crops">crops</a> are stored beside their frame as <code>&lt;index&gt;.&lt;sampler&gt;.&lt;n&gt;.jpg</code>.</p>
 <pre><code class="python">store = video.FrameStore(D / "store")
 plan = video.ingest(media.load(D / "media.json"), boundaries.load(D / "timeline.json"),
                     "clip", frames=store)</code></pre>
 
 <h3 id="recreate">recreate</h3>
-<p>Rebuilds every frame from the manifest and the video, and can compare them byte for byte with an existing store:</p>
+<p>Rebuilds every stored frame from the manifest and the video, and can compare the result byte for byte with an existing store:</p>
 <div class="sig">video.recreate(*, manifest, video, out, verify=None, force=False, quality=95) -&gt; dict</div>
 <table class="params">
 <tr><th>Argument</th><th>Meaning</th></tr>
@@ -211,16 +210,16 @@ plan = video.ingest(media.load(D / "media.json"), boundaries.load(D / "timeline.
                       out="rebuilt", verify=D / "store")
 done["named"], done["written"], done["missing"], done["problems"]
 done["verified"]["identical"]          # True when every frame matches</code></pre>
-<p>No file at <code>video</code> raises <code>video.MissingVideo</code>. Views a sampler made are its own code's output and are not rebuilt: <code>done["views_not_rebuilt"]</code> counts them when there are any.</p>
+<p>A missing video file raises <code>video.MissingVideo</code>. Views made by a sampler are not rebuilt; <code>done["views_not_rebuilt"]</code> counts them.</p>
 
 <!-- ============================================================== cut -->
 <h2 id="cut">6. cut</h2>
-<p>Cuts the raw transcript onto the grid; each word goes to the chunk its midpoint is in. Writes <code>transcript.json</code>. No model, so a new grid never re-runs Whisper.</p>
+<p>Splits the raw transcript into chunks by each word's midpoint and writes <code>transcript.json</code>. No model runs, so a new grid never re-runs Whisper.</p>
 <div class="sig">cut.cut(timeline, raw_transcript, out) -&gt; Produced</div>
 <pre><code class="python">cut.cut(D / "timeline.json", D / "transcript.raw.json", D / "transcript.json")
 spoken = cut.load(D / "transcript.json")
 spoken.chunks[3]["text"], spoken.chunks[3]["structured"]["speakers"]</code></pre>
-<p><code>cut.apply(timeline, raw)</code> does it in memory. Silent chunks are kept with empty text, so chunk ids match every other file.</p>
+<p><code>cut.apply(timeline, raw)</code> does the same in memory. Chunks without speech are kept with empty text, so chunk ids match the other files.</p>
 
 <!-- ========================================================= describe -->
 <h2 id="describe">7. describe</h2>
@@ -235,26 +234,26 @@ spoken.chunks[3]["text"], spoken.chunks[3]["structured"]["speakers"]</code></pre
 <tr><td><code>out</code></td><td>required</td><td>Where to write <code>descriptions.json</code>.</td></tr>
 <tr><td><code>previous</code></td><td>none</td><td>Earlier <code>descriptions.json</code> (usually <code>out</code>); current answers are reused.</td></tr>
 <tr><td><code>vlm</code></td><td><code>OpenAI()</code></td><td>The vision model.</td></tr>
-<tr><td><code>samplers</code></td><td>all</td><td>Only these answer ids, e.g. <code>["clip:text"]</code>; others are kept from <code>previous</code>.</td></tr>
-<tr><td><code>limit</code></td><td>none</td><td>Max new calls this run; a later run with <code>previous=</code> continues. At least 1.</td></tr>
-<tr><td><code>max_output_tokens</code></td><td>2000</td><td>Cap on one answer; too low truncates structured answers. Changing it re-describes everything.</td></tr>
+<tr><td><code>samplers</code></td><td>all</td><td>Describe only these answer ids, such as <code>["clip:text"]</code>; the others are copied from <code>previous</code>.</td></tr>
+<tr><td><code>limit</code></td><td>none</td><td>The most new calls to make in this run. A later run with <code>previous=</code> continues where it stopped. Must be at least 1.</td></tr>
+<tr><td><code>max_output_tokens</code></td><td>8000</td><td>The token limit for one answer, reasoning included. Too low a limit cuts off structured answers. Changing it re-describes everything.</td></tr>
 <tr><td><code>on_progress</code></td><td>none</td><td>Called with a <code>Progress</code> after each call, in completion order.</td></tr>
-<tr><td><code>max_images</code></td><td>none</td><td>Refuse, before any call, a run whose frames and <a href="custom-samplers.html#views">views</a> would send more than this many images in one call.</td></tr>
+<tr><td><code>max_images</code></td><td>none</td><td>Refuse the run, before any call is made, if a single call would send more than this many images (frames and <a href="custom-samplers.html#views">views</a>).</td></tr>
 </table>
 <pre><code class="python">describe.describe(D / "manifest.json", D / "timeline.json", D / "store",
                   D / "descriptions.json", previous=D / "descriptions.json",
-                  vlm=OpenAI("gpt-5.4-mini"), limit=20)
+                  vlm=OpenAI("gpt-6-luna"), limit=20)
 
 said = describe.load(D / "descriptions.json")
 answer = said.chunks[0]["samplers"]["clip"]
 answer["description"]           # the prose
 answer["structured"]            # the fields: {"setting": ..., "people": [...], ...}</code></pre>
-<p>A frame whose sampler made views is sent as those views, labelled; <code>frame_count</code> and <code>frame_indexes</code> count each frame once, and <code>image_count</code> appears when views made the images outnumber the frames.</p>
-<p>Frames are read only from the store: a missing store or frame raises <code>describe.StoreUnavailable</code>; an unreachable model, <code>describe.DescriberUnavailable</code>. One failed call fails the run and its new answers are not written.</p>
-<p><code>describe.answer(manifest, timeline, frames, vlm=None, samplers=None, limit=None, existing=None, max_output_tokens=None, on_progress=None, max_images=None)</code> works in memory; <code>existing</code> is an earlier <code>Descriptions</code>. Question functions are on <a href="questions.html">Questions</a>.</p>
+<p>A frame with views is sent as its labelled views; <code>image_count</code> is added when images and frames differ in number. Frames are read only from the store: a missing frame raises <code>describe.StoreUnavailable</code>, an unreachable model <code>describe.DescriberUnavailable</code>.</p>
+<div class="warn"><p>If any call fails, the whole run fails and none of its new answers are written.</p></div>
+<p><code>describe.answer(manifest, timeline, frames, vlm=None, samplers=None, limit=None, existing=None, max_output_tokens=None, on_progress=None, max_images=None)</code> does the same in memory; <code>existing</code> is an earlier <code>Descriptions</code> to reuse. Adding and listing questions is covered in <a href="questions.html">Questions</a>.</p>
 
 <h3 id="ask">ask: images you hold</h3>
-<p>One question about images you already have, with no manifest, grid or store: crops from a tracker, or a snapshot from a camera alert. Nothing is written and nothing is resumed.</p>
+<p>Asks one question about images you already have, such as crops from a tracker, with no manifest, grid or store. Nothing is written.</p>
 <div class="sig">describe.ask(images, question, *, timestamps=None, vlm=None, max_output_tokens=None) -&gt; Description</div>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
@@ -262,19 +261,19 @@ answer["structured"]            # the fields: {"setting": ..., "people": [...], 
 <tr><td><code>question</code></td><td>required</td><td>Any question in <code>describe.questions()</code>; its shape decides the fields (<a href="questions.html">Questions</a>).</td></tr>
 <tr><td><code>timestamps</code></td><td><code>0, 1, 2, ...</code></td><td>Each image's time in seconds, shown to the model beside it.</td></tr>
 <tr><td><code>vlm</code></td><td><code>OpenAI()</code></td><td>The vision model.</td></tr>
-<tr><td><code>max_output_tokens</code></td><td>2000</td><td>Cap on the answer.</td></tr>
+<tr><td><code>max_output_tokens</code></td><td>8000</td><td>The token limit for the answer, reasoning included.</td></tr>
 </table>
 <pre><code class="python">said = describe.ask([crop_1, crop_2, crop_3], "yolo", timestamps=[12.0, 14.5, 17.0],
-                    vlm=OpenAI("gpt-5.4-mini"))
+                    vlm=OpenAI("gpt-6-luna"))
 said.summary                    # the prose
 said.fields["people"]           # [{"appearance": ..., "clothing": ..., "gender": ...}]</code></pre>
-<p>It returns a <code>describe.Description</code>: <code>summary</code> and <code>fields</code>. An unknown question, no images, or a different number of timestamps is refused before the call. <code>describe.ask_async</code> takes the same arguments as a coroutine: use it inside a running event loop, or to ask several at once, up to the model's <code>concurrency</code>.</p>
+<p>It returns a <code>describe.Description</code> with <code>summary</code> and <code>fields</code>. Bad arguments are refused before the call. <code>describe.ask_async</code> is the coroutine version, for a running event loop or for several questions at once:</p>
 <pre><code class="python">answers = await asyncio.gather(*(describe.ask_async(t.crops, "yolo", vlm=vlm)
                                  for t in tracks))</code></pre>
 
 <!-- =========================================================== glance -->
 <h2 id="glance">7b. glance</h2>
-<p>Embeds each chunk's kept frames with a visual embedder, with no answer in between: beside <code>describe</code>, or instead of it. Writes <code>glances.json</code>, <code>embedded.json</code>'s shape, which <code>search</code> reads like any other index.</p>
+<p>Embeds each chunk's kept frames directly with a visual embedder, alongside <code>describe</code> or instead of it. Writes <code>glances.json</code>, in <code>embedded.json</code>'s format, which <code>search</code> reads like any other index.</p>
 <div class="sig">glance.glance(manifest, timeline, store, out, previous=None, visual_embedder=None,
               samplers=None, batch=16, on_progress=None) -&gt; Produced</div>
 <table class="params">
@@ -300,11 +299,9 @@ index.units[0]["sampler_id"]      # "clip:image"
 index.units[0]["structured"]      # {"frames": [12, 15, 19]}
 
 search("a forklift by the door", "shop", models=Models(visual_embedder=seen), database=db)</code></pre>
-<p>One unit per chunk and sampler run: every frame the run kept there and every <a href="custom-samplers.html#views">view</a> it made, in order. Its <code>sampler_id</code> is <code>&lt;run&gt;:image</code>, its <code>question</code> is <code>image</code> (reserved: no describe question may use it) and its <code>content</code> is empty. A unit with more images than the model's <code>max_images</code> is refused before any image is read.</p>
-<p>Units are stored under the model's key plus <code>:images</code> (<code>glance.space_of(visual_embedder)</code>). A model that also embeds text never overwrites its text rows, and search ranks frames and text separately, then fuses them by rank (<a href="search.html#arguments">search</a>).</p>
-<p><code>glance.look(manifest, timeline, frames, visual_embedder=None, samplers=None, previous=None, batch=16, on_progress=None)</code> works in memory: <code>frames</code> is a <code>video.FrameStore</code>, <code>previous</code> an earlier document, and it returns the document.</p>
-<p>Against <code>describe</code>, it gives up fields to filter on, text for full-text search, and text for the aggregates. Image models handle appearance well and actions, negation, counts and on-screen writing poorly.</p>
-<p>The image model matters most. In our tests, SigLIP 2 searched frames about as well as described text, and CLIP ViT-B/32 clearly worse. Frames and text together beat either alone with a strong image model. With a weak one, fusion lowers the ranking, because it weighs every ranking equally.</p>
+<p>Each chunk and sampler run gives one unit: the frames the run kept there and their <a href="custom-samplers.html#views">views</a>. Its <code>sampler_id</code> is <code>&lt;run&gt;:image</code>, its <code>question</code> is <code>image</code> (reserved) and its <code>content</code> is empty. A unit over the model's <code>max_images</code> is refused before any image is read.</p>
+<p>Units are stored under the model's key plus <code>:images</code> (<code>glance.space_of(visual_embedder)</code>), so they never overwrite text vectors. Search ranks frames and text separately and merges the rankings (see <a href="search.html#arguments">search</a>). <code>glance.look(manifest, timeline, frames, visual_embedder=None, samplers=None, previous=None, batch=16, on_progress=None)</code> does the same in memory.</p>
+<div class="note"><p>Unlike <code>describe</code>, <code>glance</code> gives no fields, no full-text search and nothing for the aggregates. Image models match appearance well but actions, negation, counts and on-screen text poorly. Prefer SigLIP 2 to CLIP ViT-B/32: fusing a weak image model with text search can rank worse than text alone.</p></div>
 
 <!-- ============================================================ embed -->
 <h2 id="embed">8. embed</h2>
@@ -328,11 +325,11 @@ search("a forklift by the door", "shop", models=Models(visual_embedder=seen), da
 index = embed.load(D / "embedded.json")
 index.embedder                    # "local:BAAI/bge-small-en-v1.5:384"
 index.units[0]["content"], len(index.units[0]["vector"])</code></pre>
-<p>A unit's text is the answer's prose then its fields, keys sorted, so the same answer always gives the same vector.</p>
+<p>A unit's text is the answer's prose followed by its fields, with the keys sorted, so the same answer always produces the same text.</p>
 <p><code>embed.encode(descriptions=None, transcript=None, previous=None, embedder=None, batch=64, on_progress=None)</code> works in memory and returns a list of <code>embed.Unit</code>: <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>content</code>, <code>structured</code>, <code>vector</code>. An unreachable embedder raises <code>embed.EmbedderUnavailable</code>.</p>
 
 <h2 id="in-memory">The whole chain in memory</h2>
-<p>The verbs chain without an output folder; only frames are written, to the store you name:</p>
+<p>The in-memory functions can be chained without an output folder. Only the frames are written, to the store you pass:</p>
 <pre><code class="python">from vidra import LocalEmbedder, Stub
 
 m = media.split("shop.mp4")

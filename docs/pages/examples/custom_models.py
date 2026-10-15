@@ -13,6 +13,7 @@ import sys
 import vidra
 from vidra import LLM, VLM, Embedder, Folder, Models, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip
 
 vidra.configure(env_file=".env")
 
@@ -28,7 +29,7 @@ def json_format(schema):
 class MyVLM(VLM):
     """Describes frames. `generate` may be async, as here, or a plain def."""
 
-    key = "mine:gpt-5.4-mini"       # the identity stored with every answer
+    key = "mine:gpt-6-luna"       # the identity stored with every answer
     concurrency = 4                 # calls in flight at once
 
     def __init__(self):
@@ -53,7 +54,7 @@ class MyVLM(VLM):
         messages = ([{"role": "system", "content": system}] if system else [])
         messages.append({"role": "user", "content": content})
         response = await self.client.chat.completions.create(
-            model="gpt-5.4-mini", messages=messages,
+            model="gpt-6-luna", messages=messages,
             max_completion_tokens=max_output_tokens, **json_format(schema))
         return response.choices[0].message.content    # JSON text is parsed for you
 
@@ -62,7 +63,7 @@ class MyLLM(LLM):
     """Writes summaries, chapters, events and entity accounts. A plain def runs
     in a thread."""
 
-    key = "mine:gpt-5.4-mini"
+    key = "mine:gpt-6-luna"
 
     def __init__(self):
         from openai import OpenAI
@@ -72,7 +73,7 @@ class MyLLM(LLM):
         messages = ([{"role": "system", "content": system}] if system else [])
         messages.append({"role": "user", "content": prompt})
         response = self.client.chat.completions.create(
-            model="gpt-5.4-mini", messages=messages,
+            model="gpt-6-luna", messages=messages,
             max_completion_tokens=max_output_tokens, **json_format(schema))
         return response.choices[0].message.content
 
@@ -95,7 +96,7 @@ class MyEmbedder(Embedder):
 models = Models(vlm=MyVLM(), llm=MyLLM(), embedder=MyEmbedder())
 database = Folder("data/out")
 
-run = video_rag(sys.argv[1], "data/out", sampler="clip", use_audio=False,
+run = video_rag(sys.argv[1], "data/out", sampler=Clip(), use_audio=False,
                 models=models, database=database)
 moments, _ = search("people at a counter", run.video_id, models=models, database=database)
 print([(m.chunk_id, round(m.start_ts, 1)) for m in moments])
@@ -104,4 +105,4 @@ d = run.folder
 video = aggregates.record(timeline=d / "timeline.json", descriptions=d / "descriptions.json")
 aggregates.summary(input=video.excerpt(answers={"clip": ["summary"]}),
                    out=d / "answers" / "summary.json", llm=models.llm)
-print(aggregates.load(d / "answers" / "summary.json").stats["model"])   # mine:gpt-5.4-mini
+print(aggregates.load(d / "answers" / "summary.json").stats["model"])   # mine:gpt-6-luna

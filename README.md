@@ -1,165 +1,129 @@
 # VIDRA
 
-**Video Description, Retrieval & Aggregation.** A Python library that turns a
-video into a searchable index of moments, and answers questions about the
-whole video.
+VIDRA (Video Description, Retrieval & Aggregation) is a Python library that
+turns videos into a searchable index of moments and answers questions about
+whole videos.
 
-- **`video_rag`** splits a video into time chunks, keeps a few frames per
-  chunk, describes them with a vision model, transcribes the audio, and embeds
-  the text. A query returns the matching chunks with their start and end times.
-- **`aggregates`** reads what `video_rag` wrote and answers questions about the
-  whole video: counts, speakers, a summary, chapters, events, named entities,
-  and which people or objects recur.
+- **`video_rag`** splits a video into time chunks, keeps a few frames from each,
+  has a vision model describe them, transcribes the audio, and embeds the
+  text. A search returns the matching chunks with their start and end times.
+  It also works on live streams.
+- **`aggregates`** reads what `video_rag` produced and answers questions about
+  the whole video: statistics, speakers, a summary, chapters, events, named
+  entities, and the people or objects that recur.
 
-Models and databases are pluggable: use the ready-made ones (OpenAI,
-Anthropic, any OpenAI-compatible server, local embedders; Supabase or a local
-folder), or subclass a base class to bring your own.
+Models and databases are pluggable. VIDRA includes classes for OpenAI,
+Anthropic, any OpenAI-compatible server, local embedders, Supabase and a local
+folder, and you can subclass a base class to add your own.
 
-## Documentation
+## Installation
 
-The full docs are HTML pages in [`docs/`](docs/): open
-[`docs/index.html`](docs/index.html) in a browser. They work offline, straight
-from disk, with search across every page.
-
-| Page | Covers |
-|---|---|
-| Start here | install, keys, a quickstart |
-| Concepts | chunks, the video's folder, answer ids, reuse |
-| Recipes | complete scripts, also in [`docs/pages/examples/`](docs/pages/examples/) |
-| The pipeline, Stages | `video_rag()`, `workflow`, and each stage with every setting |
-| Samplers, Questions, Search | which frames are kept, what the vision model is asked, finding moments |
-| Aggregates, Custom prompts | whole-video answers, and adding your own |
-| Models, Databases | the ready-made ones, and writing your own |
-| Reference | every file's fields, every error, hardware |
-
-`python docs/pages/build.py --check` confirms the docs mention every public function
-and parameter.
-
-## Requirements
-
-- Python 3.11 to 3.14.
-- No system FFmpeg: decoding uses PyAV, which bundles it.
-- An API key for a hosted model, unless every model runs locally.
-- Optional: an NVIDIA GPU. Everything also runs on the CPU, more slowly.
-
-Tested on Windows 11, with an NVIDIA GPU and on the CPU. Linux and macOS have
-not been run.
-
-## Install
+VIDRA requires Python 3.11 or later. It is not on PyPI yet; install it from a
+clone of the repository:
 
 ```bash
 git clone https://github.com/Vex-V/FalCONvar.git
 cd FalCONvar
-pip install -r requirements.txt
+pip install ".[all]"
 ```
 
-On an NVIDIA GPU, add PyTorch's CUDA index (pip's default PyTorch build on
-Windows is CPU-only):
-
-```bash
-pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
-```
-
-`vidra` itself is not installed: run your scripts from the repository root,
-or add the root to `PYTHONPATH`.
-
-## Configuration
-
-The library reads API keys from the environment and never reads a `.env`
-file on its own. Copy `.env.example` to `.env`, fill in the keys you use, and
-load it:
-
-```python
-import vidra
-vidra.configure(env_file=".env")
-```
-
-or pass keys in code: `OpenAI(api_key=...)`, `Supabase(url=..., key=...)`.
-
-| Variable | Used for |
+| Extra | Adds |
 |---|---|
-| `OPENAI_API_KEY` | `OpenAI`, `OpenAIEmbedder` |
-| `ANTHROPIC_API_KEY` | `Anthropic` |
-| `HF_TOKEN` | the first download of pyannote's speaker model |
-| `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_PUBLISHABLE_KEY` | the Supabase database |
+| none | decoding, the `uniform` and `text` samplers, hosted models, Supabase and folder storage |
+| `[local]` | PyTorch models: the `clip`, `yolo` and `objects` samplers, local embedders, `ner`, `sentiment` |
+| `[audio]` | transcription (faster-whisper) and speaker identification (pyannote) |
+| `[all]` | both of the above |
 
-Output goes to `data/` in the checkout by default. `vidra.configure(data_root=...)`
-or the `VIDRA_DATA` variable moves it.
+On Windows, pip installs a CPU-only PyTorch by default. To use an NVIDIA GPU,
+add `--extra-index-url https://download.pytorch.org/whl/cu130`.
+`requirements.txt` pins the exact versions VIDRA is tested with.
 
 ## Quick start
 
 ```python
 import vidra
-from vidra import LocalEmbedder, Models, OpenAI, Supabase, aggregates
+from vidra import Folder, LocalEmbedder, Models, OpenAI, aggregates
 from vidra.video_rag import search, video_rag
+from vidra.video_rag.samplers import Clip, Yolo
 
-vidra.configure(env_file=".env")
-models = Models(vlm=OpenAI("gpt-5.4-mini"),      # describes frames
-                llm=OpenAI("gpt-5.4-mini"),      # summaries, chapters, events
-                embedder=LocalEmbedder())        # text to vectors, on this machine
-db = Supabase()                                  # or Folder("data/out"): no server
+vidra.configure(env_file=".env")                 # reads OPENAI_API_KEY
+models = Models(vlm=OpenAI("gpt-6-luna"),      # describes frames
+                llm=OpenAI("gpt-6-luna"),      # writes summaries and chapters
+                embedder=LocalEmbedder())        # embeds text on this machine
+db = Folder("data/out")                          # search the output folder directly
 
-# Index a video: every artifact goes to data/out/<video_id>/, and a copy to db.
-run = video_rag("shop.mp4", "data/out", policy="scene", sampler="clip,yolo",
+# Index a video. Every result is written to data/out/shop/.
+run = video_rag("shop.mp4", "data/out", policy="scene", sampler=[Clip(), Yolo()],
                 models=models, database=db)
 
 # Find moments.
 moments, notes = search("a customer paying in cash", run.video_id,
                         models=models, database=db)
 for m in moments:
-    print(m.chunk_id, m.start_ts, m.end_ts, m.hits[0]["content"][:80])
+    print(f"{m.start_ts:.0f}-{m.end_ts:.0f}s", m.hits[0]["content"][:80])
 
-# Answer questions about the whole video.
+# Summarise the whole video.
 d = run.folder
 video = aggregates.record(timeline=d / "timeline.json",
                           transcript=d / "transcript.json",
                           descriptions=d / "descriptions.json")
-said = video.excerpt(transcript=True)
-done = aggregates.aggregate(out=d / "aggregates", models=models, database=db,
-                            summary=said, chapters=said, stats=video)
-print(aggregates.load(done.artifacts["summary"]).payload["summary"])
+told = video.excerpt(transcript=True, answers={"clip": ["summary"]})
+aggregates.summary(input=told, out=d / "answers" / "summary.json", llm=models.llm)
+print(aggregates.load(d / "answers" / "summary.json").payload["summary"])
 ```
 
-For Supabase, run `db/supabase/video_rag.sql` and then
-`db/supabase/aggregates.sql` once, and add `vidra` under Settings → API →
-Exposed schemas.
+## Documentation
+
+The documentation is a set of HTML pages in [`docs/`](docs/). Open
+[`docs/index.html`](docs/index.html) in a browser; the pages work offline and
+include search. They cover installation and configuration, the pipeline and
+each of its stages, samplers and questions, search, aggregates, writing your
+own models, databases and samplers, and a reference for every file format and
+error. [`docs/pages/examples/`](docs/pages/examples/) has complete scripts.
+
+## Configuration
+
+VIDRA reads API keys from environment variables. It does not read a `.env`
+file unless you call `vidra.configure(env_file=".env")`. You can also pass
+keys directly, for example `OpenAI(api_key=...)`.
+
+| Variable | Used by |
+|---|---|
+| `OPENAI_API_KEY` | `OpenAI`, `OpenAIEmbedder` |
+| `ANTHROPIC_API_KEY` | `Anthropic` |
+| `HF_TOKEN` | the first download of pyannote's speaker model |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_PUBLISHABLE_KEY` | `Supabase` |
+| `VIDRA_DATA`, `VIDRA_WEIGHTS` | where output and model weights are stored |
+
+To use Supabase, run `db/supabase/video_rag.sql` and then
+`db/supabase/aggregates.sql` in its SQL editor, and add `vidra` under
+Settings → API → Exposed schemas.
 
 ## Hardware
 
 PyTorch models use CUDA if available, then Apple's `mps`, then the CPU.
-Whisper uses CUDA or the CPU. Time per minute of video on a mid-range laptop
-GPU and on its CPU:
+Approximate processing time per minute of video on a mid-range laptop:
 
-| Step | GPU | CPU |
+| Step | NVIDIA GPU | CPU only |
 |---|---|---|
-| Whisper + pyannote | ~6 s | ~1.5 min |
+| Transcription and speakers (Whisper `small` + pyannote) | ~6 s | ~1.5 min |
 | `clip`, `yolo` and `objects` samplers | ~25 s | ~50 s |
-| `text` sampler | ~15 s | ~3.5 min |
+| `text` sampler | ~12 s | ~12 s |
 
-The `mps` path has not been run on a Mac. Intel Macs cannot install the
-PyTorch in `requirements.txt`.
+## Status
 
-## Checking an install
+VIDRA has been tested on Windows 11, with and without an NVIDIA GPU, on
+Python 3.11 to 3.14. It has not yet been run on Linux or macOS. The `OpenAI`
+and `OpenAIEmbedder` classes have been run against OpenAI; `Anthropic` and
+`Chat` with servers other than OpenAI have only been tested against a mock
+server.
 
-- `python -m vidra.shared.contracts.schemas --check` confirms the JSON
-  Schemas in `db/json/` match the document types.
-- `video.recreate(...)` rebuilds a video's frames from its manifest and
-  compares them byte for byte.
-- `python docs/pages/build.py --run a.mp4 b.mp4` runs every docs example on two
-  videos, with free stand-ins for the hosted models.
+## Development
 
-The full library check passed on Python 3.11, 3.12, 3.13 and 3.14.
-
-## Project layout
-
-```text
-vidra/
-  workflow.py     both tiers in one call
-  video_rag/      media, audio, boundaries, video, cut, describe, embed, retrieve
-  aggregates/     records and inputs, the aggregators, the pipeline, combining videos
-  shared/         config, errors, document types, storage, models
-docs/             index.html to open; pages/ holds the rest, examples and build.py
-db/               Supabase SQL, generated JSON Schemas
-data/             default output location; not in git
+```bash
+pip install -r requirements.txt
+python -m eval.library_check              # checks the whole library; exits 1 on failure
+python -m eval.library_check --local      # also runs the local models
+python docs/pages/build.py --check        # docs cover every public name and parameter
+python -m vidra.shared.contracts.schemas --check   # JSON Schemas match the document types
 ```
-

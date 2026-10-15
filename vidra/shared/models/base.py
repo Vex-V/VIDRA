@@ -78,7 +78,7 @@ def parse_json(raw: str) -> Any:
 # ------------------------------------------------------------- the classes
 
 class _Model:
-    #: The model's identity, e.g. `openai:gpt-5.4-mini`. Required.
+    #: The model's identity, e.g. `openai:gpt-6-luna`. Required.
     key: str = ""
     #: Calls in flight at once.
     concurrency: int = 8
@@ -176,7 +176,7 @@ def _misfit(role: str, model: Any) -> Optional[str]:
     if not isinstance(model, wanted):
         article = "a" if wanted in (VLM, VisualEmbedder) else "an"
         return (f"{role} must be {article} {wanted.__name__}, not {type(model).__name__}"
-                + (" -- pass a model object, e.g. OpenAI(\"gpt-5.4-mini\")"
+                + (" -- pass a model object, e.g. OpenAI(\"gpt-6-luna\")"
                    if isinstance(model, str) else ""))
     declared = inspect.getattr_static(model, "key", "")
     if isinstance(declared, property):
