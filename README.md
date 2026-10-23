@@ -127,3 +127,7 @@ python -m eval.library_check --local      # also runs the local models
 python docs/pages/build.py --check        # docs cover every public name and parameter
 python -m vidra.shared.contracts.schemas --check   # JSON Schemas match the document types
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
