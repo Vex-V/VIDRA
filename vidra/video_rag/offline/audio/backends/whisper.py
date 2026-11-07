@@ -37,17 +37,19 @@ class WhisperTranscriber:
 
         # Preload the CUDA libraries before CTranslate2 asks for them by name (Windows).
         cuda.enable()
-        import torch
+        import ctranslate2
         from faster_whisper import WhisperModel
 
         # Not `default_device()`: CTranslate2 runs on cuda or the CPU, never mps.
+        # Asked of CTranslate2 itself, not torch, which faster-whisper does not need.
         if device == "mps":
             raise ModelUnavailable(
                 "Whisper (CTranslate2) runs on cuda or cpu, not mps; leave device "
                 "unset and it uses the CPU on a Mac")
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device or ("cuda" if ctranslate2.get_cuda_device_count() > 0
+                                 else "cpu")
         self.compute_type = compute_type or DEFAULT_COMPUTE.get(self.device, "int8")
-        # torch seeing a GPU says nothing about CTranslate2's libraries, and
+        # Seeing a GPU says nothing about CTranslate2's CUDA libraries, and
         # without them it fails at the first encode, after the load succeeded.
         lost = cuda.missing() if self.device == "cuda" else []
         if lost:
