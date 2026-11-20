@@ -24,6 +24,8 @@ class Yolo(DetectionChangeSampler):
     """
 
     name = "yolo"
+    # Its settings reach config() through the detector and the descriptor.
+    _settings_by_hand = True
 
     def __init__(
         self,

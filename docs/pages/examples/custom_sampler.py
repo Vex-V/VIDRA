@@ -52,9 +52,8 @@ class Motion(Sampler):
     def last_score(self):
         return self._last_score         # recorded beside each kept frame
 
-    def config(self):
-        # What the manifest records about the run: plain JSON only.
-        return {**self._base_config(), "threshold": self.threshold, "scale": self.scale}
+    # threshold and scale are recorded in the manifest without a config():
+    # every __init__ parameter is, read from the attribute of the same name.
 
 
 source = sys.argv[1]

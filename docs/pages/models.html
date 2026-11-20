@@ -345,6 +345,7 @@ class MyVoices(VoiceEmbedder):
 <h3 id="speech-method">Transcriber.transcribe and Diarizer.diarize</h3>
 <div class="sig">transcribe(samples) -&gt; Transcript        diarize(samples) -&gt; Diarization</div>
 <p>Each is called once per video with the whole soundtrack: a 1-D float32 numpy array of mono samples at the class's <code>rate</code> (default 16000; another rate gets the file decoded at that rate). Times are seconds from the start. <code>transcribe</code> returns a <code>Transcript</code> of <code>Segment</code>s, each with its <code>Word</code>s; word times matter, because each word goes to the chunk and the speaker holding its midpoint. <code>diarize</code> returns a <code>Diarization</code> of <code>Turn</code>s; labels need only mean something within the video. Both are called directly, in the calling thread, not through <code>concurrency</code>. <code>config()</code> returns the settings recorded in <code>transcript.raw.json</code> (default: the key); never put a credential in it.</p>
+<p>A model that answers both questions in one call, such as one that transcribes and labels speakers together, can subclass both and fill both slots with one object: <code>Models(transcriber=m, diarizer=m)</code>. <code>transcribe</code> is always called first, on the same track, so it can keep its answer for <code>diarize</code> to return. Both slots are recorded under its key without writing <code>config()</code>.</p>
 <pre><code class="python">from vidra import Transcriber
 from vidra.video_rag import audio
 

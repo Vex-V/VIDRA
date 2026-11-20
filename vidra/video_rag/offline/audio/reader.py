@@ -36,6 +36,17 @@ def _ask(model: Any, method: str, samples: Any, wanted: type) -> Any:
     return answer
 
 
+def model_block(transcriber: Transcriber, diarizer: Diarizer) -> dict[str, Any]:
+    """Both models' `config()`, with each slot's key filled in when a config
+    leaves it out -- one object in both slots answers `config()` once, with
+    only its first base's half, and a hand-written config may forget its own.
+    A value a config gives is kept, so nothing already written changes."""
+    block = {**transcriber.config(), **diarizer.config()}
+    block.setdefault("transcriber", transcriber.key)
+    block.setdefault("diarizer", diarizer.key)
+    return block
+
+
 def speaker_at(diarization: Diarization, ts: float) -> Optional[str]:
     """Who was speaking at ``ts``. None when nobody was, or nobody knows."""
     for turn in diarization.turns:
@@ -82,7 +93,7 @@ def listen(uri: str, transcriber: Transcriber, diarizer: Diarizer,
         # No model is loaded at all. "No speech" is the finding.
         return RawTranscript(
             video_id=video_id,
-            model={**transcriber.config(), **diarizer.config(),
+            model={**model_block(transcriber, diarizer),
                    "ran": False, "why": "track is silent"},
             track=track.as_dict(),
             stats={"decode_s": round(decode_s, 3), "segments": 0, "words": 0,
@@ -103,7 +114,7 @@ def listen(uri: str, transcriber: Transcriber, diarizer: Diarizer,
 
     return RawTranscript(
         video_id=video_id,
-        model={**transcriber.config(), **diarizer.config(), "ran": True,
+        model={**model_block(transcriber, diarizer), "ran": True,
                "language": transcript.language,
                "language_probability": transcript.language_probability},
         track=track.as_dict(),

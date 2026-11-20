@@ -13,10 +13,23 @@ frame. Prompts are opaque strings here.
 `views` says how a kept frame is shown to the model: by default the frame
 itself (`View.FRAME`); a sampler may add or substitute images made from it --
 crops, enlargements, a marked copy -- each stored beside the frame.
+
+`config()` is what the manifest records, and the manifest's fingerprint is
+what decides whether stored answers are still current -- so a setting left
+out of it changes the frames kept and not the fingerprint, and describe
+reuses answers about frames it no longer has. A subclass's own constructor
+parameters are therefore recorded without being asked: each is read off the
+instance (`self.<name>`, else `self._<name>`) and added to the base settings.
+A setting with a `config()` of its own (a model part) is recorded by it; one
+that is not plain JSON is refused by name. A class that writes `config()`
+itself records by hand from there down, as the built-ins do -- their
+fingerprints are unchanged.
 """
 
 from __future__ import annotations
 
+import inspect
+import json
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -70,10 +83,43 @@ class Deferred:
         return getattr(self.load(), name)
 
 
+#: Keys the base settings use; a subclass setting may not take one.
+_BASE_KEYS = ("id", "name", "min_interval_s", "max_per_chunk", "prompts")
+
+
+def _init_parameters(cls: type) -> list[str]:
+    """The named parameters of `cls.__init__`, without self, *args, **kwargs."""
+    try:
+        params = inspect.signature(cls.__init__).parameters.values()
+    except (TypeError, ValueError):
+        return []
+    return [p.name for p in params if p.name != "self"
+            and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+
+
 class Sampler(ABC):
     """Base class for frame-selection strategies."""
 
     name: str = "base"
+
+    #: Constructor parameters recorded in `config()` without being written
+    #: there: a subclass's own, from the last class that wrote `config()` down.
+    _captured: ClassVar[tuple[str, ...]] = ()
+    #: True on a class whose settings reach `config()` some other way (a
+    #: built-in records its detector's settings through the detector).
+    _settings_by_hand: ClassVar[bool] = False
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if "config" in cls.__dict__ or cls.__dict__.get("_settings_by_hand"):
+            cls._captured = ()
+            return
+        if "__init__" not in cls.__dict__:
+            return                                     # inherits the parent's
+        known = {name for base in cls.__mro__[1:] if "__init__" in base.__dict__
+                 for name in _init_parameters(base)}
+        new = [name for name in _init_parameters(cls) if name not in known]
+        cls._captured = tuple(dict.fromkeys([*cls._captured, *new]))
 
     def __init__(self, min_interval_s: float = 0.0,
                  max_per_chunk: Optional[int] = None,
@@ -160,7 +206,36 @@ class Sampler(ABC):
         }
         if self.prompts:
             config["prompts"] = list(self.prompts)
+        config.update(self._captured_settings())
         return config
+
+    def _captured_settings(self) -> dict[str, Any]:
+        """This class's own constructor settings, as the manifest records them."""
+        cls = type(self).__name__
+        out: dict[str, Any] = {}
+        for setting in self._captured:
+            if setting in _BASE_KEYS:
+                raise Refused(f"{cls}'s setting {setting!r} has the name of a base "
+                              f"setting; rename it, or write config() yourself")
+            missing = object()
+            value = getattr(self, setting, missing)
+            if value is missing:
+                value = getattr(self, "_" + setting, missing)
+            if value is missing:
+                raise Refused(
+                    f"{cls} takes {setting!r} but keeps no attribute of that name, so "
+                    f"the manifest cannot record it: store it as self.{setting} "
+                    f"(or self._{setting}), or write config() yourself")
+            if callable(getattr(value, "config", None)):
+                value = value.config()
+            try:
+                out[setting] = json.loads(json.dumps(value))
+            except (TypeError, ValueError):
+                raise Refused(
+                    f"{cls}'s setting {setting!r} is of type {type(value).__name__}, which the "
+                    f"manifest cannot record: give it a config() returning plain JSON, "
+                    f"or write {cls}.config() yourself") from None
+        return out
 
     def questions(self) -> list[str]:
         """The questions to ask about this run's frames; empty means one named after
@@ -169,7 +244,8 @@ class Sampler(ABC):
         return list(self.prompts) or [self.name]
 
     def config(self) -> dict[str, Any]:
-        """Serialised into the manifest."""
+        """Serialised into the manifest: the base settings and this class's own
+        constructor settings. Override only to record something else."""
         return self._base_config()
 
 

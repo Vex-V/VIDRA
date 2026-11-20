@@ -68,9 +68,6 @@ class Bright(Sampler):
     def propose(self, frame, chunk_local_index):
         return frame.image.mean() &gt; self.level
 
-    def config(self):
-        return {**self._base_config(), "level": self.level}
-
 video_rag("x.mp4", "data/out", sampler=[Bright(level=140, prompts=["overview"]), Clip()])</code></pre>
 <p>The video is decoded once and each offered frame goes to both samplers. The frames <code>bright</code> keeps are described with the <code>overview</code> question and stored under the answer id <code>bright:overview</code>, next to <code>clip</code>'s answers.</p>
 
@@ -81,7 +78,7 @@ video_rag("x.mp4", "data/out", sampler=[Bright(level=140, prompts=["overview"]),
 <tr><td><code>name</code></td><td>Class attribute. The sampler's name, used in answer ids (<code>motion:overview</code>). Lowercase letters, digits, <code>_</code> and <code>-</code>, and not a built-in sampler's name.</td></tr>
 <tr><td><code>propose(frame, chunk_local_index)</code></td><td>Required. Return <code>True</code> to keep the frame. <code>frame.image</code> is the picture as a BGR array (borrowed, so copy anything you keep), <code>frame.media_ts</code> its time in seconds and <code>frame.index</code> its number in the video. <code>chunk_local_index</code> counts the offered frames in this chunk, from 0.</td></tr>
 <tr><td><code>on_reset(chunk_id)</code></td><td>Called at the start of each chunk, before its first frame. Reset the sampler's state here.</td></tr>
-<tr><td><code>config()</code></td><td>The settings recorded in the manifest, as plain JSON: <code>{**self._base_config(), ...your settings}</code>.</td></tr>
+<tr><td><code>config()</code></td><td>Optional. The settings recorded in the manifest. By default these are the base settings plus every parameter of your <code>__init__</code>, read from the attribute of the same name (<code>self.level</code>, or <code>self._level</code>). A setting with a <code>config()</code> of its own, such as a model part, is recorded by calling it. A setting that is not plain JSON, or has no such attribute, is refused before the run. Override this only to record something else, as <code>{**self._base_config(), ...}</code>.</td></tr>
 <tr><td><code>last_score()</code></td><td>Optional. A number recorded with each kept frame, such as how much the picture changed.</td></tr>
 <tr><td><code>views(frame)</code></td><td>Optional. The images the model is shown for a kept frame; by default, the frame itself (<a href="#views">see below</a>).</td></tr>
 <tr><td><code>__init__(...)</code></td><td>Your settings first, then <code>min_interval_s</code>, <code>max_per_chunk</code>, <code>sampler_id</code> and <code>prompts</code>, which are passed to <code>super().__init__</code>.</td></tr>
@@ -142,14 +139,11 @@ class Till(Sampler):
     def views(self, frame):
         x1, y1, x2, y2 = self.box
         till = cv2.resize(frame.image[y1:y2, x1:x2], None, fx=2, fy=2)
-        return [View.FRAME, View(till, "the till, enlarged 2x", {"box": list(self.box)})]
-
-    def config(self):
-        return {**self._base_config(), "box": list(self.box)}</code></pre>
+        return [View.FRAME, View(till, "the till, enlarged 2x", {"box": list(self.box)})]</code></pre>
 <ul>
   <li><code>views</code> is called once for each kept frame, right after <code>propose</code>.</li>
   <li>Views are saved next to the frame as <code>&lt;index&gt;.&lt;sampler&gt;.&lt;n&gt;.jpg</code> and listed under <code>views</code> in the frame's manifest record. A sampler that returns only <code>[View.FRAME]</code> records nothing extra.</li>
-  <li>The recorded views are part of the manifest's fingerprint, so changing them re-describes the affected answers. Put the settings that shape them in <code>config()</code> as well.</li>
+  <li>The recorded views are part of the manifest's fingerprint, so changing them re-describes the affected answers. The settings that shape them, such as <code>box</code> here, are recorded with the rest of the constructor's parameters.</li>
   <li>Each view adds an image to the model call. A chunk's kept frames are described in one call, so five frames with three views each send twenty images. <code>describe.describe(..., max_images=)</code> refuses a run that would exceed a limit before making any call.</li>
   <li><code>video.recreate</code> does not rebuild views. It reports how many it skipped as <code>views_not_rebuilt</code>; re-run the <code>video</code> stage to make them again.</li>
 </ul>
@@ -222,9 +216,8 @@ class Motion(Sampler):
     def last_score(self):
         return self._last_score         # recorded beside each kept frame
 
-    def config(self):
-        # What the manifest records about the run: plain JSON only.
-        return {**self._base_config(), "threshold": self.threshold, "scale": self.scale}
+    # threshold and scale are recorded in the manifest without a config():
+    # every __init__ parameter is, read from the attribute of the same name.
 
 
 source = sys.argv[1]
