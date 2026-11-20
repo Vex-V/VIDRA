@@ -188,6 +188,23 @@ class Supabase(Database):
         `embedded.json`: its own embedder key keeps the two sets of rows apart."""
         self.write_embedded(video_id, document)
 
+    def write_voices(self, video_id: str, document: dict[str, Any]) -> None:
+        """`voices.json` into `vr_voices`, one row per printed speaker, under the
+        document's embedder. Speakers it no longer holds (a re-diarized video)
+        are deleted after the upsert; a speaker with no print has no row."""
+        api = self.writer()
+        embedder = document.get("embedder", "")
+        rows = [{
+            "video_id": video_id, "speaker": s["speaker"], "embedder": embedder,
+            "talk_s": s.get("talk_s", 0), "used_s": s.get("used_s", 0),
+            "turns": s.get("turns", []),
+            "source_hash": document.get("source_hash", ""),
+            "embedding": list(s["vector"]),
+        } for s in document.get("speakers", []) if s.get("vector")]
+        db.upsert_vectors("vr_voices", rows, api)
+        db.delete_except("vr_voices", {"video_id": video_id, "embedder": embedder},
+                         "speaker", [r["speaker"] for r in rows], api)
+
     def write_embedded(self, video_id: str, document: dict[str, Any]) -> None:
         """`embedded.json` into the moment index, vectors and all, under the
         document's embedder. Rows the document no longer holds are deleted after
@@ -400,6 +417,27 @@ class Supabase(Database):
             "seen_at": r.get("seen_at"), "score": float(r.get("score", 0.0)),
             "dense_rank": r.get("vector_rank"), "text_rank": r.get("text_rank"),
         } for r in (response.data or [])]
+
+    def match_voices(self, vector: Sequence[float], embedder_key: str,
+                     limit: int = 20, video_ids: Optional[Sequence[str]] = None,
+                     exclude_video: Optional[str] = None,
+                     min_used_s: float = 0.0) -> list[dict[str, Any]]:
+        """The nearest prints, from the `vr_match_voices` RPC (exact cosine)."""
+        try:
+            response = db.run(self.reader().rpc("vr_match_voices", {
+                "p_embedder": embedder_key, "p_vector": list(vector),
+                "p_limit": limit,
+                "p_video_ids": list(video_ids) if video_ids else None,
+                "p_exclude_video": exclude_video, "p_min_used_s": min_used_s,
+            }))
+        except Exception as exc:                             # noqa: BLE001
+            raise db.DatabaseUnavailable(
+                f"vr_match_voices failed ({exc}); if it is missing, run "
+                "db/supabase/video_rag.sql") from None
+        return [{"video_id": r["video_id"], "speaker": r["speaker"],
+                 "talk_s": float(r["talk_s"]), "used_s": float(r["used_s"]),
+                 "turns": r.get("turns") or [],
+                 "similarity": float(r["similarity"])} for r in (response.data or [])]
 
     def spans(self, video_id: str) -> list[tuple[float, float]]:
         """One video's grid, from `vr_chunks`."""

@@ -108,6 +108,7 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
   <li><code>aggregates.search</code>: <code>search_aggregates(...)</code>.</li>
   <li><code>video_rag_live</code>: <code>write_media</code> when the stream opens, before the duration is known; <code>write_observations(video_id, rows)</code> as answers arrive, with any backlog sent in one call; and the other documents when the stream ends.</li>
   <li><code>search_observations</code>: <code>search_observations(...)</code>.</li>
+  <li><code>match_voices</code>: called by your code, with a voiceprint from <code>voices.json</code>.</li>
 </ol>
 
 <h2 id="write-hooks">video_rag write hooks</h2>
@@ -123,6 +124,7 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
 <tr><td><code>write_descriptions(video_id, document)</code></td><td><code>descriptions.json</code>: <code>chunks</code> (each with <code>samplers</code>: <code>{answer_id: {sampler, question, description, structured, frame_indexes, ...}}</code>), <code>model</code></td></tr>
 <tr><td><code>write_embedded(video_id, document)</code></td><td><code>embedded.json</code>: <code>embedder</code> (the key) and <code>units</code>, each with <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>content</code>, <code>structured</code>, <code>text_hash</code>, <code>vector</code></td></tr>
 <tr><td><code>write_glances(video_id, document)</code></td><td><code>glances.json</code>, in <code>embedded.json</code>'s shape: <code>embedder</code> is the visual embedder's key plus <code>:images</code>, <code>content</code> is empty, <code>question</code> is <code>image</code>, <code>structured</code> holds the <code>frames</code>. <code>Supabase</code> stores it like <code>write_embedded</code>; the different key keeps the two sets of rows apart.</td></tr>
+<tr><td><code>write_voices(video_id, document)</code></td><td><code>voices.json</code>: <code>embedder</code> (the voice embedder's key), <code>source_hash</code>, <code>settings</code> and <code>speakers</code>, each with <code>speaker</code>, <code>talk_s</code>, <code>used_s</code>, <code>turns</code> and <code>vector</code> (<code>None</code> when every turn was too short). <code>Supabase</code> keeps one <code>vr_voices</code> row per printed speaker and deletes speakers the document no longer holds.</td></tr>
 <tr><td><code>write_prompts(rows)</code></td><td>the questions a describe run asked: each <code>name</code>, <code>version</code> (the hash stored with its answers), <code>instruction</code>, <code>shape</code>, <code>summary</code>, <code>builtin</code>, <code>about</code></td></tr>
 <tr><td><code>write_observations(video_id, rows)</code></td><td>a <a href="live.html">live run</a>'s answers, in batches, many times per run. Each row is one kept frame and question, with <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>content</code>, <code>text_hash</code>, <code>seen_at</code>, <code>answered_at</code>, <code>lag_s</code>, <code>gap_before</code>, <code>embedder</code>, <code>vector</code>. Key rows by <code>(video_id, sampler_id, frame_index, embedder)</code>.</td></tr>
 </table>
@@ -140,7 +142,7 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
 <p>Every run sends every answer again, including reused ones, so replace what you hold for that <code>source_id</code> and <code>aggregate_id</code>.</p>
 
 <h2 id="read-hooks">Read hooks</h2>
-<p>Only search uses the read hooks.</p>
+<p>Only search uses the read hooks, apart from <code>match_voices</code>, which you call.</p>
 
 <h3 id="hook-video-ids">video_ids()</h3>
 <p>Return every stored video id, as a list. Used when a search names no video.</p>
@@ -175,6 +177,11 @@ video_rag("shop.mp4", "data/out", database=VectorsOnly(), models=models)</code><
                     sampler=None, question=None, strategy=None, after=None,
                     before=None, since=None, until=None, structured=None) -&gt; list[dict]</div>
 <p>Rank a live run's rows stored under <code>embedder_key</code>. The filters are those of <code>search</code>, plus <code>after</code>/<code>before</code> on <code>media_ts</code> and <code>since</code>/<code>until</code> on <code>seen_at</code> (ISO 8601 UTC strings). Return dicts with <code>video_id</code>, <code>chunk_id</code>, <code>sampler_id</code>, <code>sampler</code>, <code>question</code>, <code>frame_index</code>, <code>media_ts</code>, <code>frames</code>, <code>description</code>, <code>structured</code>, <code>seen_at</code>, <code>score</code>, <code>dense_rank</code>, <code>text_rank</code>, best first.</p>
+
+<h3 id="hook-match-voices">match_voices(...)</h3>
+<div class="sig">match_voices(vector, embedder_key, limit=20, video_ids=None, exclude_video=None,
+             min_used_s=0.0) -&gt; list[dict]</div>
+<p>Rank the voiceprints stored under <code>embedder_key</code> by cosine similarity to <code>vector</code>, optionally only in <code>video_ids</code>, never in <code>exclude_video</code> (usually the print's own video), and only prints made from at least <code>min_used_s</code> seconds of speech. Return dicts with <code>video_id</code>, <code>speaker</code>, <code>talk_s</code>, <code>used_s</code>, <code>turns</code> and <code>similarity</code>, most alike first. <code>Folder</code> reads every <code>voices.json</code> under its root; <code>Supabase</code> calls the <code>vr_match_voices</code> function.</p>
 
 <h3 id="hook-close">close()</h3>
 <p>Release connections. Called when a <code>with</code> block exits; safe to call more than once.</p>

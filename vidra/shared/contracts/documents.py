@@ -549,6 +549,42 @@ class Embedded:
 
 
 # --------------------------------------------------------------------------
+# 8c · voices  --  one voiceprint per diarized speaker
+# --------------------------------------------------------------------------
+
+@dataclass
+class Voices:
+    """What `voices` produced: a print per speaker the diarizer found, under one
+    voice embedder. A speaker whose turns were all too short has `vector: None`
+    and stays listed, so "not enough speech" is visible, not a silent gap."""
+
+    #: Which video these speakers were heard in.
+    video_id: str
+    #: Who made the vectors: the voice embedder's `key`.
+    embedder: str = ""
+    #: A hash of the diarization's turns the prints were cut from.
+    source_hash: str = ""
+    #: `min_turn_s` and `max_turns`: which turns were embedded.
+    settings: dict[str, Any] = field(default_factory=dict)
+    #: One entry per speaker: `speaker`, `talk_s` (all their speech), `used_s`
+    #: (what the print was made from), `turns` ([start, end] pairs embedded)
+    #: and `vector` (the mean of the turns' unit vectors, unit length, or None).
+    speakers: list[dict[str, Any]] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"document": "voices", "version": 1,
+                "video_id": self.video_id, "embedder": self.embedder,
+                "source_hash": self.source_hash, "settings": self.settings,
+                "count": len(self.speakers), "speakers": self.speakers}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Voices":
+        return cls(video_id=d["video_id"], embedder=d.get("embedder", ""),
+                   source_hash=d.get("source_hash", ""), settings=d.get("settings", {}),
+                   speakers=d.get("speakers", []))
+
+
+# --------------------------------------------------------------------------
 # 9 · aggregate  --  video-level structure over what the chunks said
 # --------------------------------------------------------------------------
 
@@ -711,11 +747,11 @@ def same_video(**documents: Any) -> str:
 DOCUMENTS = {"media": Media, "raw_transcript": RawTranscript,
              "cuts": Cuts, "timeline": Timeline, "manifest": Manifest,
              "transcript": Transcript, "descriptions": Descriptions,
-             "embedded": Embedded,
+             "embedded": Embedded, "voices": Voices,
              "aggregate": Aggregate,
              "excerpt": Excerpt, "sightings": Sightings}
 
 __all__ = ["PRECISION", "VideoStream", "AudioStream", "Media",
            "RawTranscript", "Cuts", "Timeline", "Manifest", "Transcript",
-           "Descriptions", "Embedded", "Aggregate", "Excerpt", "Sightings",
+           "Descriptions", "Embedded", "Voices", "Aggregate", "Excerpt", "Sightings",
            "Produced", "fingerprint_of", "DOCUMENTS", "same_video"]

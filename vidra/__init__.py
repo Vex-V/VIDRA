@@ -37,6 +37,16 @@ _LAZY = {"Models": "vidra.shared.models.roles",
          "VisualEmbedder": "vidra.shared.models.base",
          "LocalVisualEmbedder": "vidra.shared.models.embedders.visual",
          "LocalMultimodalEmbedder": "vidra.shared.models.embedders.multimodal",
+         "VoiceEmbedder": "vidra.shared.models.base",
+         "LocalVoiceEmbedder": "vidra.shared.models.embedders.voice",
+         "Transcriber": "vidra.shared.models.base",
+         "Diarizer": "vidra.shared.models.base",
+         "WhisperTranscriber": "vidra.shared.models.speech.whisper",
+         "GeminiTranscriber": "vidra.shared.models.speech.gemini",
+         "OpenAITranscriber": "vidra.shared.models.speech.openai_api",
+         "StubTranscriber": "vidra.shared.models.speech",
+         "PyannoteDiarizer": "vidra.shared.models.speech.pyannote",
+         "NoDiarizer": "vidra.shared.models.speech",
          "Database": "vidra.shared.storage.database",
          "Supabase": "vidra.shared.storage.supabase",
          "Folder": "vidra.shared.storage.folder",
@@ -63,8 +73,11 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["Anthropic", "Chat", "Database", "Embedder", "Folder", "HashEmbedder", "LLM",
-           "LocalEmbedder", "LocalMultimodalEmbedder", "LocalVisualEmbedder", "ModelUnavailable", "Models", "OpenAI",
-           "OpenAIEmbedder", "Sampler", "Stub", "Supabase", "Unavailable", "VLM", "VidraError",
-           "View", "VisualEmbedder", "__version__", "configure"]
+__all__ = ["Anthropic", "Chat", "Database", "Diarizer", "Embedder", "Folder",
+           "GeminiTranscriber", "HashEmbedder", "LLM", "LocalEmbedder",
+           "LocalMultimodalEmbedder", "LocalVisualEmbedder", "LocalVoiceEmbedder",
+           "ModelUnavailable", "Models", "NoDiarizer", "OpenAI", "OpenAIEmbedder", "OpenAITranscriber",
+           "PyannoteDiarizer", "Sampler", "Stub", "StubTranscriber", "Supabase",
+           "Transcriber", "Unavailable", "VLM", "VidraError", "View", "VisualEmbedder",
+           "VoiceEmbedder", "WhisperTranscriber", "__version__", "configure"]
 

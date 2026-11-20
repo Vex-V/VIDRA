@@ -24,8 +24,8 @@ class ModelUnavailable(Unavailable):
 
 
 class UnknownOption(VidraError, ValueError, KeyError):
-    """A value outside a fixed vocabulary: a policy, a sampler, a transcriber, a
-    conflict rule. Both `ValueError` and `KeyError`.
+    """A value outside a fixed vocabulary: a policy, an on_conflict rule, a
+    database name. Both `ValueError` and `KeyError`.
     """
 
     __str__ = Exception.__str__

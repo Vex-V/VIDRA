@@ -106,6 +106,7 @@ scratch/
 /*.png
 RING.md
 HACKATHONS.md
+fraud_prototype.md
 CLAUDE.md
 example.py
 eval/

@@ -151,7 +151,7 @@ import sys
 from pathlib import Path
 
 import vidra
-from vidra import LocalEmbedder, OpenAI
+from vidra import LocalEmbedder, OpenAI, PyannoteDiarizer, WhisperTranscriber
 from vidra.video_rag import audio, boundaries, cut, describe, embed, media, samplers, video
 
 vidra.configure(env_file=".env")
@@ -164,8 +164,8 @@ print("video id:", made.video_id)
 
 # 2. audio: the whole soundtrack, transcribed and diarized.
 audio.audio(D / "media.json", D / "transcript.raw.json",
-            transcriber="whisper", model="small", language="en",
-            diarizer="pyannote", exclusive=True)
+            transcriber=WhisperTranscriber("small", language="en"),
+            diarizer=PyannoteDiarizer(exclusive=True))
 
 # 3. boundaries.evidence: where the picture changes (scene scores per frame).
 boundaries.evidence(D / "cuts.json", "scene", media=D / "media.json",

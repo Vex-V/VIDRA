@@ -48,7 +48,7 @@
 </nav>
 <main>
 <h1>Models</h1>
-<p class="lede">The four model roles, the ready-made classes, and writing your own.</p>
+<p class="lede">The seven model roles, the ready-made classes, and writing your own.</p>
 
 <h2 id="roles">Roles</h2>
 <table>
@@ -57,11 +57,15 @@
 <tr><td><code>llm</code></td><td><code>LLM</code></td><td>the llm aggregators: summary, chapters, events, custom prompts, entity accounts</td><td><code>OpenAI("gpt-6-luna")</code></td></tr>
 <tr><td><code>embedder</code></td><td><code>Embedder</code></td><td><code>embed</code>, <code>search</code>, chapter boundaries, entity linking</td><td><code>OpenAIEmbedder("text-embedding-3-small")</code></td></tr>
 <tr><td><code>visual_embedder</code></td><td><code>VisualEmbedder</code></td><td><a href="stages.html#glance"><code>glance</code></a>: frames in, a vector out, no answer; <code>search</code> over those vectors</td><td>none: frames are not embedded</td></tr>
+<tr><td><code>voice_embedder</code></td><td><code>VoiceEmbedder</code></td><td><a href="stages.html#voices"><code>voices</code></a>: each diarized speaker's speech in, a voiceprint out; <code>match_voices</code> across videos</td><td>none: no voiceprints</td></tr>
+<tr><td><code>transcriber</code></td><td><code>Transcriber</code></td><td><a href="stages.html#audio"><code>audio</code></a>: the soundtrack in, words with their times out</td><td><code>WhisperTranscriber("small")</code></td></tr>
+<tr><td><code>diarizer</code></td><td><code>Diarizer</code></td><td><a href="stages.html#audio"><code>audio</code></a>: the soundtrack in, who spoke when out</td><td><code>PyannoteDiarizer()</code></td></tr>
 </table>
-<p>A role left unset uses its default, except <code>visual_embedder</code>, which has none. Each role has its own base class, so each can be a different model; a class that subclasses two of them, such as <code>VLM</code> and <code>LLM</code>, can fill either role.</p>
+<p>A role left unset uses its default, except <code>visual_embedder</code> and <code>voice_embedder</code>, which have none. The soundtrack's defaults run in this process; <code>NoDiarizer()</code> turns speaker detection off. Each role has its own base class, so each can be a different model; a class that subclasses two of them, such as <code>VLM</code> and <code>LLM</code>, can fill either role.</p>
 
 <h2 id="models">Models</h2>
-<div class="sig">Models(vlm=None, llm=None, embedder=None, visual_embedder=None)</div>
+<div class="sig">Models(vlm=None, llm=None, embedder=None, visual_embedder=None, voice_embedder=None,
+       transcriber=None, diarizer=None)</div>
 <pre><code class="python">from vidra import Anthropic, LocalEmbedder, Models, OpenAI
 
 models = Models(vlm=OpenAI("gpt-6-luna"), llm=Anthropic("claude-haiku-4-5"),
@@ -71,7 +75,7 @@ video_rag("shop.mp4", "data/out", models=models)          # uses vlm and embedde
 aggregates.aggregate(out=..., models=models, summary=...)  # uses llm and embedder
 search("a customer paying", "shop", models=models)         # uses embedder</code></pre>
 <p>Build one <code>Models</code> and pass it everywhere, so indexing and search use the same embedder. Each model is checked on construction for the right class, a <code>key</code>, and its own <code>problems()</code> such as a missing API key.</p>
-<p>Pipelines and searches (<code>video_rag</code>, <code>video_rag_live</code>, <code>workflow</code>, <code>aggregates.aggregate</code>, <code>search</code>, <code>search_observations</code>, <code>aggregates.search</code>) take <code>models=</code>. A single stage takes the one model it calls: <code>describe(vlm=)</code>, <code>embed(embedder=)</code>, <code>glance(visual_embedder=)</code>, <code>aggregates.summary(llm=)</code>. <code>models.resolved()</code> fills in the defaults.</p>
+<p>Pipelines and searches (<code>video_rag</code>, <code>video_rag_live</code>, <code>workflow</code>, <code>aggregates.aggregate</code>, <code>search</code>, <code>search_observations</code>, <code>aggregates.search</code>) take <code>models=</code>. A single stage takes the one model it calls: <code>describe(vlm=)</code>, <code>embed(embedder=)</code>, <code>glance(visual_embedder=)</code>, <code>voices(voice_embedder=)</code>, <code>audio(transcriber=, diarizer=)</code>, <code>aggregates.summary(llm=)</code>. <code>models.resolved()</code> fills in the defaults.</p>
 
 <h2 id="ready-made">Ready-made models</h2>
 <table>
@@ -85,6 +89,13 @@ search("a customer paying", "shop", models=models)         # uses embedder</code
 <tr><td><code>HashEmbedder</code></td><td>embedder</td><td>nothing: vectors from word hashes, for tests</td></tr>
 <tr><td><code>LocalVisualEmbedder</code></td><td>visual_embedder</td><td>a CLIP or SigLIP model in this process</td></tr>
 <tr><td><code>LocalMultimodalEmbedder</code></td><td>embedder, visual_embedder</td><td>EmbeddingGemma 2 in this process: text and images in one space</td></tr>
+<tr><td><code>LocalVoiceEmbedder</code></td><td>voice_embedder</td><td>pyannote's speaker model in this process: speech in, a voiceprint out</td></tr>
+<tr><td><code>WhisperTranscriber</code></td><td>transcriber</td><td>faster-whisper in this process</td></tr>
+<tr><td><code>GeminiTranscriber</code></td><td>transcriber</td><td>Gemini's <code>generateContent</code> API, the soundtrack in windows</td></tr>
+<tr><td><code>OpenAITranscriber</code></td><td>transcriber</td><td>OpenAI's transcription API (<code>whisper-1</code>, <code>gpt-4o-transcribe-diarize</code>), or any server speaking it</td></tr>
+<tr><td><code>StubTranscriber</code></td><td>transcriber</td><td>nothing: placeholder text every few seconds, for tests</td></tr>
+<tr><td><code>PyannoteDiarizer</code></td><td>diarizer</td><td>pyannote's diarization pipeline in this process</td></tr>
+<tr><td><code>NoDiarizer</code></td><td>diarizer</td><td>nothing: no speakers, every word keeps <code>speaker: null</code></td></tr>
 </table>
 
 <h3 id="openai">OpenAI</h3>
@@ -170,6 +181,78 @@ vlm = Chat("gpt-6-luna", base_url="https://api.openai.com/v1", name="openai-chat
 </table>
 <p>Requires <code>vidra[local]</code>. A unit's images are embedded one at a time and averaged, so the key is <code>local:&lt;model&gt;:&lt;width&gt;:mean</code>. Queries are truncated to 77 tokens for CLIP and 64 for SigLIP. SigLIP 2 gives much better results than CLIP ViT-B/32.</p>
 
+<h3 id="local-voice-embedder">LocalVoiceEmbedder</h3>
+<div class="sig">LocalVoiceEmbedder(model="pyannote/wespeaker-voxceleb-resnet34-LM", device=None)</div>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>model</code></td><td>A pyannote speaker-embedding model. The default is the one inside pyannote's diarization pipeline, so a machine that has diarized already has it; it is not gated.</td></tr>
+<tr><td><code>device</code></td><td>Default: cuda, then mps, then the CPU.</td></tr>
+</table>
+<p>Requires <code>vidra[audio]</code>. Each clip is embedded whole. The key is <code>pyannote:&lt;model&gt;:&lt;width&gt;</code> (256 for the default, known without loading it).</p>
+
+<h3 id="whisper-transcriber">WhisperTranscriber</h3>
+<div class="sig">WhisperTranscriber(model="small", device=None, compute_type=None, language=None,
+                   vad_filter=True, model_obj=None)</div>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>model</code></td><td>Whisper's model: <code>tiny</code>, <code>base</code>, <code>small</code>, <code>medium</code>, <code>large-v3</code>, ...</td></tr>
+<tr><td><code>device</code></td><td>Default: cuda when CTranslate2 sees one, else the CPU. There is no <code>mps</code>: it is refused.</td></tr>
+<tr><td><code>compute_type</code></td><td>Precision. Default <code>float16</code> on a GPU, <code>int8</code> on the CPU.</td></tr>
+<tr><td><code>language</code></td><td>The spoken language, e.g. <code>"en"</code>; detected if not given.</td></tr>
+<tr><td><code>vad_filter</code></td><td>Skip stretches without speech. Without it, Whisper can produce text for silent passages.</td></tr>
+<tr><td><code>model_obj</code></td><td>A <code>faster_whisper.WhisperModel</code> you built, used as is.</td></tr>
+</table>
+<p>Requires <code>vidra[audio]</code>. Making one loads nothing; the model is loaded on the first <code>transcribe</code>, once per model, device and precision in a process. The key is <code>whisper:&lt;model&gt;</code>.</p>
+
+<h3 id="gemini-transcriber">GeminiTranscriber</h3>
+<div class="sig">GeminiTranscriber(model, api_key=None, language=None, window_s=300.0, concurrency=4,
+                  max_output_tokens=32768, generation=None, base_url=..., client=None)</div>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>model</code></td><td>Required: a Gemini model id your key serves, such as <code>"gemini-3-flash-preview"</code>. There is no default because the ids change.</td></tr>
+<tr><td><code>api_key</code></td><td>Default: <code>GEMINI_API_KEY</code>, then <code>GOOGLE_API_KEY</code>.</td></tr>
+<tr><td><code>language</code></td><td>The spoken language, said in the prompt; detected if not given.</td></tr>
+<tr><td><code>window_s</code></td><td>Seconds of audio per call, 30-420 (a request carries at most 20 MB). Each boundary is moved to the quietest moment within 10 s of it.</td></tr>
+<tr><td><code>concurrency</code></td><td>Windows sent at once.</td></tr>
+<tr><td><code>max_output_tokens</code></td><td>The ceiling per call. An answer cut short raises <code>ModelFailed</code>.</td></tr>
+<tr><td><code>generation</code></td><td>Merged into the request's <code>generationConfig</code>, e.g. <code>{"thinkingConfig": {"thinkingLevel": "low"}}</code>. Recorded, since it changes the answers.</td></tr>
+<tr><td><code>client</code></td><td>Anything with httpx's <code>post(url, json=, headers=, timeout=)</code>; for tests.</td></tr>
+</table>
+<p>Each window is sent as 16 kHz WAV and Gemini answers with segments, each with a start, an end and its text. A silent window costs no call. 429s and server errors are retried twice. Audio costs 32 tokens a second (about 115,000 an hour); <code>last_usage</code> holds the token counts of the last <code>transcribe</code>.</p>
+<p><b>Word times are estimated.</b> Gemini times segments, not words, so a segment's words share its span in proportion to their length, and <code>config()</code> records <code>word_times: "interpolated"</code>. Given Whisper's own segment times, the estimated word midpoints were a median 0.16 s from Whisper's (90th percentile 0.55 s) on Chernobyl, and 5 of 416 words fell in a different 20-second chunk; Gemini's own timing error is on top of that. Chinese and Japanese are split one character per word, as Whisper writes them. Pair it with <code>PyannoteDiarizer</code> for speakers.</p>
+
+<h3 id="openai-transcriber">OpenAITranscriber</h3>
+<div class="sig">OpenAITranscriber(model="whisper-1", api_key=None, language=None, timing=None,
+                  window_s=600.0, concurrency=4, base_url=None, client=None)</div>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>model</code></td><td><code>whisper-1</code> answers with each word's time. <code>gpt-4o-transcribe-diarize</code> answers with segment times, and its words are spread over them as for Gemini. <code>gpt-4o-transcribe</code>, <code>gpt-4o-mini-transcribe</code> and <code>gpt-transcribe</code> answer with text and no times, so they are refused.</td></tr>
+<tr><td><code>api_key</code></td><td>Default: <code>OPENAI_API_KEY</code>. Not needed with <code>base_url</code>.</td></tr>
+<tr><td><code>language</code></td><td>The spoken language as an ISO 639-1 code; detected if not given. <code>whisper-1</code> reports the detected one as a name (<code>"english"</code>).</td></tr>
+<tr><td><code>timing</code></td><td><code>"words"</code> or <code>"segments"</code>: what a model not listed above answers with.</td></tr>
+<tr><td><code>window_s</code></td><td>Seconds of audio per call, 30-780 (a file may be at most 25 MB). A silent window costs no call.</td></tr>
+<tr><td><code>base_url</code></td><td>Another server speaking the same API, such as a local faster-whisper server.</td></tr>
+<tr><td><code>client</code></td><td>An <code>openai.OpenAI</code> client, or anything with <code>audio.transcriptions.create</code>; for tests.</td></tr>
+</table>
+<p>On Chernobyl, <code>whisper-1</code> agreed with local Whisper <code>small</code> on 98.6% of the words, with word times a median 0.13 s apart (at most 0.43 s), in 17 s. <code>gpt-4o-transcribe-diarize</code>: 96.9%, a median 0.12 s apart (at most 0.78 s), in 68 s and 8,300 tokens. Neither is ground truth. <code>last_usage</code> holds what the last <code>transcribe</code> used.</p>
+
+<h3 id="pyannote-diarizer">PyannoteDiarizer</h3>
+<div class="sig">PyannoteDiarizer(model="pyannote/speaker-diarization-3.1", device=None, token=None,
+                 exclusive=True, pipeline=None)</div>
+<table class="params">
+<tr><th>Argument</th><th>Meaning</th></tr>
+<tr><td><code>model</code></td><td>pyannote's pipeline. Gated: the first download needs a Hugging Face token from an account that accepted its terms; after that it loads from the cache without one.</td></tr>
+<tr><td><code>device</code></td><td>Default: cuda, then mps, then the CPU.</td></tr>
+<tr><td><code>token</code></td><td>Default: <code>vidra.configure(hf_token=)</code>, then <code>HF_TOKEN</code>, then <code>hf auth login</code>.</td></tr>
+<tr><td><code>exclusive</code></td><td>Resolve overlapping speech so each word has one speaker.</td></tr>
+<tr><td><code>pipeline</code></td><td>A loaded pyannote <code>Pipeline</code>, used as is.</td></tr>
+</table>
+<p>Requires <code>vidra[audio]</code>. Making one loads nothing; the pipeline is loaded on the first <code>diarize</code>, once per model and device in a process. The key is <code>pyannote:&lt;model&gt;</code>.</p>
+
+<h3 id="stub-transcriber">StubTranscriber and NoDiarizer</h3>
+<div class="sig">StubTranscriber(every_s=5.0)        NoDiarizer()</div>
+<p><code>StubTranscriber</code> writes <code>[stub 5.0]</code>-style text every <code>every_s</code> seconds and loads nothing. <code>NoDiarizer</code> finds no speakers.</p>
+
 <h3 id="local-multimodal-embedder">LocalMultimodalEmbedder</h3>
 <div class="sig">LocalMultimodalEmbedder(model="google/embeddinggemma-2", dims=None, device=None, batch=8,
                         query_prompt="SearchQuery", document_prompt="Document")</div>
@@ -248,6 +331,30 @@ embed_query(text) -&gt; list[float]</div>
 <div class="sig">embed_images(groups) -&gt; list[list[float]]
 embed_query(text) -&gt; list[float]</div>
 <p><code>embed_images(groups)</code> returns one vector per group. A group is one unit's images as parts in <code>VLM.generate</code>'s format: an <code>{"type": "image", "data": bytes, ...}</code> part per frame or view, each view preceded by a <code>{"type": "text", "text": label}</code> part. A one-image model must combine a group itself, for example by averaging. <code>embed_query(text)</code> embeds a query in the same space and has no default. <code>max_images</code> (default <code>None</code>) caps the images per group, checked before any is read.</p>
+
+<h3 id="voice-method">VoiceEmbedder.embed_clips</h3>
+<div class="sig">embed_clips(clips) -&gt; list[list[float]]</div>
+<p>Returns one vector per clip. A clip is a 1-D float32 numpy array of mono samples at the class's <code>rate</code> (default 16000). There is no query side: a voiceprint is matched against other voiceprints, never against text.</p>
+<pre><code class="python">from vidra import VoiceEmbedder
+
+class MyVoices(VoiceEmbedder):
+    key = "mylab:speaker-v1:192"
+    def embed_clips(self, clips):
+        return [my_model(clip) for clip in clips]</code></pre>
+
+<h3 id="speech-method">Transcriber.transcribe and Diarizer.diarize</h3>
+<div class="sig">transcribe(samples) -&gt; Transcript        diarize(samples) -&gt; Diarization</div>
+<p>Each is called once per video with the whole soundtrack: a 1-D float32 numpy array of mono samples at the class's <code>rate</code> (default 16000; another rate gets the file decoded at that rate). Times are seconds from the start. <code>transcribe</code> returns a <code>Transcript</code> of <code>Segment</code>s, each with its <code>Word</code>s; word times matter, because each word goes to the chunk and the speaker holding its midpoint. <code>diarize</code> returns a <code>Diarization</code> of <code>Turn</code>s; labels need only mean something within the video. Both are called directly, in the calling thread, not through <code>concurrency</code>. <code>config()</code> returns the settings recorded in <code>transcript.raw.json</code> (default: the key); never put a credential in it.</p>
+<pre><code class="python">from vidra import Transcriber
+from vidra.video_rag import audio
+
+class MyTranscriber(Transcriber):
+    key = "mylab:asr-v1"
+    def transcribe(self, samples):
+        rows = my_asr(samples, rate=self.rate)          # [(start, end, text, [(start, end, word)])]
+        return audio.Transcript(
+            [audio.Segment(s, e, text, [audio.Word(ws, we, w) for ws, we, w in words])
+             for s, e, text, words in rows], language="en")</code></pre>
 
 <h3 id="attributes">Attributes and checks</h3>
 <table class="params">

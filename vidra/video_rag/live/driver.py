@@ -217,6 +217,11 @@ def problems_of(options: Options) -> list[str]:
         models = given(options.models)
     except Refused as exc:
         return problems + [str(exc)]
+    for role in ("voice_embedder", "transcriber", "diarizer"):
+        if getattr(models, role) is not None:
+            problems.append(f"a {role} reads the soundtrack, which a live run does "
+                            "not read; record= the stream and run video_rag on the "
+                            "recording")
     from ..core.checks import run_problems
     problems += run_problems(options.into, options.database, options.sampler,
                              {"vlm": models.vlm, "embedder": models.embedder})

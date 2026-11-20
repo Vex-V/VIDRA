@@ -78,6 +78,15 @@
 <tr><td><code>stats</code></td><td>Counts (segments, words, speakers, turns, speech seconds) and timings.</td></tr>
 </table>
 
+<h3 id="doc-voices">voices.json</h3>
+<table>
+<tr><th>Field</th><th>Is</th></tr>
+<tr><td><code>embedder</code></td><td>The voice embedder's key, e.g. <code>pyannote:pyannote/wespeaker-voxceleb-resnet34-LM:256</code>.</td></tr>
+<tr><td><code>source_hash</code></td><td>A hash of the diarization's turns and the file they were cut from; resume compares it.</td></tr>
+<tr><td><code>settings</code></td><td><code>min_turn_s</code> and <code>max_turns</code>.</td></tr>
+<tr><td><code>speakers</code></td><td>One per diarized speaker: <code>speaker</code>, <code>talk_s</code> (all their speech), <code>used_s</code> (the speech the print was made from), <code>turns</code> (<code>[start, end]</code> pairs embedded) and <code>vector</code> (unit length, or <code>null</code> when every turn was too short).</td></tr>
+</table>
+
 <h3 id="doc-cuts">cuts.json</h3>
 <table>
 <tr><th>Field</th><th>Is</th></tr>

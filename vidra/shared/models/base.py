@@ -5,6 +5,9 @@
     Embedder        text in, vectors out                          embed, search, linking
     VisualEmbedder  images in, vectors out; a query into the      glance, search
                     same space
+    VoiceEmbedder   speech in, a voiceprint out                   voices
+    Transcriber     a soundtrack in, words with times out         audio
+    Diarizer        a soundtrack in, who spoke when out           audio
 
 Subclass one and fill in its method to bring any model:
 
@@ -26,7 +29,9 @@ a JSON string returned for a schema, and turns any failure into `ModelFailed`.
 
 The ready-made classes are in `llm.py` (`OpenAI`, `Chat`, `Anthropic`,
 `Stub`) and `embedders/` (`OpenAIEmbedder`, `LocalEmbedder`, `HashEmbedder`,
-`LocalVisualEmbedder`, `LocalMultimodalEmbedder`).
+`LocalVisualEmbedder`, `LocalMultimodalEmbedder`, `LocalVoiceEmbedder`) and
+`speech/` (`WhisperTranscriber`, `GeminiTranscriber`, `StubTranscriber`,
+`PyannoteDiarizer`, `NoDiarizer`).
 """
 
 from __future__ import annotations
@@ -161,12 +166,75 @@ class VisualEmbedder(_Model):
         raise NotImplementedError(f"{type(self).__name__} does not implement embed_query()")
 
 
+class VoiceEmbedder(_Model):
+    """Speech to a voiceprint: one vector per clip, the same person close
+    together whatever they say. Not an `Embedder`: there is no text side, so a
+    print is matched against other prints, never against a query."""
+
+    #: The sample rate a clip is handed at, mono float32.
+    rate: int = 16000
+
+    def embed_clips(self, clips: Sequence[Any]) -> list[list[float]]:
+        """One vector per clip, in order. A clip is a 1-D float32 numpy array
+        of mono samples at `rate`."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement embed_clips()")
+
+
+class Transcriber(_Model):
+    """A soundtrack to what was said: segments, each with its words and the
+    seconds the model placed them at. Word times matter: a word goes to the
+    chunk, and to the speaker, holding its midpoint.
+
+    Called once per video, on the whole track, in the calling thread; a model
+    that wants windows makes them itself."""
+
+    #: The sample rate the track is handed at, mono float32.
+    rate: int = 16000
+
+    def transcribe(self, samples: Any) -> Any:
+        """A `Transcript` (`vidra.video_rag.audio.Transcript`) for `samples`, a
+        1-D float32 numpy array of mono samples at `rate`. Times are seconds
+        from the start of the track."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement transcribe()")
+
+    def config(self) -> dict[str, Any]:
+        """What is recorded in `transcript.raw.json`'s `model` block: the
+        settings that decided the answer. Never a credential."""
+        return {"transcriber": self.key}
+
+
+class Diarizer(_Model):
+    """A soundtrack to who spoke when: turns, each a speaker label and a span.
+    Labels mean something only inside one video. Called once per video, on the
+    whole track: speakers are told apart by clustering over all of it."""
+
+    #: The sample rate the track is handed at, mono float32.
+    rate: int = 16000
+
+    def diarize(self, samples: Any) -> Any:
+        """A `Diarization` (`vidra.video_rag.audio.Diarization`) for `samples`,
+        a 1-D float32 numpy array of mono samples at `rate`."""
+        raise NotImplementedError(f"{type(self).__name__} does not implement diarize()")
+
+    def config(self) -> dict[str, Any]:
+        """What is recorded in `transcript.raw.json`'s `model` block."""
+        return {"diarizer": self.key}
+
+
 #: Role -> the class a model must be to fill it.
 ROLES: dict[str, type] = {"vlm": VLM, "llm": LLM, "embedder": Embedder,
-                          "visual_embedder": VisualEmbedder}
+                          "visual_embedder": VisualEmbedder,
+                          "voice_embedder": VoiceEmbedder,
+                          "transcriber": Transcriber, "diarizer": Diarizer}
 
 
 # --------------------------------------------------------------- checking
+
+#: What to suggest when a role is handed a string, where it is not OpenAI(...).
+_EXAMPLE = {"embedder": "LocalEmbedder()", "visual_embedder": "LocalVisualEmbedder()",
+            "voice_embedder": "LocalVoiceEmbedder()",
+            "transcriber": "WhisperTranscriber(\"small\")",
+            "diarizer": "PyannoteDiarizer()"}
 
 def _misfit(role: str, model: Any) -> Optional[str]:
     """Why `model` is not the right kind of thing for `role`, or None. A `key`
@@ -174,9 +242,11 @@ def _misfit(role: str, model: Any) -> Optional[str]:
     probing its width), and this check runs before any work."""
     wanted = ROLES[role]
     if not isinstance(model, wanted):
-        article = "a" if wanted in (VLM, VisualEmbedder) else "an"
+        article = "a" if wanted in (VLM, VisualEmbedder, VoiceEmbedder, Transcriber,
+                                    Diarizer) else "an"
+        example = _EXAMPLE.get(role, 'OpenAI("gpt-6-luna")')
         return (f"{role} must be {article} {wanted.__name__}, not {type(model).__name__}"
-                + (" -- pass a model object, e.g. OpenAI(\"gpt-6-luna\")"
+                + (f" -- pass a model object, e.g. {example}"
                    if isinstance(model, str) else ""))
     declared = inspect.getattr_static(model, "key", "")
     if isinstance(declared, property):
@@ -283,6 +353,6 @@ def calls(role: str, model: Any) -> Calls:
     return Calls(model)
 
 
-__all__ = ["Calls", "Embedder", "LLM", "ModelFailed", "ROLES",
-           "VLM", "VisualEmbedder", "calls", "image", "parse_json", "problems",
+__all__ = ["Calls", "Diarizer", "Embedder", "LLM", "ModelFailed", "ROLES", "Transcriber",
+           "VLM", "VisualEmbedder", "VoiceEmbedder", "calls", "image", "parse_json", "problems",
            "require", "text"]

@@ -32,7 +32,7 @@ from vidra.shared.reporting import logs
 from vidra.shared.reporting.errors import Refused
 from vidra.shared.storage.database import Database, as_database
 from ..core.export import export
-from . import audio, boundaries, cut, describe, embed, glance, media, video
+from . import audio, boundaries, cut, describe, embed, glance, media, video, voices
 #: The conflict rules `media` accepts.
 from .media.driver import ON_CONFLICT
 
@@ -125,6 +125,11 @@ def problems_of(options: Options) -> list[str]:
     if not options.use_video and models.visual_embedder is not None:
         problems.append("a visual_embedder embeds frames, which this run is not "
                         "reading")
+    for role, does in (("voice_embedder", "makes voiceprints from"),
+                       ("transcriber", "transcribes"), ("diarizer", "diarizes")):
+        if not options.use_audio and getattr(models, role) is not None:
+            problems.append(f"a {role} {does} the soundtrack, which this run is not "
+                            "reading")
     if not options.use_video and not options.describe:
         problems.append("describe=False changes nothing when the picture is not read")
     if options.use_video and not options.describe and models.visual_embedder is None:
@@ -139,6 +144,11 @@ def problems_of(options: Options) -> list[str]:
         roles["vlm"] = models.vlm
     if options.use_video and models.visual_embedder is not None:
         roles["visual_embedder"] = models.visual_embedder
+    if options.use_audio:
+        roles["transcriber"] = models.transcriber
+        roles["diarizer"] = models.diarizer
+    if options.use_audio and models.voice_embedder is not None:
+        roles["voice_embedder"] = models.voice_embedder
     problems += run_problems(options.into, options.database,
                              options.sampler, roles, picture=options.use_video)
     return problems
@@ -211,7 +221,14 @@ def _run(options: Options, whole: Any,
     # 2 · the soundtrack
     if use_audio:
         say("audio", None)
-        step(audio.audio(at["media"], at["raw_transcript"]))
+        step(audio.audio(at["media"], at["raw_transcript"],
+                         transcriber=models.transcriber, diarizer=models.diarizer))
+        # 2b · one voiceprint per diarized speaker
+        if models.voice_embedder is not None:
+            say("voices", None)
+            step(voices.voices(at["media"], at["raw_transcript"], at["voices"],
+                               previous=earlier("voices"),
+                               voice_embedder=models.voice_embedder, **ticking))
     else:
         run.skipped.setdefault("audio", "this run is not reading the soundtrack")
 
@@ -313,12 +330,14 @@ def video_rag(source: str | Path,
               on_step: Optional[Callable[..., None]] = None) -> Run:
     """The whole extraction: every component in order, under one folder.
 
-    Everything lands under `<into>/<video_id>/`. `models` carries the vlm, the
-    embedder and the visual_embedder (None is every default); `database` is a
+    Everything lands under `<into>/<video_id>/`. `models` carries every model
+    the run calls, the soundtrack's transcriber and diarizer among them (None
+    is every default); `database` is a
     built `Database`. `sampler` is a `Sampler` object or a list of them
     (None is `Uniform()`). `name` and `recorded_at` override the video's
     filename and recording time. A `visual_embedder` also embeds the kept
-    frames (`glance`); `describe=False` with one asks no vlm at all.
+    frames (`glance`); `describe=False` with one asks no vlm at all. A
+    `voice_embedder` also makes a voiceprint per diarized speaker (`voices`).
     """
     given = {k: v for k, v in locals().items() if k != "on_step"}
     return process(_options(given), on_step)

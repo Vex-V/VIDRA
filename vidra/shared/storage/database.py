@@ -84,6 +84,11 @@ class Database:
         `:images`; each unit's `content` is empty, its `question` is `image`
         and its `text_hash` covers the images."""
 
+    def write_voices(self, video_id: str, document: dict[str, Any]) -> None:
+        """`voices.json`: one print per diarized speaker under `embedder` (the
+        voice embedder's key). `speakers[]` each hold `speaker`, `talk_s`,
+        `used_s`, `turns` and `vector` -- None when every turn was too short."""
+
     def write_prompts(self, rows: list[dict[str, Any]]) -> None:
         """The questions a describe run asked, at the version it asked them."""
 
@@ -152,6 +157,15 @@ class Database:
         `before` are media seconds; `since` and `until` are ISO 8601 times the
         frames arrived."""
         raise self._unsupported("search_observations")
+
+    def match_voices(self, vector: Sequence[float], embedder_key: str,
+                     limit: int = 20, video_ids: Optional[Sequence[str]] = None,
+                     exclude_video: Optional[str] = None,
+                     min_used_s: float = 0.0) -> list[dict[str, Any]]:
+        """The prints nearest to `vector` in one voice embedder's space, most
+        alike first: `video_id`, `speaker`, `talk_s`, `used_s`, `turns` and
+        `similarity` (cosine). `exclude_video` is usually the print's own."""
+        raise self._unsupported("match_voices")
 
     def spans(self, video_id: str) -> list[tuple[float, float]]:
         """One video's grid, as the database holds it."""

@@ -4,11 +4,11 @@ server.
     db = Folder("data/out")                      # where video_rag wrote
     search("a man in a red cap", "test", embedder="local", database=db)
 
-Reads `embedded.json`, `glances.json` and `timeline.json` where they lie, and
+Reads `embedded.json`, `glances.json`, `voices.json` and `timeline.json` where they lie, and
 a live run's `observations.jsonl` while it is still being appended. Dense
 only: units are ranked by cosine in the embedder's space. Of the write hooks
-it fills in only what search reads: `write_timeline`, `write_embedded` and
-`write_glances` copy the file (a no-op when the root is the run's own folder),
+it fills in only what search reads: `write_timeline`, `write_embedded`,
+`write_glances` and `write_voices` copy the file (a no-op when the root is the run's own folder),
 and aggregate vectors are kept per embedder in `aggregate_units.json` in the
 source's folder.
 """
@@ -66,6 +66,9 @@ class Folder(Database):
 
     def write_glances(self, video_id: str, document: dict[str, Any]) -> None:
         self._copy(video_id, "glances", document)
+
+    def write_voices(self, video_id: str, document: dict[str, Any]) -> None:
+        self._copy(video_id, "voices", document)
 
     def _units_file(self, source_id: str) -> tuple[Path, dict[str, Any]]:
         where = self.root / paths.check_id(source_id) / AGGREGATE_UNITS
@@ -205,6 +208,38 @@ class Folder(Database):
             return []
         return sorted(d.name for d in self.root.iterdir()
                       if d.is_dir() and (d / paths.OBSERVATIONS).exists())
+
+    def match_voices(self, vector: Sequence[float], embedder_key: str,
+                     limit: int = 20, video_ids: Optional[Sequence[str]] = None,
+                     exclude_video: Optional[str] = None,
+                     min_used_s: float = 0.0) -> list[dict[str, Any]]:
+        """Every `voices.json` under the root in that embedder's space, ranked
+        by cosine."""
+        import numpy as np
+
+        wanted = set(video_ids) if video_ids else None
+        target = np.asarray(vector, dtype=np.float64)
+        target /= np.linalg.norm(target) or 1.0
+        rows = []
+        for folder in sorted(p for p in self.root.iterdir() if p.is_dir()):
+            vid = folder.name
+            if vid.startswith(paths.RESERVED_PREFIX) or vid == exclude_video:
+                continue
+            if wanted is not None and vid not in wanted:
+                continue
+            document = self._read(vid, "voices")
+            if not document or document.get("embedder") != embedder_key:
+                continue
+            for s in document.get("speakers", []):
+                if not s.get("vector") or s.get("used_s", 0) < min_used_s:
+                    continue
+                v = np.asarray(s["vector"], dtype=np.float64)
+                rows.append({"video_id": vid, "speaker": s["speaker"],
+                             "talk_s": s.get("talk_s", 0), "used_s": s.get("used_s", 0),
+                             "turns": s.get("turns", []),
+                             "similarity": float(v @ target / (np.linalg.norm(v) or 1.0))})
+        rows.sort(key=lambda r: (-r["similarity"], r["video_id"], r["speaker"]))
+        return rows[:limit]
 
     def spans(self, video_id: str) -> list[tuple[float, float]]:
         timeline = self._read(video_id, "timeline")

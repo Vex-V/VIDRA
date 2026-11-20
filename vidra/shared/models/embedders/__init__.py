@@ -5,6 +5,7 @@
     HashEmbedder()                               no model: for exercising a pipeline
     LocalVisualEmbedder()                        images, not text: CLIP or SigLIP
     LocalMultimodalEmbedder()                    text and images, one space: EmbeddingGemma 2
+    LocalVoiceEmbedder()                         speech, not text: a voiceprint per speaker
 
 One vector space per embedder: its key is `name:model:dims`, and vectors from
 different keys are never compared. A query and a document are embedded with
@@ -96,6 +97,9 @@ def __getattr__(name: str) -> Any:
     if name == "LocalVisualEmbedder":
         from .visual import LocalVisualEmbedder
         return LocalVisualEmbedder
+    if name == "LocalVoiceEmbedder":
+        from .voice import LocalVoiceEmbedder
+        return LocalVoiceEmbedder
     if name == "LocalMultimodalEmbedder":
         from .multimodal import LocalMultimodalEmbedder
         return LocalMultimodalEmbedder
@@ -103,4 +107,4 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = ["Embedder", "EmbedderUnavailable", "HashEmbedder", "LocalEmbedder",
-           "LocalMultimodalEmbedder", "LocalVisualEmbedder", "OpenAIEmbedder", "PREFIXES", "key_for", "prefixes_for", "query_vector"]
+           "LocalMultimodalEmbedder", "LocalVisualEmbedder", "LocalVoiceEmbedder", "OpenAIEmbedder", "PREFIXES", "key_for", "prefixes_for", "query_vector"]

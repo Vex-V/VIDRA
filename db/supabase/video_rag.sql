@@ -203,6 +203,28 @@ create index if not exists vr_observations_structured
   on vidra.vr_observations using gin (structured jsonb_path_ops);
 
 -- ===========================================================================
+-- 6c · voices: one voiceprint per diarized speaker per video. A speaker
+--      talks across many chunks, so a print belongs to the video, not to a
+--      chunk, and it has no text: it is matched against other prints
+--      (vr_match_voices), never searched with words. Who spoke when stays in
+--      vr_transcripts; `turns` here is only what the print was made from.
+--      No foreign key, as vr_embeddings: a print outlives its grid.
+-- ===========================================================================
+create table if not exists vidra.vr_voices (
+  video_id    text not null,
+  speaker     text not null,           -- the diarizer's label in this video: SPEAKER_00
+  embedder    text not null,           -- the voice model's key, width included
+  talk_s      numeric not null,        -- all the speech the diarizer gave this speaker
+  used_s      numeric not null,        -- the speech the print was made from
+  turns       jsonb not null default '[]'::jsonb,   -- [[start, end], ...] embedded
+  source_hash text not null,           -- the transcript's turns it came from
+  embedding   vector not null,         -- any width
+  embedded_at timestamptz not null default now(),
+  primary key (video_id, speaker, embedder)
+);
+create index if not exists vr_voices_embedder on vidra.vr_voices (embedder);
+
+-- ===========================================================================
 -- 7 · prompts: what each question said, at each version a run asked it under.
 --     Written, never read back; rows are never deleted.
 -- ===========================================================================
@@ -412,6 +434,35 @@ language sql stable as $$
 $$;
 
 -- ===========================================================================
+-- 8c · the nearest voices to a print, by cosine, in one embedder's space.
+--      An exact scan: rows are one per speaker per video, few enough that no
+--      index is needed (and an HNSW index would need a fixed width).
+-- ===========================================================================
+create or replace function vidra.vr_match_voices(
+  p_embedder       text,
+  p_vector         vector,
+  p_limit          int default 20,
+  p_video_ids      text[] default null,  -- null = every video
+  p_exclude_video  text default null,    -- usually the print's own video
+  p_min_used_s     numeric default 0     -- prints made from less speech are skipped
+)
+returns table (
+  video_id text, speaker text, talk_s numeric, used_s numeric,
+  turns jsonb, similarity double precision
+)
+language sql stable as $$
+  select v.video_id, v.speaker, v.talk_s, v.used_s, v.turns,
+         1 - (v.embedding <=> p_vector) as similarity
+  from vidra.vr_voices v
+  where v.embedder = p_embedder
+    and (p_video_ids is null or v.video_id = any (p_video_ids))
+    and (p_exclude_video is null or v.video_id <> p_exclude_video)
+    and v.used_s >= p_min_used_s
+  order by v.embedding <=> p_vector, v.video_id, v.speaker
+  limit p_limit;
+$$;
+
+-- ===========================================================================
 -- 9 · row level security and grants: read-only for `anon`. Last, so reads are
 --     never denied between enabling RLS and adding its policy.
 -- ===========================================================================
@@ -421,7 +472,7 @@ begin
   foreach t in array array[
     'vr_videos','vr_timelines','vr_chunks','vr_transcripts','vr_transcript_chunks',
     'vr_manifests','vr_chunk_samplers','vr_descriptions','vr_embeddings','vr_prompts',
-    'vr_observations'
+    'vr_observations','vr_voices'
   ] loop
     execute format('alter table vidra.%I enable row level security', t);
     execute format('drop policy if exists "public read" on vidra.%I', t);
@@ -438,6 +489,9 @@ grant execute on function vidra.vr_search(
 grant execute on function vidra.vr_search_observations(
   text, vector, text, text[], text, text, text, double precision,
   double precision, timestamptz, timestamptz, jsonb, int, int)
+  to anon, service_role;
+grant execute on function vidra.vr_match_voices(
+  text, vector, int, text[], text, numeric)
   to anon, service_role;
 
 -- ===========================================================================

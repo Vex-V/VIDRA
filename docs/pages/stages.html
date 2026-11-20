@@ -54,12 +54,12 @@
 <table>
 <tr><th>Function</th><th>Takes</th><th>Does</th></tr>
 <tr><td>the stage's own name: <code>media.media</code>, <code>audio.audio</code>, ...</td><td>file paths</td><td>reads its inputs, writes one output file, returns a receipt (<code>Produced</code>)</td></tr>
-<tr><td>a verb: <code>split</code>, <code>listen</code>, <code>detect</code>, <code>timeline</code>, <code>ingest</code>, <code>apply</code>, <code>answer</code>, <code>look</code>, <code>encode</code></td><td>documents already in memory</td><td>the same work, returning the document; reads and writes no file</td></tr>
+<tr><td>a verb: <code>split</code>, <code>listen</code>, <code>voiceprints</code>, <code>detect</code>, <code>timeline</code>, <code>ingest</code>, <code>apply</code>, <code>answer</code>, <code>look</code>, <code>encode</code></td><td>documents already in memory</td><td>the same work, returning the document; reads and writes no file</td></tr>
 <tr><td><code>load</code></td><td>a path</td><td>reads the stage's output back, typed</td></tr>
 </table>
 <p>The file function is the verb with a read before and a write after, so both run the same checks. Its receipt has <code>.video_id</code>, <code>.component</code>, <code>.artifacts</code> (<code>{name: path}</code>), <code>.stats</code> and <code>.skipped</code>. Below, <code>D</code> is a video's folder; the <a href="recipes.html#stage-by-stage">stage-by-stage recipe</a> runs every stage.</p>
 <pre><code class="python">from pathlib import Path
-from vidra.video_rag import audio, boundaries, cut, describe, embed, glance, media, video</code></pre>
+from vidra.video_rag import audio, boundaries, cut, describe, embed, glance, media, video, voices</code></pre>
 
 <!-- ============================================================ media -->
 <h2 id="media">1. media</h2>
@@ -80,28 +80,57 @@ made.video_id                         # the id actually used</code></pre>
 
 <!-- ============================================================ audio -->
 <h2 id="audio">2. audio</h2>
-<p>Transcribes the whole soundtrack and identifies the speakers. Writes <code>transcript.raw.json</code>: words, segments and speaker turns with their times, before chunking. Requires <code>vidra[audio]</code>.</p>
-<div class="sig">audio.audio(media, out, transcriber="whisper", diarizer="pyannote", model=None, language=None,
-            vad_filter=None, compute_type=None, device=None, diarizer_model=None,
-            exclusive=None) -&gt; Produced</div>
+<p>Transcribes the whole soundtrack and identifies the speakers. Writes <code>transcript.raw.json</code>: words, segments and speaker turns with their times, before chunking. What was said and who said it are two models, run separately and joined afterwards: each word goes to the speaker talking at its midpoint.</p>
+<div class="sig">audio.audio(media, out, transcriber=None, diarizer=None) -&gt; Produced</div>
 <table class="params">
 <tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
 <tr><td><code>media</code></td><td>required</td><td>Path to <code>media.json</code>.</td></tr>
 <tr><td><code>out</code></td><td>required</td><td>Where to write <code>transcript.raw.json</code>.</td></tr>
-<tr><td><code>transcriber</code></td><td><code>"whisper"</code></td><td><code>whisper</code> (faster-whisper), or <code>stub</code> (placeholder text, for tests).</td></tr>
-<tr><td><code>diarizer</code></td><td><code>"pyannote"</code></td><td><code>pyannote</code>, or <code>none</code>: every segment keeps <code>speaker: null</code>.</td></tr>
-<tr><td><code>model</code></td><td><code>"small"</code></td><td>Whisper's model: <code>tiny</code>, <code>base</code>, <code>small</code>, <code>medium</code>, <code>large-v3</code>, ...</td></tr>
-<tr><td><code>language</code></td><td>detected</td><td>Spoken language, e.g. <code>"en"</code>; detected if not given.</td></tr>
-<tr><td><code>vad_filter</code></td><td><code>True</code></td><td>Skip stretches without speech. Without it, Whisper can produce text for silent passages.</td></tr>
-<tr><td><code>compute_type</code></td><td><code>float16</code> on a GPU, <code>int8</code> on the CPU</td><td>Whisper's precision.</td></tr>
-<tr><td><code>device</code></td><td>cuda, else the CPU</td><td>For both models. Whisper has no <code>mps</code>.</td></tr>
-<tr><td><code>diarizer_model</code></td><td><code>"pyannote/speaker-diarization-3.1"</code></td><td>pyannote's pipeline. Gated: the first download needs <code>HF_TOKEN</code> from an account that accepted its terms.</td></tr>
-<tr><td><code>exclusive</code></td><td><code>True</code></td><td>Resolve overlapping speech so each word has one speaker.</td></tr>
+<tr><td><code>transcriber</code></td><td><code>WhisperTranscriber()</code></td><td>A <a href="models.html#roles"><code>Transcriber</code></a>: <a href="models.html#whisper-transcriber"><code>WhisperTranscriber</code></a> (in this process, needs <code>vidra[audio]</code>), <a href="models.html#gemini-transcriber"><code>GeminiTranscriber</code></a> (Gemini's API), <a href="models.html#openai-transcriber"><code>OpenAITranscriber</code></a> (OpenAI's, <code>whisper-1</code> by default), <code>StubTranscriber</code> (placeholder text, for tests), or your own.</td></tr>
+<tr><td><code>diarizer</code></td><td><code>PyannoteDiarizer()</code></td><td>A <a href="models.html#roles"><code>Diarizer</code></a>: <a href="models.html#pyannote-diarizer"><code>PyannoteDiarizer</code></a> (in this process, needs <code>vidra[audio]</code>), or <code>NoDiarizer()</code>: every segment keeps <code>speaker: null</code>.</td></tr>
 </table>
-<pre><code class="python">audio.audio(D / "media.json", D / "transcript.raw.json",
-            model="medium", language="en", diarizer="pyannote")</code></pre>
-<p>A setting the chosen backends don't use is refused, for example <code>language</code> with <code>transcriber="stub"</code>. A near-silent soundtrack is recorded as silent without loading a model.</p>
-<p><code>audio.listen(media, ...)</code> takes a <code>Media</code> and returns the <code>RawTranscript</code>. <code>audio.load(path)</code> reads one back.</p>
+<pre><code class="python">from vidra import GeminiTranscriber, PyannoteDiarizer, WhisperTranscriber
+
+audio.audio(D / "media.json", D / "transcript.raw.json",
+            transcriber=WhisperTranscriber("medium", language="en"),
+            diarizer=PyannoteDiarizer(exclusive=True))
+
+# Gemini says what was said; pyannote, locally, says who said it.
+audio.audio(D / "media.json", D / "transcript.raw.json",
+            transcriber=GeminiTranscriber("gemini-3-flash-preview"))</code></pre>
+<p>Both models are checked before the soundtrack is decoded. A near-silent soundtrack is recorded as silent without calling either. A model that fails, or answers with something other than a <code>Transcript</code> or <code>Diarization</code>, raises <code>ModelFailed</code> naming its key. The <code>model</code> block of <code>transcript.raw.json</code> records each model's <code>config()</code>. Through <code>video_rag</code>, pass them as <code>Models(transcriber=..., diarizer=...)</code>.</p>
+<p><code>audio.listen(media, transcriber=None, diarizer=None)</code> takes a <code>Media</code> and returns the <code>RawTranscript</code>. <code>audio.load(path)</code> reads one back. <code>audio.Transcript</code>, <code>Segment</code>, <code>Word</code>, <code>Diarization</code> and <code>Turn</code> are what a model of your own returns (<a href="models.html#speech-method">Transcriber.transcribe</a>).</p>
+
+<!-- =========================================================== voices -->
+<h2 id="voices">2b. voices</h2>
+<p>Makes one voiceprint per speaker the diarizer found, so the same voice can be found in other videos. Writes <code>voices.json</code>. Diarization labels (<code>SPEAKER_00</code>, ...) only mean something inside one video; a print does not.</p>
+<div class="sig">voices.voices(media, raw_transcript, out, previous=None, voice_embedder=None,
+              min_turn_s=1.5, max_turns=12, on_progress=None) -&gt; Produced</div>
+<table class="params">
+<tr><th>Argument</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>media</code>, <code>raw_transcript</code></td><td>required</td><td>Paths to <code>media.json</code> and <code>transcript.raw.json</code>, written by <code>audio</code> with a diarizer.</td></tr>
+<tr><td><code>out</code></td><td>required</td><td>Where to write <code>voices.json</code>.</td></tr>
+<tr><td><code>previous</code></td><td>none</td><td>Earlier <code>voices.json</code> (usually <code>out</code>); reused whole when the turns, settings and model are unchanged.</td></tr>
+<tr><td><code>voice_embedder</code></td><td>required</td><td>A <a href="models.html#roles"><code>VoiceEmbedder</code></a>, e.g. <code>LocalVoiceEmbedder()</code>; there is no default.</td></tr>
+<tr><td><code>min_turn_s</code></td><td><code>1.5</code></td><td>Shorter turns are not embedded: a print from under about a second and a half is mostly noise.</td></tr>
+<tr><td><code>max_turns</code></td><td><code>12</code></td><td>The longest turns per speaker that are embedded.</td></tr>
+<tr><td><code>on_progress</code></td><td>none</td><td>Called with a <code>Progress</code> after each speaker.</td></tr>
+</table>
+<pre><code class="python">from vidra import Folder, LocalVoiceEmbedder
+
+heard = LocalVoiceEmbedder()
+voices.voices(D / "media.json", D / "transcript.raw.json", D / "voices.json",
+              previous=D / "voices.json", voice_embedder=heard)
+
+prints = voices.load(D / "voices.json")
+prints.speakers[0]      # {"speaker": "SPEAKER_00", "talk_s": 59.5, "used_s": 58.6,
+                        #  "turns": [[0.9, 14.2], ...], "vector": [...]}
+
+# The same voice in other videos, most alike first
+Folder("data/out").match_voices(prints.speakers[0]["vector"], heard.key,
+                                exclude_video=prints.video_id)</code></pre>
+<p>Each speaker's longest turns are cut from the soundtrack, embedded one by one, and their unit vectors averaged. <code>used_s</code> is how much speech the print was made from; a speaker whose turns are all shorter than <code>min_turn_s</code> stays in the list with <code>vector: None</code>, so "too little speech" is visible rather than a silent miss. How similar counts as the same person is the caller's threshold. On vidra's samples, the Chernobyl narrator matched himself across thirds of the file at about 0.94, and peak.mp4's speakers scored at most 0.05 against him; that is one recording cut up, so it is easier than calls made on different phones and in different rooms.</p>
+<p><code>voices.voiceprints(media, raw, voice_embedder=None, min_turn_s=1.5, max_turns=12, previous=None, on_progress=None)</code> does the same over a <code>Media</code> and a <code>RawTranscript</code> in memory. <code>video_rag</code> runs it after <code>audio</code> when <code>Models(voice_embedder=...)</code> is given.</p>
 
 <!-- ======================================================= boundaries -->
 <h2 id="boundaries">3–4. boundaries</h2>

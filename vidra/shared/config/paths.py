@@ -118,6 +118,7 @@ ARTIFACTS: dict[str, str] = {
     "descriptions": "descriptions.json",
     "embedded": "embedded.json",
     "glances": "glances.json",
+    "voices": "voices.json",
 }
 
 #: A live run's answers, one JSON object per line, appended as they arrive.
@@ -142,6 +143,7 @@ PRODUCED_BY: dict[str, str] = {
     "descriptions": "describe",
     "embedded": "embed",
     "glances": "glance",
+    "voices": "voices",
     "store": "video",
     "aggregates": "aggregates",
     # Aggregate inputs and answers, which live wherever their caller says.

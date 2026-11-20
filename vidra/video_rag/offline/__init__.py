@@ -3,6 +3,7 @@ documents out.
 
     media        1  what streams the file carries
     audio        2  the soundtrack, scanned whole
+    voices      2b  one voiceprint per diarized speaker
     boundaries 3+4  the grid, from the picture or the soundtrack
     video        5  which frames each sampler keeps
     cut          6  the transcript, onto the grid

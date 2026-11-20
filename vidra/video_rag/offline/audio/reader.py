@@ -5,17 +5,35 @@ Four steps over the whole file, in order. No chunking.
 A word goes to the speaker talking at its midpoint, and a segment to whoever
 holds most of it by duration.
 
-A track below `SILENCE_RMS` gets no model at all and says so.
+A track below `SILENCE_RMS` gets no model at all and says so. A model that
+fails, or answers something other than its result type, is `ModelFailed`
+naming its key.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from vidra.shared.contracts.documents import RawTranscript
+from vidra.shared.models.base import Diarizer, ModelFailed, Transcriber
+from vidra.shared.models.speech import Diarization, Transcript
+from vidra.shared.reporting.errors import VidraError
 from . import source
-from .models import Diarization, Diarizer, Transcriber, Transcript
+
+
+def _ask(model: Any, method: str, samples: Any, wanted: type) -> Any:
+    """One call to a transcriber or diarizer, its failures as `ModelFailed`."""
+    try:
+        answer = getattr(model, method)(samples)
+    except VidraError:
+        raise
+    except Exception as exc:                                  # noqa: BLE001
+        raise ModelFailed(f"{model.key}: {type(exc).__name__}: {exc}") from None
+    if not isinstance(answer, wanted):
+        raise ModelFailed(f"{model.key}.{method}() answered {type(answer).__name__}, "
+                          f"not a {wanted.__name__}")
+    return answer
 
 
 def speaker_at(diarization: Diarization, ts: float) -> Optional[str]:
@@ -52,6 +70,12 @@ def listen(uri: str, transcriber: Transcriber, diarizer: Diarizer,
 
     t0 = time.perf_counter()
     track = source.load(uri)
+    # A model wanting another rate gets the file decoded again at it (~0.3 s
+    # per 200 s of AAC); the silence test and the stats read the first.
+    tracks = {track.rate: track}
+    for model in (transcriber, diarizer):
+        if model.rate not in tracks:
+            tracks[model.rate] = source.load(uri, rate=model.rate)
     decode_s = time.perf_counter() - t0
 
     if track.silent:
@@ -67,11 +91,12 @@ def listen(uri: str, transcriber: Transcriber, diarizer: Diarizer,
         )
 
     t0 = time.perf_counter()
-    transcript = transcriber.transcribe(track)
+    transcript = _ask(transcriber, "transcribe", tracks[transcriber.rate].samples,
+                      Transcript)
     transcribe_s = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    diarization = diarizer.diarize(track)
+    diarization = _ask(diarizer, "diarize", tracks[diarizer.rate].samples, Diarization)
     diarize_s = time.perf_counter() - t0
 
     attribute(transcript, diarization)

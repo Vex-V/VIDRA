@@ -9,6 +9,7 @@ The batch stages, in order:
 
     media        1  what streams the file carries
     audio        2  the soundtrack, scanned whole
+    voices      2b  one voiceprint per diarized speaker
     boundaries 3+4  the grid, from the picture or the soundtrack
     video        5  which frames each sampler keeps
     cut          6  the transcript, onto the grid
@@ -20,7 +21,8 @@ The batch stages, in order:
 Every component takes the paths it reads and the path it writes:
 
     media.media(source, into, video_id=None, on_conflict="new")
-    audio.audio(media, out, transcriber=..., ...)
+    audio.audio(media, out, transcriber=, diarizer=)
+    voices.voices(media, raw_transcript, out, previous=, voice_embedder=)
     boundaries.evidence(out, policy, media=, raw_transcript=, ...)
     boundaries.boundaries(media, out, policy=, cuts=, ...)
     boundaries.retune(cuts, out, threshold)
@@ -32,7 +34,8 @@ Every component takes the paths it reads and the path it writes:
     retrieve.search(query, video_id=, grids=, ...)
 
 Each also has a verb over documents in hand (`split`, `listen`, `detect`,
-`timeline`, `ingest`, `apply`, `answer`, `look`, `encode`). `video_rag(source, into,
+`timeline`, `ingest`, `apply`, `answer`, `look`, `encode`,
+`voiceprints`). `video_rag(source, into,
 ...)` runs them all: `media` makes `<into>/<id>/` and `layout()` names every
 path inside it.
 
@@ -55,8 +58,8 @@ _LAZY: dict[str, tuple[str, Optional[str]]] = {
     "video_rag_live": ("live.driver", "video_rag_live"),
     "live": ("live", None),
     **{name: (f"offline.{name}", None) for name in (
-        "media", "audio", "boundaries", "video", "cut", "describe", "glance",
-        "embed")},
+        "media", "audio", "voices", "boundaries", "video", "cut", "describe",
+        "glance", "embed")},
     "retrieve": ("core.retrieve", None),
     # The sampler classes: Uniform, Clip, Yolo, Objects, Text, and Sampler.
     "samplers": ("samplers", None),
