@@ -46,8 +46,13 @@ class Options:
     name: Optional[str] = None
     recorded_at: Optional[str | datetime] = None
     policy: str = "uniform"                  # decides who runs first
+    #: The grid and the frame rate; see video_rag's `Options`.
+    chunk_s: float = 20.0
+    min_s: float = 5.0
+    max_s: Optional[float] = None
     use_video: bool = True
     use_audio: bool = True
+    per_second: float = 1.0
     #: A Sampler object or a list of them; None is Uniform().
     sampler: Sampler | Sequence[Sampler] | None = None
     describe: bool = True                    # False: frames embedded, not described
@@ -65,7 +70,9 @@ def _extraction(options: Options) -> video_rag.Options:
         into=Path(options.into) if options.into else paths.out_root(),
         video_id=options.video_id, name=options.name,
         recorded_at=options.recorded_at, policy=options.policy,
+        chunk_s=options.chunk_s, min_s=options.min_s, max_s=options.max_s,
         use_video=options.use_video, use_audio=options.use_audio,
+        per_second=options.per_second,
         sampler=options.sampler, models=options.models,
         describe=options.describe, database=options.database)
 
@@ -129,8 +136,12 @@ def workflow(source: str | Path,
              name: Optional[str] = None,
              recorded_at: Optional[str | datetime] = None,
              policy: str = "uniform",
+             chunk_s: float = 20.0,
+             min_s: float = 5.0,
+             max_s: Optional[float] = None,
              use_video: bool = True,
              use_audio: bool = True,
+             per_second: float = 1.0,
              sampler: Sampler | Sequence[Sampler] | None = None,
              models: Optional[Models] = None,
              describe: bool = True,

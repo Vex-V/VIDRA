@@ -54,7 +54,8 @@
 <div class="sig">from vidra.video_rag import video_rag
 
 video_rag(source, into, video_id=None, on_conflict="new", name=None, recorded_at=None,
-          policy="uniform", use_video=True, use_audio=True, sampler=None,
+          policy="uniform", chunk_s=20.0, min_s=5.0, max_s=None,
+          use_video=True, use_audio=True, per_second=1.0, sampler=None,
           models=None, describe=True, resume=True, database=None,
           on_step=None) -&gt; Run</div>
 <pre><code class="python">from vidra import LocalEmbedder, Models, OpenAI, Supabase
@@ -73,8 +74,12 @@ run = video_rag("shop.mp4", "data/out", policy="scene", sampler=[Clip(), Yolo()]
 <tr><td><code>name</code></td><td>the filename</td><td>Display name, stored in <code>media.json</code>; kept by later runs that omit it.</td></tr>
 <tr><td><code>recorded_at</code></td><td>container tags</td><td>Recording time, a <code>datetime</code> or ISO 8601 string; kept by later runs that omit it.</td></tr>
 <tr><td><code>policy</code></td><td><code>"uniform"</code></td><td>Where chunks are cut: <code>uniform</code>, <code>scene</code>, <code>vad</code>, <code>speaker</code> (<a href="concepts.html#grid">the grid</a>).</td></tr>
+<tr><td><code>chunk_s</code></td><td><code>20.0</code></td><td>The chunk length for <code>uniform</code>, and the ceiling for the other policies when <code>max_s</code> is not given.</td></tr>
+<tr><td><code>min_s</code></td><td><code>5.0</code></td><td>For <code>scene</code>, <code>vad</code> and <code>speaker</code>: shorter chunks are merged. Refused with <code>uniform</code>, which reads it nowhere.</td></tr>
+<tr><td><code>max_s</code></td><td><code>chunk_s</code></td><td>For <code>scene</code>, <code>vad</code> and <code>speaker</code>: longer chunks are split into equal parts. Refused with <code>uniform</code>.</td></tr>
 <tr><td><code>use_video</code></td><td><code>True</code></td><td>Read the picture (<code>video</code> and <code>describe</code>).</td></tr>
 <tr><td><code>use_audio</code></td><td><code>True</code></td><td>Read the soundtrack (<code>audio</code> and <code>cut</code>). Needs <code>vidra[audio]</code>.</td></tr>
+<tr><td><code>per_second</code></td><td><code>1.0</code></td><td>Frames per second of video offered to the samplers. A short event (a fall, a collision) wants 4 or more; a sampler then keeps what it chooses from these.</td></tr>
 <tr><td><code>sampler</code></td><td><code>Uniform()</code></td><td>Which frames to keep and what to ask: a sampler object or a list of them, e.g. <code>[Clip(), Yolo(prompts=["overview"])]</code>, each with its own settings (<a href="samplers.html">Samplers</a>).</td></tr>
 <tr><td><code>models</code></td><td>every default</td><td>A <a href="models.html#models"><code>Models</code></a>: the <code>vlm</code> (default <code>OpenAI()</code>), the <code>embedder</code> (default <code>OpenAIEmbedder()</code>; search must use the same one), the <code>visual_embedder</code> (none: frames are not embedded; with one, the kept frames are embedded too, by <a href="stages.html#glance">glance</a>), the <code>voice_embedder</code> (none: no voiceprints), and the soundtrack's <code>transcriber</code> and <code>diarizer</code> (default <code>WhisperTranscriber()</code> and <code>PyannoteDiarizer()</code>, in this process; e.g. <code>Models(transcriber=GeminiTranscriber("gemini-3-flash-preview"))</code>).</td></tr>
 <tr><td><code>resume</code></td><td><code>True</code></td><td>Reuse still-current descriptions and vectors. <code>False</code> redoes them.</td></tr>
@@ -88,7 +93,7 @@ run = video_rag("shop.mp4", "data/out", policy="scene", sampler=[Clip(), Yolo()]
 seen = Models(visual_embedder=LocalVisualEmbedder("google/siglip2-base-patch16-224"))
 video_rag("shop.mp4", "data/out", sampler=Clip(), use_audio=False, models=seen,
           describe=False)</code></pre>
-<p>The policy, samplers, questions, models and database are checked before the first stage runs. All problems found are raised together as one <code>Refused</code>.</p>
+<p>The policy and grid settings, samplers, questions, models and database are checked before the first stage runs. All problems found are raised together as one <code>Refused</code>.</p>
 
 <h3 id="run">Run</h3>
 <p><code>video_rag()</code> returns a <code>Run</code>:</p>
@@ -161,7 +166,8 @@ answers = run.steps[-1]                   # the aggregate step's receipt
 answers.artifacts                         # {"summary": ".../aggregates/summary.json", ...}
 answers.stats["skipped"]                  # {"speakers": "...", ...}</code></pre>
 <div class="sig">workflow.workflow(source, into=None, video_id=None, name=None, recorded_at=None,
-                  policy="uniform", use_video=True, use_audio=True, sampler=None,
+                  policy="uniform", chunk_s=20.0, min_s=5.0, max_s=None,
+                  use_video=True, use_audio=True, per_second=1.0, sampler=None,
                   models=None, describe=True, tier="free", database=None,
                   on_step=None) -&gt; Run</div>
 <p>It takes the same arguments as <code>video_rag()</code>, with these differences:</p>

@@ -179,7 +179,7 @@ boundaries.retune(D / "cuts.json", D / "cuts.json", threshold=35.0)   # rewrite 
                       cuts=D / "cuts.json", min_s=10, max_s=40)
 grid = boundaries.load(D / "timeline.json")
 len(grid), grid.spans[0]            # 12, (0.0, 19.93)</code></pre>
-<p>A final chunk shorter than a quarter of <code>chunk_s</code> is merged into the one before it. A <code>min_s</code> greater than <code>max_s</code> is refused.</p>
+<p>A final chunk shorter than a quarter of <code>chunk_s</code> is merged into the one before it. A <code>min_s</code> greater than <code>max_s</code> is refused, and so is either one with <code>uniform</code>, which reads neither.</p>
 <p>To work in memory, <code>detect(policy, media=None, transcript=None, stride=5, threshold=27.0, detect_width=320, silence_s=0.65)</code> returns the <code>Cuts</code> (<code>None</code> for <code>uniform</code>), and <code>timeline(media, policy="uniform", cuts=None, chunk_s=20.0, min_s=5.0, max_s=None)</code> returns the <code>Timeline</code>:</p>
 <pre><code class="python">m = media.split("shop.mp4")
 grid = boundaries.timeline(m, "scene", cuts=boundaries.detect("scene", media=m))</code></pre>

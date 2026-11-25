@@ -183,6 +183,44 @@ def _cuts_for(cuts: Optional[str | Path], policy: str) -> Optional[Cuts]:
     return load_cuts(cuts)
 
 
+#: The guards' published defaults: `uniform` reads neither, so anything else
+#: given with it is a setting that would change nothing.
+GUARD_DEFAULTS = {"min_s": 5.0, "max_s": None}
+
+
+def grid_problems(policy: str, chunk_s: float = 20.0, min_s: float = 5.0,
+                  max_s: Optional[float] = None) -> list[str]:
+    """What is wrong with these grid settings, as messages; empty is valid.
+    `timeline` raises them, and `video_rag`'s validate lists them before work.
+    """
+    problems: list[str] = []
+    if not chunk_s > 0:
+        problems.append(f"chunk_s must be positive, not {chunk_s}")
+    if min_s < 0:
+        problems.append(f"min_s must be zero or more, not {min_s}")
+    if max_s is not None and max_s < 0:
+        problems.append(f"max_s must be zero (no ceiling) or more, not {max_s}")
+    if problems:
+        return problems
+    if policy == "uniform":
+        unread = [f"{k}={v}" for k, v in (("min_s", min_s), ("max_s", max_s))
+                  if v != GUARD_DEFAULTS[k]]
+        if unread:
+            problems.append(
+                f"policy 'uniform' cuts every chunk_s and reads neither min_s nor "
+                f"max_s, so {', '.join(unread)} would change nothing")
+        return problems
+    # A floor above the ceiling is refused.
+    ceiling = chunk_s if max_s is None else max_s
+    if ceiling and min_s > ceiling:
+        which = ("max_s" if max_s is not None
+                 else "chunk_s, which max_s defaults to")
+        problems.append(
+            f"min_s {min_s:g} is larger than the ceiling {ceiling:g} "
+            f"({which}). Raise the ceiling or lower the floor.")
+    return problems
+
+
 def timeline(media: Media, policy: str = "uniform",
              cuts: Optional[Cuts] = None,
              chunk_s: float = 20.0, min_s: float = 5.0,
@@ -195,15 +233,9 @@ def timeline(media: Media, policy: str = "uniform",
     """
     if policy not in POLICIES:
         raise UnknownOption(f"unknown policy {policy!r}; known: {', '.join(POLICIES)}")
-
-    # A floor above the ceiling is refused.
-    ceiling = chunk_s if max_s is None else max_s
-    if ceiling and min_s > ceiling:
-        which = ("max_s" if max_s is not None
-                 else "chunk_s, which max_s defaults to")
-        raise Refused(
-            f"min_s {min_s:g} is larger than the ceiling {ceiling:g} "
-            f"({which}). Raise the ceiling or lower the floor.")
+    problems = grid_problems(policy, chunk_s, min_s, max_s)
+    if problems:
+        raise Refused("; ".join(problems))
 
     if media.duration_s is None:
         raise Refused(f"{media.video_id}: the container reports no duration, "

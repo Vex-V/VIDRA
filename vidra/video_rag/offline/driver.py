@@ -56,8 +56,16 @@ class Options:
     name: Optional[str] = None
     recorded_at: Optional[str | datetime] = None
     policy: str = "uniform"                  # decides who runs first
+    #: The grid: `uniform` cuts every `chunk_s`; a content policy cuts where its
+    #: evidence says, merging spans under `min_s` and splitting any over `max_s`
+    #: (None is `chunk_s`).
+    chunk_s: float = 20.0
+    min_s: float = 5.0
+    max_s: Optional[float] = None
     use_video: bool = True
     use_audio: bool = True
+    #: Frames per second of media offered to the samplers.
+    per_second: float = 1.0
     #: What to look at: a Sampler object or a list of them; None is Uniform().
     sampler: Sampler | Sequence[Sampler] | None = None
     #: Who answers: the vlm, the embedder and the visual_embedder (frames ->
@@ -111,6 +119,15 @@ def problems_of(options: Options) -> list[str]:
         if needs == "audio" and not options.use_audio:
             problems.append(f"policy {options.policy!r} is derived from the "
                             "soundtrack, which this run is not reading")
+    if options.policy in boundaries.POLICIES:
+        from .boundaries.driver import grid_problems
+        problems += grid_problems(options.policy, options.chunk_s,
+                                  options.min_s, options.max_s)
+    if not options.per_second > 0:
+        problems.append(f"per_second must be positive, not {options.per_second}")
+    elif not options.use_video and options.per_second != 1.0:
+        problems.append("per_second sets how often the picture is sampled, which "
+                        "this run is not reading")
     if not options.use_video and not options.use_audio:
         problems.append("nothing to do: read the picture, the soundtrack, or both")
     if not Path(options.source).exists():
@@ -248,13 +265,16 @@ def _run(options: Options, whole: Any,
     # 4 · the grid. `cuts=` only when evidence was written.
     say("boundaries", None)
     step(boundaries.boundaries(at["media"], at["timeline"], options.policy,
-                               cuts=at["cuts"] if at["cuts"].exists() else None))
+                               cuts=at["cuts"] if at["cuts"].exists() else None,
+                               chunk_s=options.chunk_s, min_s=options.min_s,
+                               max_s=options.max_s))
 
     # 5 · the picture, onto the grid. `store` is where frames go; describe reads it.
     if use_video:
         say("video", None)
         step(video.video(at["media"], at["timeline"], at["manifest"],
-                         store=at["store"], sampler=options.sampler, **ticking))
+                         store=at["store"], sampler=options.sampler,
+                         per_second=options.per_second, **ticking))
     else:
         run.skipped.setdefault("video", "this run is not reading the picture")
 
@@ -320,8 +340,12 @@ def video_rag(source: str | Path,
               name: Optional[str] = None,
               recorded_at: Optional[str | datetime] = None,
               policy: str = "uniform",
+              chunk_s: float = 20.0,
+              min_s: float = 5.0,
+              max_s: Optional[float] = None,
               use_video: bool = True,
               use_audio: bool = True,
+              per_second: float = 1.0,
               sampler: Sampler | Sequence[Sampler] | None = None,
               models: Optional[Models] = None,
               describe: bool = True,
@@ -330,7 +354,10 @@ def video_rag(source: str | Path,
               on_step: Optional[Callable[..., None]] = None) -> Run:
     """The whole extraction: every component in order, under one folder.
 
-    Everything lands under `<into>/<video_id>/`. `models` carries every model
+    Everything lands under `<into>/<video_id>/`. The grid is `policy` with
+    `chunk_s` (uniform's length; a content policy's ceiling when `max_s` is
+    None) and `min_s` / `max_s` (a content policy's guards); `per_second` is
+    how many frames a second the samplers are offered. `models` carries every model
     the run calls, the soundtrack's transcriber and diarizer among them (None
     is every default); `database` is a
     built `Database`. `sampler` is a `Sampler` object or a list of them

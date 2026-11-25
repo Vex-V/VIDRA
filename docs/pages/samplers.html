@@ -125,7 +125,7 @@ video_rag("shop.mp4", "data/out", sampler=[Clip(), Yolo()])</code></pre>
 <tr><td><code>send</code>, <code>crops</code>, <code>crop_size</code>, <code>crop_margin</code></td><td><code>yolo</code>, <code>objects</code></td><td><code>"frame"</code></td><td>What the model is shown (<a href="#crops">crops</a>).</td></tr>
 <tr><td><code>detector</code>, <code>embedder</code></td><td>the model-backed ones</td><td>built on first use</td><td>A detector or frame embedder to use instead of the default, e.g. one already loaded.</td></tr>
 </table>
-<p>A setting the class doesn't take raises <code>TypeError</code>. <code>per_second</code> is set on the stage (<code>video.video</code>, <code>video_rag_live</code>), not on a sampler.</p>
+<p>A setting the class doesn't take raises <code>TypeError</code>. <code>per_second</code> is set on the run (<code>video_rag</code>, <code>video.video</code>, <code>video_rag_live</code>), not on a sampler.</p>
 
 <h3 id="per-call">Configuring samplers</h3>
 <p>Every class also takes <code>min_interval_s</code>, <code>max_per_chunk</code> and <code>prompts</code>. The same list works for <code>video.video</code>, <code>video_rag</code> and <code>video_rag_live</code>.</p>
